@@ -84,6 +84,23 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use('/uploads', express.static(path.join(rootDir, 'uploads')));
 
+app.get('/api/health', (_req, res) => {
+  res.json({
+    ok: true,
+    service: 'sistema-os',
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.get('/api/health/db', async (_req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.json({ ok: true, database: 'connected' });
+  } catch (error) {
+    res.status(503).json({ ok: false, database: 'unavailable', error: error.message });
+  }
+});
+
 function now() {
   return new Date().toISOString();
 }
