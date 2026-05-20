@@ -15,11 +15,15 @@ const app = express();
 
 const PORT = Number(process.env.PORT || 3000);
 const DATABASE_URL = process.env.DATABASE_URL || process.env.MYSQL_URL;
-const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
+const JWT_SECRET = process.env.JWT_SECRET;
 const TOKEN_TTL = process.env.JWT_TTL || '12h';
 
 if (!DATABASE_URL) {
   throw new Error('DATABASE_URL ou MYSQL_URL precisa estar configurado no backend');
+}
+
+if (!JWT_SECRET) {
+  throw new Error('JWT_SECRET precisa estar configurado no backend');
 }
 
 const pool = mysql.createPool({
@@ -31,7 +35,6 @@ const pool = mysql.createPool({
 });
 
 const allowedTables = new Set([
-  'usuarios',
   'clientes',
   'marcas',
   'instrumentos',
@@ -75,7 +78,7 @@ const relationMap = {
 const columnCache = new Map();
 
 app.use(cors({
-  origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : true,
+  origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : false,
   credentials: true,
 }));
 app.use(express.json({ limit: '10mb' }));
@@ -365,7 +368,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
       const params = [];
       for (const filter of filters) addFilter(where, params, cols, filter);
       for (const expression of orFilters) addOrFilter(where, params, cols, expression);
-      if (cols.has('user_id') && !filters.some((f) => f.column === 'user_id')) {
+      if (cols.has('user_id')) {
         where.push('`user_id` = ?');
         params.push(req.user.id);
       }
@@ -404,7 +407,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
       for (const row of inputRows) {
         const data = await filterDataToColumns(physicalTable, row);
         if (cols.has('id') && !data.id) data.id = uuid();
-        if (cols.has('user_id') && !data.user_id) data.user_id = req.user.id;
+        if (cols.has('user_id')) data.user_id = req.user.id;
         if (cols.has('created_at') && !data.created_at) data.created_at = now();
 
         if (physicalTable === 'ordens_servico') {
@@ -430,7 +433,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
       const where = [];
       const params = [];
       for (const filter of filters) addFilter(where, params, cols, filter);
-      if (cols.has('user_id') && !filters.some((f) => f.column === 'user_id')) {
+      if (cols.has('user_id')) {
         where.push('`user_id` = ?');
         params.push(req.user.id);
       }
@@ -442,6 +445,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
       }
 
       const data = await filterDataToColumns(physicalTable, payload);
+      if (cols.has('user_id')) delete data.user_id;
       if (physicalTable === 'ordens_servico') {
         if (data.status === 'concluido' && !data.data_entrega) data.data_entrega = todayDate();
         if (data.valor_total === undefined && (data.valor_servicos !== undefined || data.desconto !== undefined)) {
@@ -470,7 +474,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
       for (const row of inputRows) {
         const data = await filterDataToColumns(physicalTable, row);
         if (cols.has('id') && !data.id) data.id = uuid();
-        if (cols.has('user_id') && !data.user_id) data.user_id = req.user.id;
+        if (cols.has('user_id')) data.user_id = req.user.id;
         if (cols.has('created_at') && !data.created_at) data.created_at = now();
 
         const where = conflictCols.map((col) => `\`${col}\` = ?`).join(' AND ');
@@ -519,6 +523,10 @@ app.post('/api/rpc/get_next_order_number', requireAuth, async (req, res) => {
 
 app.post('/api/rpc/get_next_rps_number', requireAuth, async (req, res) => {
   const userId = req.body?.p_user_id || req.user.id;
+  if (userId !== req.user.id) {
+    return res.status(403).json({ data: null, error: { message: 'Acesso negado' } });
+  }
+
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
