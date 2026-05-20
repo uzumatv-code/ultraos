@@ -14,6 +14,7 @@ const rootDir = path.resolve(__dirname, '..');
 const app = express();
 
 const PORT = Number(process.env.PORT || 3000);
+const HOST = process.env.HOST || '0.0.0.0';
 const DATABASE_URL = process.env.DATABASE_URL || process.env.MYSQL_URL;
 const JWT_SECRET = process.env.JWT_SECRET;
 const TOKEN_TTL = process.env.JWT_TTL || '12h';
@@ -590,6 +591,6 @@ if (fs.existsSync(distDir)) {
   app.get(/.*/, (_req, res) => res.sendFile(path.join(distDir, 'index.html')));
 }
 
-app.listen(PORT, () => {
-  console.log(`Sistema OS API rodando na porta ${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`Sistema OS API rodando em ${HOST}:${PORT}`);
 });
