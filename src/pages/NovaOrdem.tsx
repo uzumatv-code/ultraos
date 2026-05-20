@@ -20,6 +20,17 @@ import interactionPlugin from '@fullcalendar/interaction';
 import ptBrLocale from '@fullcalendar/core/locales/pt-br';
 import { MultiSelect } from '../components/MultiSelect';
 
+type FormaPagamento = 'credito' | 'debito' | 'pix';
+
+function todayForDatabase() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function dateForDatabase(value: string) {
+  if (!value) return '';
+  return value.includes('T') ? value.slice(0, 10) : value;
+}
+
 export function NovaOrdem() {
   const navigate = useNavigate();
   const { id } = useParams();
@@ -44,7 +55,7 @@ export function NovaOrdem() {
   const [servicosDescricoes, setServicosDescricoes] = useState<Record<string, string>>({});
   const [valorServicos, setValorServicos] = useState(0);
   const [desconto, setDesconto] = useState(0);
-  const [formaPagamento, setFormaPagamento] = useState<'credito' | 'debito' | 'pix'>('pix');
+  const [formaPagamento, setFormaPagamento] = useState<FormaPagamento>('pix');
   const [observacoes, setObservacoes] = useState('Pagamento Antecipado!');
   const [dataPrevisao, setDataPrevisao] = useState('');
   const [showCalendar, setShowCalendar] = useState(false);
@@ -96,14 +107,14 @@ export function NovaOrdem() {
       setModelo(data.modelo || '');
       setAcessorios(data.acessorios || '');
       setProblemasIds(data.problemas_ids || []);
-      setProblemasDescricoes(data.problemas_descricoes || {});
+      setProblemasDescricoes({});
       setServicosIds(data.servicos_ids || []);
-      setServicosDescricoes(data.servicos_descricoes || {});
-      setValorServicos(data.valor_servicos);
-      setDesconto(data.desconto);
+      setServicosDescricoes({});
+      setValorServicos(Number(data.valor_servicos || 0));
+      setDesconto(Number(data.desconto || 0));
       setFormaPagamento(data.forma_pagamento);
       setObservacoes(data.observacoes);
-      setDataPrevisao(data.data_previsao);
+      setDataPrevisao(dateForDatabase(data.data_previsao));
 
     } catch (error) {
       console.error('Erro ao carregar ordem:', error);
@@ -255,6 +266,16 @@ export function NovaOrdem() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Usuário não autenticado');
 
+      if (!clienteId || !instrumentoId || !marcaId || !modelo || !dataPrevisao) {
+        toast.error('Preencha cliente, instrumento, marca, modelo e previsao de entrega.');
+        return;
+      }
+
+      if (desconto > valorServicos) {
+        toast.error('O desconto nao pode ser maior que o valor dos servicos.');
+        return;
+      }
+
       // Format problems and services as comma-separated text
       const problemasText = problemasIds
         .map(id => {
@@ -278,19 +299,37 @@ ${problemasText || 'Nenhum problema registrado.'}
 Serviços:
 ${servicosText || 'Nenhum serviço registrado.'}`;
 
+      const valorTotal = Math.max(0, Number(valorServicos || 0) - Number(desconto || 0));
+      const observacoesCompletas = [
+        observacoes?.trim(),
+        formattedObservations,
+      ].filter(Boolean).join('\n\n');
+
+      let numero: number | undefined;
+      if (!id) {
+        const { data: nextNumber, error: nextNumberError } = await supabase.rpc('get_next_order_number', { p_user_id: user.id });
+        if (nextNumberError) throw nextNumberError;
+        numero = Number(nextNumber);
+      }
+
       const ordemData = {
         ...(id && { id }), // Inclui o ID apenas se estiver editando
-        status: 'pendente' as 'pendente' | 'em_andamento' | 'concluido' | 'cancelado',
+        ...(!id && { numero, status: 'pendente' as const, data_entrada: todayForDatabase() }),
         cliente_id: clienteId,
         instrumento_id: instrumentoId,
         marca_id: marcaId,
         modelo,
         acessorios,
-        valor_servicos: valorServicos,
-        desconto,
+        problemas_ids: problemasIds,
+        problema_descricao: problemasText,
+        servicos_ids: servicosIds,
+        servico_descricao: servicosText,
+        valor_servicos: Number(valorServicos || 0),
+        desconto: Number(desconto || 0),
+        valor_total: valorTotal,
         forma_pagamento: formaPagamento,
-        observacoes: formattedObservations,
-        data_previsao: dataPrevisao,
+        observacoes: observacoesCompletas,
+        data_previsao: dateForDatabase(dataPrevisao),
         user_id: user.id,
       };
 

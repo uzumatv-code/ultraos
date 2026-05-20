@@ -257,9 +257,13 @@ export function Ordens() {
 
   async function handleChangeStatus(ordem: OrdemServico, newStatus: 'pendente' | 'em_andamento' | 'concluido' | 'cancelado') {
     try {
+      const payload = newStatus === 'concluido'
+        ? { status: newStatus, data_entrega: new Date().toISOString().slice(0, 10) }
+        : { status: newStatus };
+
       const { error } = await supabase
         .from('ordens_servico')
-        .update({ status: newStatus })
+        .update(payload)
         .eq('id', ordem.id);
 
       if (error) throw error;
@@ -477,7 +481,7 @@ export function Ordens() {
               >
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex-1">
-                    <h3 className="font-semibold text-gray-900 dark:text-gray-100">OS #{ordem.id.slice(0, 8)}</h3>
+                    <h3 className="font-semibold text-gray-900 dark:text-gray-100">OS #{ordem.numero}</h3>
                     <p className="text-sm text-gray-600 dark:text-gray-400">{ordem.cliente?.nome}</p>
                   </div>
                   <select

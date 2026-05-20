@@ -85,8 +85,20 @@ function now() {
   return new Date().toISOString();
 }
 
+function todayDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 function uuid() {
   return crypto.randomUUID();
+}
+
+async function getNextOrderNumber(userId) {
+  const [[row]] = await pool.query(
+    'SELECT COALESCE(MAX(numero), 0) + 1 AS next_number FROM `ordens_servico` WHERE user_id = ?',
+    [userId],
+  );
+  return Number(row?.next_number || 1);
 }
 
 function signUser(user) {
@@ -395,6 +407,14 @@ app.post('/api/query', requireAuth, async (req, res) => {
         if (cols.has('user_id') && !data.user_id) data.user_id = req.user.id;
         if (cols.has('created_at') && !data.created_at) data.created_at = now();
 
+        if (physicalTable === 'ordens_servico') {
+          if (!data.numero) data.numero = await getNextOrderNumber(data.user_id);
+          if (!data.data_entrada) data.data_entrada = todayDate();
+          if (data.valor_total === undefined && cols.has('valor_total')) {
+            data.valor_total = Number(data.valor_servicos || 0) - Number(data.desconto || 0);
+          }
+        }
+
         const keys = Object.keys(data);
         await pool.query(
           `INSERT INTO \`${physicalTable}\` (${keys.map((key) => `\`${key}\``).join(',')}) VALUES (${keys.map(() => '?').join(',')})`,
@@ -422,6 +442,16 @@ app.post('/api/query', requireAuth, async (req, res) => {
       }
 
       const data = await filterDataToColumns(physicalTable, payload);
+      if (physicalTable === 'ordens_servico') {
+        if (data.status === 'concluido' && !data.data_entrega) data.data_entrega = todayDate();
+        if (data.valor_total === undefined && (data.valor_servicos !== undefined || data.desconto !== undefined)) {
+          const [[current]] = await pool.query(
+            `SELECT valor_servicos, desconto FROM \`${physicalTable}\` WHERE ${where.join(' AND ')} LIMIT 1`,
+            params,
+          );
+          data.valor_total = Number(data.valor_servicos ?? current?.valor_servicos ?? 0) - Number(data.desconto ?? current?.desconto ?? 0);
+        }
+      }
       const keys = Object.keys(data);
       if (!keys.length) return res.json({ data: null, error: null });
       await pool.query(
@@ -470,6 +500,20 @@ app.post('/api/query', requireAuth, async (req, res) => {
     res.status(400).json({ error: { message: `Acao nao suportada: ${action}` } });
   } catch (error) {
     res.status(500).json({ data: null, count: null, error: { message: error.message, code: error.code } });
+  }
+});
+
+app.post('/api/rpc/get_next_order_number', requireAuth, async (req, res) => {
+  try {
+    const userId = req.body?.p_user_id || req.user.id;
+    if (userId !== req.user.id) {
+      return res.status(403).json({ data: null, error: { message: 'Acesso negado' } });
+    }
+
+    const next = await getNextOrderNumber(userId);
+    res.json({ data: next, error: null });
+  } catch (error) {
+    res.status(500).json({ data: null, error: { message: error.message } });
   }
 });
 
