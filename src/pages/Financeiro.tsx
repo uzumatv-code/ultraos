@@ -1,5 +1,4 @@
-import React, { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -7,43 +6,157 @@ import {
   BarElement,
   LineElement,
   PointElement,
-  Title,
   Tooltip,
   Legend,
   ArcElement,
-  Filler
+  Filler,
 } from 'chart.js';
-import { Bar, Line, Doughnut } from 'react-chartjs-2';
-import { DollarSign, ArrowRight, Search, Plus, Filter, Upload, FileText } from 'lucide-react';
+import { Bar, Doughnut, Line } from 'react-chartjs-2';
+import {
+  ArrowDownRight,
+  ArrowRight,
+  ArrowUpRight,
+  CalendarDays,
+  FileText,
+  Filter,
+  Plus,
+  Receipt,
+  Search,
+  Tags,
+  Upload,
+  Wallet,
+} from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { toast } from '../components/ToastCustom';
-import { alerts } from '../utils/alerts';
-import { formatCurrency, capitalize } from '../utils/formatters';
-import { Autocomplete } from '../components/Autocomplete';
+import { formatCurrency } from '../utils/formatters';
 import { TransacaoModal } from '../components/TransacaoModal';
 import { CategoriaFinanceiraModal } from '../components/CategoriaFinanceiraModal';
 import { ImportarCSVModal } from '../components/ImportarCSVModal';
-import type { TransacaoFinanceira, CategoriaFinanceira } from '../types/database';
+import type { CategoriaFinanceira, ContaPagar, OrdemServico, TransacaoFinanceira } from '../types/database';
 
-// Registrar componentes do Chart.js
 ChartJS.register(
   CategoryScale,
   LinearScale,
   BarElement,
   LineElement,
   PointElement,
-  Title,
   Tooltip,
   Legend,
   ArcElement,
-  Filler
+  Filler,
 );
+
+type TipoFiltro = 'todos' | 'receita' | 'despesa';
+type FluxoMensal = { label: string; receitas: number; despesas: number };
+type CategoriaResumo = { nome: string; valor: number; cor: string };
+
+function toDateInput(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function getMonthRange(date: Date) {
+  const start = new Date(date.getFullYear(), date.getMonth(), 1);
+  const end = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+  return { start: toDateInput(start), end: toDateInput(end) };
+}
+
+function getLastSixMonthRange() {
+  const start = new Date();
+  start.setMonth(start.getMonth() - 5);
+  start.setDate(1);
+  const end = new Date();
+  return { start: toDateInput(start), end: toDateInput(end) };
+}
+
+function parseDate(value?: string) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function monthLabel(date: Date) {
+  return date.toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '');
+}
+
+function buildFluxoMensal(transacoes: TransacaoFinanceira[]) {
+  const months: FluxoMensal[] = Array.from({ length: 6 }, (_, index) => {
+    const date = new Date();
+    date.setMonth(date.getMonth() - (5 - index));
+    return { label: monthLabel(date), receitas: 0, despesas: 0 };
+  });
+
+  const first = new Date();
+  first.setMonth(first.getMonth() - 5);
+
+  transacoes.forEach((transacao) => {
+    const data = parseDate(transacao.data);
+    if (!data) return;
+    const index = (data.getFullYear() - first.getFullYear()) * 12 + data.getMonth() - first.getMonth();
+    if (index < 0 || index > 5) return;
+
+    if (transacao.tipo === 'receita') months[index].receitas += Number(transacao.valor || 0);
+    else months[index].despesas += Number(transacao.valor || 0);
+  });
+
+  return months;
+}
+
+function summarizeByCategory(transacoes: TransacaoFinanceira[], tipo: 'receita' | 'despesa') {
+  const map = new Map<string, CategoriaResumo>();
+  transacoes
+    .filter((transacao) => transacao.tipo === tipo)
+    .forEach((transacao) => {
+      const nome = transacao.categoria?.nome || 'Sem categoria';
+      const current = map.get(nome) || { nome, valor: 0, cor: transacao.categoria?.cor || '#64748B' };
+      current.valor += Number(transacao.valor || 0);
+      map.set(nome, current);
+    });
+
+  return [...map.values()].sort((a, b) => b.valor - a.valor).slice(0, 6);
+}
+
+function StatCard({
+  title,
+  value,
+  description,
+  tone,
+  icon,
+}: {
+  title: string;
+  value: string;
+  description: string;
+  tone: 'green' | 'red' | 'blue' | 'amber';
+  icon: React.ReactNode;
+}) {
+  const toneMap = {
+    green: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    red: 'border-rose-200 bg-rose-50 text-rose-700',
+    blue: 'border-sky-200 bg-sky-50 text-sky-700',
+    amber: 'border-amber-200 bg-amber-50 text-amber-700',
+  };
+
+  return (
+    <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-sm font-medium text-gray-500 dark:text-gray-400">{title}</p>
+          <p className="mt-2 text-2xl font-semibold text-gray-950 dark:text-white">{value}</p>
+          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{description}</p>
+        </div>
+        <div className={`rounded-lg border p-2 ${toneMap[tone]}`}>{icon}</div>
+      </div>
+    </div>
+  );
+}
 
 export function Financeiro() {
   const navigate = useNavigate();
   const [transacoes, setTransacoes] = useState<TransacaoFinanceira[]>([]);
+  const [transacoesGrafico, setTransacoesGrafico] = useState<TransacaoFinanceira[]>([]);
   const [categorias, setCategorias] = useState<CategoriaFinanceira[]>([]);
+  const [contasPendentes, setContasPendentes] = useState<ContaPagar[]>([]);
+  const [ordensConcluidas, setOrdensConcluidas] = useState<OrdemServico[]>([]);
   const [loading, setLoading] = useState(true);
   const [currentDate, setCurrentDate] = useState(new Date());
   const [modalTransacaoAberto, setModalTransacaoAberto] = useState(false);
@@ -51,640 +164,389 @@ export function Financeiro() {
   const [modalImportarCSVAberto, setModalImportarCSVAberto] = useState(false);
   const [transacaoParaEditar, setTransacaoParaEditar] = useState<TransacaoFinanceira>();
   const [busca, setBusca] = useState('');
-  const [pagina, setPagina] = useState(0);
-  const [paginaTransacoes, setPaginaTransacoes] = useState(0);
-  const [totalTransacoes, setTotalTransacoes] = useState(0);
-  const [tipoFiltro, setTipoFiltro] = useState<'todos' | 'receita' | 'despesa'>('todos');
+  const [tipoFiltro, setTipoFiltro] = useState<TipoFiltro>('todos');
   const [categoriaFiltro, setCategoriaFiltro] = useState('');
-  const [receitasMes, setReceitasMes] = useState(0);
-  const [despesasMes, setDespesasMes] = useState(0);
-  const [saldoMes, setSaldoMes] = useState(0);
-  const [showTransactions, setShowTransactions] = useState(false);
-  const itensPorPagina = 10;
 
-  // Função para obter o primeiro e último dia do mês
-  const getMonthRange = (date: Date) => {
-    const firstDay = new Date(date.getFullYear(), date.getMonth(), 1);
-    const lastDay = new Date(date.getFullYear(), date.getMonth() + 1, 0);
-    return { firstDay, lastDay };
-  };
-  const [dadosGraficos, setDadosGraficos] = useState({
-    receitasPorCategoria: {},
-    despesasPorCategoria: {},
-    fluxoMensal: [],
-  });
+  const { start: monthStart, end: monthEnd } = useMemo(() => getMonthRange(currentDate), [currentDate]);
+  const periodoLabel = currentDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
 
-  useEffect(() => {
-    const { firstDay, lastDay } = getMonthRange(currentDate);
-    buscarDados(firstDay, lastDay);
-    carregarDadosGraficos();
-  }, [currentDate, pagina, busca, tipoFiltro, categoriaFiltro]);
-
-  async function buscarDados(firstDay: Date, lastDay: Date) {
+  const buscarDados = useCallback(async () => {
+    setLoading(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user?.id || !user?.aud) {
+      if (!user?.id) {
         navigate('/login');
         return;
       }
 
-      // Buscar categorias
-      let { data: categoriasData, error: categoriasError } = await supabase
+      const chartRange = getLastSixMonthRange();
+
+      const categoriasQuery = supabase
         .from('categorias_financeiras')
         .select('*')
         .eq('user_id', user.id)
         .order('nome');
 
-      if (categoriasError) throw categoriasError;
-      setCategorias(categoriasData || []);
-
-      // Buscar totais do mês
-      const { data: transacoesMes, error: transacoesError } = await supabase
+      let transacoesQuery = supabase
         .from('transacoes_financeiras')
-        .select('tipo, valor, conta_pagar_id')
+        .select('*, categoria:categorias_financeiras(*)')
         .eq('user_id', user.id)
-        .gte('data', firstDay.toISOString())
-        .lte('data', lastDay.toISOString());
-
-      if (transacoesError) throw transacoesError;
-
-      if (transacoesMes) {
-        const contaIds = [
-          ...new Set(transacoesMes.map(t => t.conta_pagar_id).filter(Boolean))
-        ];
-        const contasPorId = new Map<string, { status: string }>();
-
-        if (contaIds.length > 0) {
-          const { data: contasVinculadas, error: contasError } = await supabase
-            .from('contas_pagar')
-            .select('id, status')
-            .eq('user_id', user.id)
-            .in('id', contaIds);
-
-          if (contasError) throw contasError;
-          contasVinculadas?.forEach(conta => {
-            contasPorId.set(conta.id, { status: conta.status });
-          });
-        }
-
-        const receitas = transacoesMes
-          .filter(t => t.tipo === 'receita')
-          .reduce((acc, t) => acc + Number(t.valor), 0);
-        const despesas = transacoesMes
-          .filter(t => t.tipo === 'despesa')
-          .reduce((acc, t) => {
-            // Não contar transações que são de contas a pagar ainda não pagas
-            if (t.conta_pagar_id) {
-              const conta = contasPorId.get(t.conta_pagar_id);
-              if (conta && conta.status !== 'pago') {
-                return acc;
-              }
-            }
-            return acc + Number(t.valor);
-          }, 0);
-
-        setReceitasMes(receitas);
-        setDespesasMes(despesas);
-        setSaldoMes(receitas - despesas);
-      }
-
-      // Buscar transações
-      let query = supabase
-        .from('transacoes_financeiras')
-        .select(`
-          *,
-          categoria:categorias_financeiras(*)
-        `, { count: 'exact' })
-        .eq('user_id', user.id)
+        .gte('data', monthStart)
+        .lte('data', monthEnd)
         .order('data', { ascending: false });
 
-      // Aplicar filtros
-      if (busca) {
-        query = query.or(`descricao.ilike.%${busca}%`);
-      }
+      if (busca.trim()) transacoesQuery = transacoesQuery.ilike('descricao', `%${busca.trim()}%`);
+      if (tipoFiltro !== 'todos') transacoesQuery = transacoesQuery.eq('tipo', tipoFiltro);
+      if (categoriaFiltro) transacoesQuery = transacoesQuery.eq('categoria_id', categoriaFiltro);
 
-      if (tipoFiltro !== 'todos') {
-        query.eq('tipo', tipoFiltro);
-      }
+      const transacoesGraficoQuery = supabase
+        .from('transacoes_financeiras')
+        .select('*, categoria:categorias_financeiras(*)')
+        .eq('user_id', user.id)
+        .gte('data', chartRange.start)
+        .lte('data', chartRange.end)
+        .order('data', { ascending: true });
 
-      if (categoriaFiltro) {
-        query.eq('categoria_id', categoriaFiltro);
-      }
-      
-      query
-        .gte('data', firstDay.toISOString())
-        .lte('data', lastDay.toISOString());
+      const contasQuery = supabase
+        .from('contas_pagar')
+        .select('*, categoria:categorias_financeiras(*)')
+        .eq('user_id', user.id)
+        .in('status', ['pendente', 'atrasado'])
+        .order('data_vencimento', { ascending: true });
 
-      const { data, count, error } = await query
-        .range(pagina * itensPorPagina, (pagina + 1) * itensPorPagina - 1);
+      const ordensQuery = supabase
+        .from('ordens_servico')
+        .select('id, numero, valor_total, valor_servicos, desconto, data_entrega, data_entrada, cliente:clientes(*)')
+        .eq('user_id', user.id)
+        .eq('status', 'concluido')
+        .gte('data_entrega', monthStart)
+        .lte('data_entrega', monthEnd)
+        .order('data_entrega', { ascending: false });
 
-      if (error) throw error;
+      const [
+        { data: categoriasData, error: categoriasError },
+        { data: transacoesData, error: transacoesError },
+        { data: graficoData, error: graficoError },
+        { data: contasData, error: contasError },
+        { data: ordensData, error: ordensError },
+      ] = await Promise.all([categoriasQuery, transacoesQuery, transacoesGraficoQuery, contasQuery, ordensQuery]);
 
-      setTransacoes(data || []);
-      setTotalTransacoes(count || 0);
+      if (categoriasError) throw categoriasError;
+      if (transacoesError) throw transacoesError;
+      if (graficoError) throw graficoError;
+      if (contasError) throw contasError;
+      if (ordensError) throw ordensError;
+
+      setCategorias(categoriasData || []);
+      setTransacoes(transacoesData || []);
+      setTransacoesGrafico(graficoData || []);
+      setContasPendentes(contasData || []);
+      setOrdensConcluidas(ordensData || []);
     } catch (error) {
-      if (error?.message && !error.message.includes('Failed to fetch')) {
-        console.error('Erro ao buscar dados:', error);
-      }
-      if (error?.message && !error.message.includes('Failed to fetch')) {
-        console.error('Erro ao buscar dados:', error);
-        toast.error('Erro ao carregar dados financeiros');
-      }
+      console.error('Erro ao carregar financeiro:', error);
+      toast.error('Erro ao carregar dados financeiros');
     } finally {
       setLoading(false);
     }
-  }
+  }, [busca, categoriaFiltro, monthEnd, monthStart, navigate, tipoFiltro]);
 
-  async function handleExcluir(transacao: TransacaoFinanceira) {
-    const result = await alerts.confirm({
-      title: 'Excluir Transação',
-      text: 'Deseja realmente excluir esta transação?',
-      icon: 'warning'
-    });
+  useEffect(() => {
+    buscarDados();
+  }, [buscarDados]);
 
-    if (!result.isConfirmed) return;
+  const receitasMes = useMemo(
+    () => transacoes.filter((item) => item.tipo === 'receita').reduce((acc, item) => acc + Number(item.valor || 0), 0),
+    [transacoes],
+  );
 
-    try {
-      const { error } = await supabase
-        .from('transacoes_financeiras')
-        .delete()
-        .eq('id', transacao.id);
+  const despesasMes = useMemo(
+    () => transacoes.filter((item) => item.tipo === 'despesa').reduce((acc, item) => acc + Number(item.valor || 0), 0),
+    [transacoes],
+  );
 
-      if (error) throw error;
+  const saldoMes = receitasMes - despesasMes;
 
-      toast.success('Transação excluída com sucesso!');
-      buscarDados(new Date(currentDate.getFullYear(), currentDate.getMonth(), 1), new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0));
-    } catch (error) {
-      console.error('Erro ao excluir transação:', error);
-      toast.error('Erro ao excluir transação');
-    }
-  }
+  const totalOrdensConcluidas = useMemo(
+    () => ordensConcluidas.reduce((acc, ordem) => acc + Number(ordem.valor_total ?? (Number(ordem.valor_servicos || 0) - Number(ordem.desconto || 0))), 0),
+    [ordensConcluidas],
+  );
 
-  // Wrapper para recarregar dados após modificações
-  const recarregarDados = () => {
-    const { firstDay, lastDay } = getMonthRange(currentDate);
-    buscarDados(firstDay, lastDay);
-  };
+  const totalContasPendentes = useMemo(
+    () => contasPendentes.reduce((acc, conta) => acc + Number(conta.valor || 0), 0),
+    [contasPendentes],
+  );
 
-  const totalPaginas = Math.ceil(totalTransacoes / itensPorPagina);
+  const contasAtrasadas = useMemo(
+    () => contasPendentes.filter((conta) => conta.status === 'atrasado' || (conta.status === 'pendente' && conta.data_vencimento < toDateInput(new Date()))),
+    [contasPendentes],
+  );
 
-  async function carregarDadosGraficos() {
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+  const fluxoMensal = useMemo(() => buildFluxoMensal(transacoesGrafico), [transacoesGrafico]);
+  const receitasPorCategoria = useMemo(() => summarizeByCategory(transacoes, 'receita'), [transacoes]);
+  const despesasPorCategoria = useMemo(() => summarizeByCategory(transacoes, 'despesa'), [transacoes]);
+  const ultimasTransacoes = transacoes.slice(0, 8);
+  const proximasContas = contasPendentes.slice(0, 6);
 
-      // Buscar dados dos últimos 6 meses
-      const dataFinal = new Date();
-      const dataInicial = new Date();
-      dataInicial.setMonth(dataInicial.getMonth() - 5);
-
-      const { data: transacoes, error } = await supabase
-        .from('transacoes_financeiras')
-        .select(`
-          *,
-          categoria:categorias_financeiras(*)
-        `)
-        .eq('user_id', user.id)
-        .is('conta_pagar_id', null)
-        .gte('data', dataInicial.toISOString())
-        .lte('data', dataFinal.toISOString());
-
-      if (error) throw error;
-
-      // Processar dados para os gráficos
-      const receitasPorCategoria = {};
-      const despesasPorCategoria = {};
-      const fluxoMensal = Array(6).fill(0).map(() => ({ receitas: 0, despesas: 0 }));
-
-      transacoes.forEach(transacao => {
-        const valor = Number(transacao.valor);
-        const mes = new Date(transacao.data).getMonth();
-        const mesIndex = (mes - dataInicial.getMonth() + 12) % 6;
-        const categoriaNome = transacao.categoria?.nome || 'Sem categoria';
-
-        if (transacao.tipo === 'receita') {
-          receitasPorCategoria[categoriaNome] = (receitasPorCategoria[categoriaNome] || 0) + valor;
-          fluxoMensal[mesIndex].receitas += valor;
-        } else {
-          despesasPorCategoria[categoriaNome] = (despesasPorCategoria[categoriaNome] || 0) + valor;
-          fluxoMensal[mesIndex].despesas += valor;
-        }
-      });
-
-      setDadosGraficos({
-        receitasPorCategoria,
-        despesasPorCategoria,
-        fluxoMensal
-      });
-    } catch (error) {
-      console.error('Erro ao carregar dados dos gráficos:', error);
-      toast.error('Erro ao carregar análises');
-    }
-  }
-
-  // Configuração dos gráficos
-  const fluxoMensalConfig = {
-    labels: Array(6).fill(0).map((_, i) => {
-      const data = new Date();
-      data.setMonth(data.getMonth() - (5 - i));
-      return data.toLocaleDateString('pt-BR', { month: 'short' });
-    }),
+  const lineData = {
+    labels: fluxoMensal.map((item) => item.label),
     datasets: [
       {
         label: 'Receitas',
-        data: dadosGraficos.fluxoMensal.map(m => m.receitas),
-        borderColor: '#10B981',
-        backgroundColor: '#10B98120',
+        data: fluxoMensal.map((item) => item.receitas),
+        borderColor: '#059669',
+        backgroundColor: 'rgba(5, 150, 105, 0.12)',
         fill: true,
+        tension: 0.35,
       },
       {
         label: 'Despesas',
-        data: dadosGraficos.fluxoMensal.map(m => m.despesas),
-        borderColor: '#EF4444',
-        backgroundColor: '#EF444420',
+        data: fluxoMensal.map((item) => item.despesas),
+        borderColor: '#dc2626',
+        backgroundColor: 'rgba(220, 38, 38, 0.10)',
         fill: true,
-      }
-    ]
+        tension: 0.35,
+      },
+    ],
   };
 
-  const receitasConfig = {
-    labels: Object.keys(dadosGraficos.receitasPorCategoria),
+  const doughnutData = {
+    labels: receitasPorCategoria.map((item) => item.nome),
     datasets: [{
-      data: Object.values(dadosGraficos.receitasPorCategoria),
-      backgroundColor: [
-        '#10B981',
-        '#3B82F6',
-        '#6366F1',
-        '#8B5CF6',
-        '#EC4899'
-      ]
-    }]
+      data: receitasPorCategoria.map((item) => item.valor),
+      backgroundColor: receitasPorCategoria.map((item) => item.cor),
+      borderWidth: 0,
+    }],
   };
 
-  const despesasConfig = {
-    labels: Object.keys(dadosGraficos.despesasPorCategoria),
+  const barData = {
+    labels: despesasPorCategoria.map((item) => item.nome),
     datasets: [{
       label: 'Despesas',
-      data: Object.values(dadosGraficos.despesasPorCategoria),
-      backgroundColor: [
-        '#EF4444',
-        '#F59E0B',
-        '#F43F5E',
-        '#8B5CF6',
-        '#64748B'
-      ]
-    }]
+      data: despesasPorCategoria.map((item) => item.valor),
+      backgroundColor: despesasPorCategoria.map((item) => item.cor),
+      borderRadius: 6,
+    }],
   };
 
   const chartOptions = {
     responsive: true,
     maintainAspectRatio: false,
     plugins: {
-      legend: {
-        position: 'bottom' as const,
-      }
-    }
+      legend: { position: 'bottom' as const },
+    },
   };
 
+  function changeMonth(offset: number) {
+    setCurrentDate((current) => new Date(current.getFullYear(), current.getMonth() + offset, 1));
+  }
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-teal-50 via-emerald-50 to-green-100 dark:from-gray-900 dark:via-teal-900/20 dark:to-emerald-900/20">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-950">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {/* Cabeçalho Animado */}
-        <motion.div
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5 }}
-          className="mb-8"
-        >
-          <div className="flex items-center gap-4 mb-6">
-            <div className="w-16 h-16 bg-gradient-to-br from-emerald-500 to-teal-600 dark:from-emerald-600 dark:to-teal-700 rounded-2xl flex items-center justify-center shadow-lg shadow-emerald-500/30 dark:shadow-emerald-500/20">
-              <DollarSign className="w-8 h-8 text-white" />
+        <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Gestao financeira</p>
+            <h1 className="mt-1 text-3xl font-semibold text-gray-950 dark:text-white">Financeiro</h1>
+            <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+              Caixa, recebimentos, despesas, vencimentos e categorias em uma visao operacional.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button onClick={() => changeMonth(-1)} className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-200">
+              Mes anterior
+            </button>
+            <div className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-semibold capitalize text-gray-900 dark:border-gray-800 dark:bg-gray-900 dark:text-white">
+              {periodoLabel}
             </div>
-            <div>
-              <h1 className="text-4xl font-bold bg-gradient-to-r from-emerald-600 via-teal-600 to-green-600 dark:from-emerald-400 dark:via-teal-400 dark:to-green-400 bg-clip-text text-transparent">
-                Financeiro
-              </h1>
-              <p className="text-gray-600 dark:text-gray-400 mt-1">
-                Gerencie suas transações e acompanhe o fluxo de caixa
-              </p>
+            <button onClick={() => changeMonth(1)} className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-200">
+              Proximo mes
+            </button>
+          </div>
+        </div>
+
+        <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <StatCard title="Receitas do mes" value={formatCurrency(receitasMes)} description="Lancamentos filtrados no periodo" tone="green" icon={<ArrowUpRight className="h-5 w-5" />} />
+          <StatCard title="Despesas do mes" value={formatCurrency(despesasMes)} description="Saidas registradas no periodo" tone="red" icon={<ArrowDownRight className="h-5 w-5" />} />
+          <StatCard title="Saldo operacional" value={formatCurrency(saldoMes)} description="Receitas menos despesas" tone={saldoMes >= 0 ? 'blue' : 'amber'} icon={<Wallet className="h-5 w-5" />} />
+          <StatCard title="OS concluidas" value={formatCurrency(totalOrdensConcluidas)} description={`${ordensConcluidas.length} ordem(ns) no mes`} tone="blue" icon={<Receipt className="h-5 w-5" />} />
+        </div>
+
+        <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900 lg:col-span-2">
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-950 dark:text-white">Fluxo dos ultimos 6 meses</h2>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Comparativo entre entradas e saidas.</p>
+              </div>
+              <CalendarDays className="h-5 w-5 text-gray-400" />
+            </div>
+            <div className="h-72">
+              <Line data={lineData} options={chartOptions} />
             </div>
           </div>
-        </motion.div>
 
-        {/* Cabeçalho e Filtros */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
-          className="mb-6"
-        >
-          <div className="flex flex-col sm:flex-row space-y-4 sm:space-y-0 sm:space-x-4">
+          <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+            <h2 className="text-lg font-semibold text-gray-950 dark:text-white">Saude do caixa</h2>
+            <div className="mt-4 space-y-4">
+              <div className="rounded-lg bg-gray-50 p-4 dark:bg-gray-950">
+                <p className="text-sm text-gray-500">Contas pendentes</p>
+                <p className="mt-1 text-xl font-semibold text-gray-950 dark:text-white">{formatCurrency(totalContasPendentes)}</p>
+              </div>
+              <div className="rounded-lg bg-gray-50 p-4 dark:bg-gray-950">
+                <p className="text-sm text-gray-500">Contas atrasadas</p>
+                <p className="mt-1 text-xl font-semibold text-rose-600">{contasAtrasadas.length}</p>
+              </div>
+              <button onClick={() => navigate('/contas')} className="flex w-full items-center justify-between rounded-lg border border-gray-200 px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-800 dark:text-gray-200 dark:hover:bg-gray-800">
+                Abrir contas a pagar
+                <ArrowRight className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="mb-6 rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_180px_220px_auto]">
             <div className="relative">
-              <Search className="w-5 h-5 text-gray-400 dark:text-gray-500 absolute left-3 top-1/2 -translate-y-1/2" />
-              <Autocomplete
-                options={transacoes.map(t => ({ id: t.id, nome: t.descricao }))}
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+              <input
                 value={busca}
-                onChange={(value) => setBusca(value)}
-                placeholder="Buscar transações..."
-                className="w-full sm:w-64"
+                onChange={(event) => setBusca(event.target.value)}
+                placeholder="Buscar movimentacao..."
+                className="w-full rounded-lg border border-gray-200 bg-white py-2 pl-9 pr-3 text-sm text-gray-900 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100 dark:border-gray-800 dark:bg-gray-950 dark:text-white"
               />
             </div>
-
-            <div className="flex space-x-2">
-              <select
-                value={tipoFiltro}
-                onChange={(e) => setTipoFiltro(e.target.value as any)}
-                className="px-3 py-2 border border-gray-200 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 bg-white/80 dark:bg-gray-800/80 backdrop-blur-lg shadow-sm text-gray-900 dark:text-gray-100 transition-all"
-              >
-                <option value="todos">Todos os Tipos</option>
-                <option value="receita">Receitas</option>
-                <option value="despesa">Saídas</option>
-              </select>
-
-              <Autocomplete
-                value={categoriaFiltro}
-                onChange={(value) => setCategoriaFiltro(value)}
-                options={categorias.map(c => ({ id: c.id, nome: c.nome }))}
-                placeholder="Todas as Categorias"
-                className="w-48"
-              >
-              </Autocomplete>
+            <select value={tipoFiltro} onChange={(event) => setTipoFiltro(event.target.value as TipoFiltro)} className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 dark:border-gray-800 dark:bg-gray-950 dark:text-white">
+              <option value="todos">Todos os tipos</option>
+              <option value="receita">Receitas</option>
+              <option value="despesa">Despesas</option>
+            </select>
+            <select value={categoriaFiltro} onChange={(event) => setCategoriaFiltro(event.target.value)} className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 dark:border-gray-800 dark:bg-gray-950 dark:text-white">
+              <option value="">Todas as categorias</option>
+              {categorias.map((categoria) => (
+                <option key={categoria.id} value={categoria.id}>{categoria.nome}</option>
+              ))}
+            </select>
+            <div className="flex flex-wrap gap-2">
+              <button onClick={() => setModalTransacaoAberto(true)} className="inline-flex items-center gap-2 rounded-lg bg-gray-950 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 dark:bg-white dark:text-gray-950">
+                <Plus className="h-4 w-4" />
+                Lancar
+              </button>
+              <button onClick={() => setModalCategoriaAberto(true)} className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-800 dark:text-gray-200 dark:hover:bg-gray-800">
+                <Tags className="h-4 w-4" />
+                Categorias
+              </button>
+              <button onClick={() => setModalImportarCSVAberto(true)} className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-800 dark:text-gray-200 dark:hover:bg-gray-800">
+                <Upload className="h-4 w-4" />
+                CSV
+              </button>
             </div>
-
-            <div className="flex space-x-2 flex-wrap">
-              <motion.button
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-                onClick={() => setModalTransacaoAberto(true)}
-                className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 dark:from-emerald-500 dark:to-teal-500 text-white font-medium rounded-xl transition-all duration-300 flex items-center space-x-2 shadow-lg shadow-emerald-500/30 dark:shadow-emerald-500/20"
-              >
-                <Plus className="w-5 h-5" />
-                <span>Nova Transação</span>
-              </motion.button>
-
-              <motion.button
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-                onClick={() => setModalCategoriaAberto(true)}
-                className="px-4 py-2 bg-white/80 dark:bg-gray-800/80 text-gray-700 dark:text-gray-200 font-medium rounded-xl hover:bg-white dark:hover:bg-gray-800 transition-all duration-300 flex items-center space-x-2 border border-gray-200 dark:border-gray-700 shadow-sm backdrop-blur-lg"
-              >
-                <Filter className="w-5 h-5" />
-                <span>Categorias</span>
-              </motion.button>
-
-              <motion.button
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-                onClick={() => setModalImportarCSVAberto(true)}
-                className="px-4 py-2 bg-white/80 dark:bg-gray-800/80 text-gray-700 dark:text-gray-200 font-medium rounded-xl hover:bg-white dark:hover:bg-gray-800 transition-all duration-300 flex items-center space-x-2 border border-gray-200 dark:border-gray-700 shadow-sm backdrop-blur-lg"
-              >
-                <Upload className="w-5 h-5" />
-                <span>Importar CSV</span>
-              </motion.button>
-            </div>
-          </div>
-        </motion.div>
-
-        {/* Card de Atalho - Notas Fiscais */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
-          className="mb-6"
-        >
-          <div 
-            onClick={() => navigate('/notas-fiscais')}
-            className="bg-gradient-to-r from-emerald-500 via-teal-500 to-green-500 dark:from-emerald-600 dark:via-teal-600 dark:to-green-600 rounded-2xl p-6 shadow-xl shadow-emerald-500/30 dark:shadow-emerald-500/20 cursor-pointer hover:shadow-2xl hover:shadow-emerald-500/40 dark:hover:shadow-emerald-500/30 transition-all duration-300 transform hover:scale-[1.02] group"
-          >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-4">
-                <div className="w-14 h-14 bg-white/20 backdrop-blur-sm rounded-xl flex items-center justify-center group-hover:scale-110 transition-transform duration-300">
-                  <FileText className="w-7 h-7 text-white" />
-                </div>
-                <div>
-                  <h3 className="text-xl font-bold text-white">Notas Fiscais de Serviço (NFS-e)</h3>
-                  <p className="text-white/90 text-sm mt-1">
-                    Gere, visualize e gerencie suas notas fiscais eletrônicas
-                  </p>
-                </div>
-              </div>
-              <div className="hidden md:flex items-center space-x-2 text-white/90 group-hover:translate-x-1 transition-transform duration-300">
-                <span className="text-sm font-medium">Acessar</span>
-                <ArrowRight className="w-5 h-5" />
-              </div>
-            </div>
-          </div>
-        </motion.div>
-
-        {/* Cards de Resumo */}
-        <div className="grid gap-6 mb-6">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.3 }}
-              className="bg-white/80 dark:bg-gray-800/80 backdrop-blur-xl rounded-2xl p-6 shadow-lg border border-gray-100 dark:border-gray-700 hover:shadow-xl transition-all duration-300 group"
-            >
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide">
-                  Receitas
-                </h3>
-                <div className="w-10 h-10 bg-gradient-to-br from-green-500 to-emerald-600 rounded-xl flex items-center justify-center group-hover:scale-110 transition-transform duration-300">
-                  <DollarSign className="w-5 h-5 text-white" />
-                </div>
-              </div>
-              <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">
-                {currentDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}
-              </p>
-              <p className="text-3xl font-bold bg-gradient-to-r from-green-600 to-emerald-600 dark:from-green-400 dark:to-emerald-400 bg-clip-text text-transparent">
-                {formatCurrency(receitasMes)}
-              </p>
-            </motion.div>
-
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.35 }}
-              className="bg-white/80 dark:bg-gray-800/80 backdrop-blur-xl rounded-2xl p-6 shadow-lg border border-gray-100 dark:border-gray-700 hover:shadow-xl transition-all duration-300 group"
-            >
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide">
-                  Saídas
-                </h3>
-                <div className="w-10 h-10 bg-gradient-to-br from-red-500 to-rose-600 rounded-xl flex items-center justify-center group-hover:scale-110 transition-transform duration-300">
-                  <DollarSign className="w-5 h-5 text-white" />
-                </div>
-              </div>
-              <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">
-                {currentDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}
-              </p>
-              <p className="text-3xl font-bold bg-gradient-to-r from-red-600 to-rose-600 dark:from-red-400 dark:to-rose-400 bg-clip-text text-transparent">
-                {formatCurrency(despesasMes)}
-              </p>
-            </motion.div>
-
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.4 }}
-              className="bg-white/80 dark:bg-gray-800/80 backdrop-blur-xl rounded-2xl p-6 shadow-lg border border-gray-100 dark:border-gray-700 hover:shadow-xl transition-all duration-300 group"
-            >
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide">
-                  Saldo do Mês
-                </h3>
-                <div className={`w-10 h-10 bg-gradient-to-br rounded-xl flex items-center justify-center group-hover:scale-110 transition-transform duration-300 ${
-                  saldoMes >= 0 ? 'from-blue-500 to-cyan-600' : 'from-orange-500 to-amber-600'
-                }`}>
-                  <DollarSign className="w-5 h-5 text-white" />
-                </div>
-              </div>
-              <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">
-                {currentDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}
-              </p>
-              <p className={`text-3xl font-bold bg-gradient-to-r bg-clip-text text-transparent ${
-                saldoMes >= 0 
-                  ? 'from-blue-600 to-cyan-600 dark:from-blue-400 dark:to-cyan-400' 
-                  : 'from-orange-600 to-amber-600 dark:from-orange-400 dark:to-amber-400'
-              }`}>
-                {formatCurrency(saldoMes)}
-              </p>
-            </motion.div>
           </div>
         </div>
 
-        {/* Atalho para Transações */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.5 }}
-          className="mb-8"
-        >
-          <motion.button
-            whileHover={{ scale: 1.01 }}
-            whileTap={{ scale: 0.99 }}
-            onClick={() => navigate('/transacoes')}
-            className="w-full bg-white/80 dark:bg-gray-800/80 backdrop-blur-xl rounded-2xl p-6 shadow-lg border border-gray-100 dark:border-gray-700 hover:shadow-xl dark:hover:shadow-gray-900/50 transition-all duration-300 flex items-center justify-between group"
-          >
-            <div className="flex items-center space-x-4">
-              <div className="w-12 h-12 bg-gradient-to-br from-emerald-100 to-teal-100 dark:from-emerald-900/50 dark:to-teal-900/50 rounded-xl flex items-center justify-center group-hover:scale-110 transition-transform duration-300">
-                <DollarSign className="w-6 h-6 text-emerald-600 dark:text-emerald-400" />
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+          <div className="rounded-lg border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900 xl:col-span-2">
+            <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4 dark:border-gray-800">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-950 dark:text-white">Movimentacoes recentes</h2>
+                <p className="text-sm text-gray-500 dark:text-gray-400">{loading ? 'Carregando...' : `${transacoes.length} lancamento(s) no periodo`}</p>
               </div>
-              <div className="text-left">
-                <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-200">Lista de Transações</h3>
-                <p className="text-sm text-gray-600 dark:text-gray-400">Visualize e gerencie todas as suas transações financeiras</p>
+              <button onClick={() => navigate('/transacoes')} className="inline-flex items-center gap-2 text-sm font-medium text-sky-700 hover:text-sky-900">
+                Ver todas
+                <ArrowRight className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[720px]">
+                <thead className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:bg-gray-950 dark:text-gray-400">
+                  <tr>
+                    <th className="px-5 py-3">Data</th>
+                    <th className="px-5 py-3">Descricao</th>
+                    <th className="px-5 py-3">Categoria</th>
+                    <th className="px-5 py-3 text-right">Valor</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+                  {ultimasTransacoes.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="px-5 py-10 text-center text-sm text-gray-500">Nenhuma movimentacao encontrada para os filtros atuais.</td>
+                    </tr>
+                  ) : ultimasTransacoes.map((transacao) => (
+                    <tr key={transacao.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/60">
+                      <td className="px-5 py-4 text-sm text-gray-600 dark:text-gray-300">{new Date(transacao.data).toLocaleDateString('pt-BR')}</td>
+                      <td className="px-5 py-4">
+                        <button
+                          onClick={() => {
+                            setTransacaoParaEditar(transacao);
+                            setModalTransacaoAberto(true);
+                          }}
+                          className="text-left text-sm font-medium text-gray-950 hover:text-sky-700 dark:text-white"
+                        >
+                          {transacao.descricao}
+                        </button>
+                      </td>
+                      <td className="px-5 py-4">
+                        <span className="inline-flex rounded-full px-2.5 py-1 text-xs font-medium" style={{ backgroundColor: `${transacao.categoria?.cor || '#64748B'}1A`, color: transacao.categoria?.cor || '#64748B' }}>
+                          {transacao.categoria?.nome || 'Sem categoria'}
+                        </span>
+                      </td>
+                      <td className={`px-5 py-4 text-right text-sm font-semibold ${transacao.tipo === 'receita' ? 'text-emerald-600' : 'text-rose-600'}`}>
+                        {transacao.tipo === 'despesa' ? '-' : '+'}{formatCurrency(transacao.valor)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="space-y-6">
+            <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-lg font-semibold text-gray-950 dark:text-white">Receitas por categoria</h2>
+                <Filter className="h-5 w-5 text-gray-400" />
+              </div>
+              <div className="h-64">
+                {receitasPorCategoria.length ? <Doughnut data={doughnutData} options={chartOptions} /> : <div className="flex h-full items-center justify-center text-sm text-gray-500">Sem receitas no periodo.</div>}
               </div>
             </div>
-            <ArrowRight className="w-6 h-6 text-gray-400 dark:text-gray-500 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors" />
-          </motion.button>
-        </motion.div>
 
-        {/* Gráficos Analíticos */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-          {/* Fluxo Mensal */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.6 }}
-            className="lg:col-span-3 bg-white/80 dark:bg-gray-800/80 backdrop-blur-xl rounded-2xl p-6 shadow-lg border border-gray-100 dark:border-gray-700"
-          >
-            <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-4 flex items-center gap-2">
-              📊 Fluxo de Caixa - Últimos 6 Meses
-            </h3>
-            <div className="h-[300px]">
-              <Line data={fluxoMensalConfig} options={chartOptions} />
+            <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+              <h2 className="mb-4 text-lg font-semibold text-gray-950 dark:text-white">Despesas por categoria</h2>
+              <div className="h-64">
+                {despesasPorCategoria.length ? <Bar data={barData} options={{ ...chartOptions, indexAxis: 'y' as const, plugins: { legend: { display: false } } }} /> : <div className="flex h-full items-center justify-center text-sm text-gray-500">Sem despesas no periodo.</div>}
+              </div>
             </div>
-          </motion.div>
 
-          {/* Receitas por Categoria */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.7 }}
-            className="bg-white/80 dark:bg-gray-800/80 backdrop-blur-xl rounded-2xl p-6 shadow-lg border border-gray-100 dark:border-gray-700"
-          >
-            <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-4 flex items-center gap-2">
-              💚 Receitas por Categoria
-            </h3>
-            <div className="h-[300px]">
-              <Doughnut data={receitasConfig} options={chartOptions} />
+            <div className="rounded-lg border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900">
+              <div className="border-b border-gray-200 px-5 py-4 dark:border-gray-800">
+                <h2 className="text-lg font-semibold text-gray-950 dark:text-white">Proximos vencimentos</h2>
+              </div>
+              <div className="divide-y divide-gray-100 dark:divide-gray-800">
+                {proximasContas.length === 0 ? (
+                  <p className="px-5 py-6 text-sm text-gray-500">Nenhuma conta pendente.</p>
+                ) : proximasContas.map((conta) => (
+                  <div key={conta.id} className="flex items-center justify-between gap-3 px-5 py-4">
+                    <div>
+                      <p className="text-sm font-medium text-gray-950 dark:text-white">{conta.descricao}</p>
+                      <p className="text-xs text-gray-500">{new Date(conta.data_vencimento).toLocaleDateString('pt-BR')} - {conta.categoria?.nome || 'Sem categoria'}</p>
+                    </div>
+                    <p className={`text-sm font-semibold ${conta.status === 'atrasado' ? 'text-rose-600' : 'text-gray-900 dark:text-white'}`}>{formatCurrency(conta.valor)}</p>
+                  </div>
+                ))}
+              </div>
             </div>
-          </motion.div>
 
-          {/* Despesas por Categoria */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.8 }}
-            className="bg-white/80 dark:bg-gray-800/80 backdrop-blur-xl rounded-2xl p-6 shadow-lg border border-gray-100 dark:border-gray-700"
-          >
-            <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-4 flex items-center gap-2">
-              📉 Saídas por Categoria
-            </h3>
-            <div className="h-[300px]">
-              <Bar 
-                data={despesasConfig}
-                options={{
-                  ...chartOptions,
-                  indexAxis: 'y' as const,
-                  plugins: {
-                    ...chartOptions.plugins,
-                    legend: {
-                      display: false
-                    }
-                  },
-                  scales: {
-                    x: {
-                      grid: {
-                        display: false
-                      }
-                    },
-                    y: {
-                      grid: {
-                        display: false
-                      }
-                    }
-                  }
-                }}
-              />
-            </div>
-          </motion.div>
-
-          {/* Comparativo Mensal */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.9 }}
-            className="bg-white/80 dark:bg-gray-800/80 backdrop-blur-xl rounded-2xl p-6 shadow-lg border border-gray-100 dark:border-gray-700"
-          >
-            <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-4 flex items-center gap-2">
-              📊 Comparativo Mensal
-            </h3>
-            <div className="h-[300px]">
-              <Bar 
-                data={{
-                  labels: ['Receitas', 'Saídas'],
-                  datasets: [{
-                    data: [receitasMes, despesasMes],
-                    backgroundColor: ['#10B981', '#EF4444'],
-                    label: 'Valores'
-                  }]
-                }}
-                options={{
-                  ...chartOptions,
-                  plugins: {
-                    ...chartOptions.plugins,
-                    legend: {
-                      display: false
-                    }
-                  }
-                }}
-              />
-            </div>
-          </motion.div>
+            <button onClick={() => navigate('/notas-fiscais')} className="flex w-full items-center justify-between rounded-lg border border-gray-200 bg-white px-5 py-4 text-left text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800">
+              <span className="inline-flex items-center gap-3">
+                <FileText className="h-5 w-5 text-gray-400" />
+                Notas fiscais
+              </span>
+              <ArrowRight className="h-4 w-4" />
+            </button>
+          </div>
         </div>
 
-        {/* Modais */}
         <TransacaoModal
           isOpen={modalTransacaoAberto}
           onClose={() => {
@@ -693,20 +555,20 @@ export function Financeiro() {
           }}
           transacaoParaEditar={transacaoParaEditar}
           categorias={categorias}
-          onSuccess={recarregarDados}
+          onSuccess={buscarDados}
         />
 
         <CategoriaFinanceiraModal
           isOpen={modalCategoriaAberto}
           onClose={() => setModalCategoriaAberto(false)}
-          onSuccess={recarregarDados}
+          onSuccess={buscarDados}
         />
 
         <ImportarCSVModal
           isOpen={modalImportarCSVAberto}
           onClose={() => setModalImportarCSVAberto(false)}
           categorias={categorias}
-          onSuccess={recarregarDados}
+          onSuccess={buscarDados}
         />
       </div>
     </div>
