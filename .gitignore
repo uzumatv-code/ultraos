@@ -1,0 +1,92 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Dependencies
+node_modules/
+jspm_packages/
+
+# Build outputs
+# dist/ - Incluído no Git para Docker no Easypanel
+dist-ssr/
+build/
+out/
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+backup/
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.swp
+*.swo
+
+# Supabase local
+.supabase/
+supabase/
+
+# Easypanel
+.easypanel/
+docker-compose.yml
+Dockerfile.prod
+easypanel-simple.yml
+
+# Documentation & References
+Brasília/
+*.pdf
+
+# Cache directories
+.cache/
+.parcel-cache/
+.eslintcache
+.stylelintcache
+*.tsbuildinfo
+
+# OS generated files
+Thumbs.db
+ehthumbs.db
+.Spotlight-V100
+.Trashes
+._*
+
+# Temporary and test files
+*.tmp
+*.temp
+temp/
+tmp/
+test-*.html
+debug-*.js
+debug-*.html
+diagnostico-*.html
+servidor-teste.js
+emergency-fix.js
+fix-test.js
+teste-*.html
+teste-*.js
+validacao-final.js
+verificacao-final.js
+
+# Documentation drafts
+*_DRAFT.md
+*_TODO.md
+STATUS_*.md
+CHECKLIST_*.md
+backup_completo_2025-12-08.json
+

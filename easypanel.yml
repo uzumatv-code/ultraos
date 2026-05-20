@@ -1,0 +1,144 @@
+# EasyPanel Configuration for Sistema OS Luthieria
+# Complete management system for lutherie with service orders and financial control
+
+# Project metadata
+name: sistema-os-luthieria
+description: Sistema completo de gestão para luthieria com ordens de serviço e controle financeiro
+version: "1.0.0"
+
+# Application configuration
+services:
+  - name: app
+    type: app
+    source:
+      type: git
+      url: https://github.com/uzumatv-code/ultraos
+      branch: master
+    
+    # Build configuration
+    build:
+      type: dockerfile
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ""
+        VITE_APP_ENV: production
+        VITE_APP_VERSION: "1.0.0"
+    
+    # Runtime configuration
+    deploy:
+      replicas: 1
+      resources:
+        requests:
+          memory: 256Mi
+          cpu: 0.2
+        limits:
+          memory: 512Mi
+          cpu: 0.5
+      
+      # Port configuration
+      ports:
+        - name: http
+          port: 3000
+          targetPort: 3000
+          protocol: TCP
+      
+      # Environment variables
+      env:
+        - name: NODE_ENV
+          value: production
+        - name: VITE_APP_ENV
+          value: production
+        - name: VITE_APP_VERSION
+          value: "1.0.0"
+        - name: DATABASE_URL
+          value: ${{DATABASE_URL}}
+        - name: JWT_SECRET
+          value: ${{JWT_SECRET}}
+        - name: JWT_TTL
+          value: 12h
+        - name: PORT
+          value: "3000"
+      
+      # Health checks
+      livenessProbe:
+        httpGet:
+          path: /
+          port: http
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 3
+      
+      readinessProbe:
+        httpGet:
+          path: /
+          port: http
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 3
+      
+      # Auto-scaling configuration
+      autoscaling:
+        enabled: true
+        minReplicas: 1
+        maxReplicas: 3
+        targetCPUUtilizationPercentage: 70
+        targetMemoryUtilizationPercentage: 80
+
+# Domains configuration
+domains:
+  - host: ${{EASYPANEL_DOMAIN}}
+    port: 3000
+    
+# Routing rules
+routes:
+  - match:
+      prefix: /
+    route:
+      service: app
+      port: 3000
+
+# Additional configuration
+config:
+  # Enable persistent logs
+  logging:
+    enabled: true
+    level: info
+    
+  # Security settings
+  security:
+    allowPrivilegeEscalation: false
+    runAsNonRoot: true
+    readOnlyRootFilesystem: true
+    
+  # Networking
+  network:
+    policy: default
+    
+  # Storage (if needed for logs or temp files)
+  volumes:
+    - name: tmp
+      type: emptyDir
+      mountPath: /tmp
+    - name: nginx-cache
+      type: emptyDir  
+      mountPath: /var/cache/nginx
+
+# Monitoring and observability
+monitoring:
+  metrics:
+    enabled: true
+    path: /metrics
+    port: 3000
+  
+  alerts:
+    - name: high-cpu
+      condition: cpu > 80
+      duration: 5m
+    - name: high-memory
+      condition: memory > 80
+      duration: 5m
+    - name: app-down
+      condition: replicas == 0
+      duration: 1m

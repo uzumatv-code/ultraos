@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Backup Supabase</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      background: white;
+      border-radius: 16px;
+      padding: 30px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    }
+    h1 {
+      color: #333;
+      margin-bottom: 10px;
+    }
+    .subtitle {
+      color: #666;
+      margin-bottom: 30px;
+    }
+    .form-group {
+      margin-bottom: 20px;
+    }
+    label {
+      display: block;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: #333;
+    }
+    input {
+      width: 100%;
+      padding: 12px 16px;
+      border: 2px solid #e0e0e0;
+      border-radius: 8px;
+      font-size: 14px;
+      transition: border-color 0.2s;
+    }
+    input:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+    .btn {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      padding: 14px 28px;
+      font-size: 16px;
+      font-weight: 600;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+      width: 100%;
+    }
+    .btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 20px rgba(102, 126, 234, 0.4);
+    }
+    .btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+    }
+    .progress {
+      margin-top: 30px;
+      display: none;
+    }
+    .progress.active {
+      display: block;
+    }
+    .progress-bar {
+      height: 8px;
+      background: #e0e0e0;
+      border-radius: 4px;
+      overflow: hidden;
+      margin-bottom: 10px;
+    }
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #667eea, #764ba2);
+      width: 0%;
+      transition: width 0.3s;
+    }
+    .log {
+      background: #f5f5f5;
+      border-radius: 8px;
+      padding: 15px;
+      max-height: 300px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 13px;
+    }
+    .log-entry {
+      padding: 4px 0;
+      border-bottom: 1px solid #e0e0e0;
+    }
+    .log-entry:last-child {
+      border-bottom: none;
+    }
+    .log-entry.success { color: #22c55e; }
+    .log-entry.error { color: #ef4444; }
+    .log-entry.info { color: #3b82f6; }
+    .result {
+      margin-top: 20px;
+      padding: 20px;
+      background: #f0fdf4;
+      border: 2px solid #22c55e;
+      border-radius: 8px;
+      display: none;
+    }
+    .result.active {
+      display: block;
+    }
+    .result h3 {
+      color: #22c55e;
+      margin-bottom: 10px;
+    }
+    .download-links {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 15px;
+    }
+    .download-link {
+      background: #22c55e;
+      color: white;
+      padding: 10px 20px;
+      border-radius: 6px;
+      text-decoration: none;
+      font-weight: 500;
+    }
+    .download-link:hover {
+      background: #16a34a;
+    }
+    .warning {
+      background: #fef3c7;
+      border: 1px solid #f59e0b;
+      padding: 15px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      font-size: 14px;
+      color: #92400e;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🔄 Backup do Supabase</h1>
+    <p class="subtitle">Exporte todos os dados para migração</p>
+
+    <div class="warning">
+      ⚠️ <strong>Importante:</strong> Use suas credenciais do Supabase. A URL e a Anon Key podem ser encontradas em: 
+      <br>Supabase Dashboard → Settings → API
+    </div>
+
+    <div class="form-group">
+      <label>URL do Supabase</label>
+      <input type="url" id="supabaseUrl" placeholder="https://xxxxx.supabase.co">
+    </div>
+
+    <div class="form-group">
+      <label>Anon Key (ou Service Role Key para backup completo)</label>
+      <input type="password" id="supabaseKey" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6...">
+    </div>
+
+    <button class="btn" id="startBackup" onclick="startBackup()">
+      🚀 Iniciar Backup
+    </button>
+
+    <div class="progress" id="progress">
+      <div class="progress-bar">
+        <div class="progress-fill" id="progressFill"></div>
+      </div>
+      <div class="log" id="log"></div>
+    </div>
+
+    <div class="result" id="result">
+      <h3>✅ Backup Concluído!</h3>
+      <p id="resultSummary"></p>
+      <div class="download-links" id="downloadLinks"></div>
+    </div>
+  </div>
+
+  <script>
+    const TABLES = [
+      'clientes',
+      'marcas',
+      'instrumentos',
+      'servicos',
+      'problemas',
+      'ordens_servico',
+      'categorias_financeiras',
+      'contas_pagar',
+      'transacoes_financeiras',
+      'configuracoes_empresa',
+      'configuracoes_whatsapp',
+      'templates_mensagem',
+      'empresa_fiscal',
+      'notas_fiscais',
+      'nfse_logs',
+      'avaliacoes_lembretes'
+    ];
+
+    let backupData = {};
+    let supabase = null;
+
+    function log(message, type = 'info') {
+      const logDiv = document.getElementById('log');
+      const entry = document.createElement('div');
+      entry.className = `log-entry ${type}`;
+      entry.textContent = `${new Date().toLocaleTimeString()} - ${message}`;
+      logDiv.appendChild(entry);
+      logDiv.scrollTop = logDiv.scrollHeight;
+    }
+
+    function updateProgress(percent) {
+      document.getElementById('progressFill').style.width = percent + '%';
+    }
+
+    async function backupTable(tableName) {
+      try {
+        const { data, error } = await supabase
+          .from(tableName)
+          .select('*');
+
+        if (error) {
+          log(`❌ Erro em ${tableName}: ${error.message}`, 'error');
+          return { table: tableName, count: 0, data: [] };
+        }
+
+        log(`✅ ${tableName}: ${data?.length || 0} registros`, 'success');
+        return { table: tableName, count: data?.length || 0, data: data || [] };
+      } catch (err) {
+        log(`❌ Erro em ${tableName}: ${err.message}`, 'error');
+        return { table: tableName, count: 0, data: [] };
+      }
+    }
+
+    function downloadJSON(data, filename) {
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    async function startBackup() {
+      const url = document.getElementById('supabaseUrl').value.trim();
+      const key = document.getElementById('supabaseKey').value.trim();
+
+      if (!url || !key) {
+        alert('Por favor, preencha a URL e a Key do Supabase');
+        return;
+      }
+
+      // Inicializar Supabase
+      supabase = window.supabase.createClient(url, key);
+
+      // Mostrar progresso
+      document.getElementById('progress').classList.add('active');
+      document.getElementById('result').classList.remove('active');
+      document.getElementById('log').innerHTML = '';
+      document.getElementById('startBackup').disabled = true;
+
+      log('🚀 Iniciando backup...', 'info');
+
+      const results = [];
+      let totalRecords = 0;
+
+      for (let i = 0; i < TABLES.length; i++) {
+        const table = TABLES[i];
+        log(`📦 Exportando: ${table}...`, 'info');
+        
+        const result = await backupTable(table);
+        results.push(result);
+        backupData[table] = result.data;
+        totalRecords += result.count;
+
+        updateProgress(((i + 1) / TABLES.length) * 100);
+      }
+
+      // Gerar resumo
+      const summary = {
+        timestamp: new Date().toISOString(),
+        supabaseUrl: url,
+        tables: results.map(r => ({ table: r.table, count: r.count })),
+        totalRecords
+      };
+
+      log(`\n📊 Total: ${totalRecords} registros exportados`, 'success');
+
+      // Mostrar resultado
+      document.getElementById('result').classList.add('active');
+      document.getElementById('resultSummary').textContent = 
+        `${TABLES.length} tabelas exportadas com ${totalRecords} registros no total.`;
+
+      // Criar links de download
+      const linksDiv = document.getElementById('downloadLinks');
+      linksDiv.innerHTML = '';
+
+      // Link para backup completo
+      const fullLink = document.createElement('a');
+      fullLink.className = 'download-link';
+      fullLink.href = '#';
+      fullLink.textContent = '📥 Download Backup Completo';
+      fullLink.onclick = (e) => {
+        e.preventDefault();
+        downloadJSON(backupData, `backup_completo_${new Date().toISOString().split('T')[0]}.json`);
+      };
+      linksDiv.appendChild(fullLink);
+
+      // Link para resumo
+      const summaryLink = document.createElement('a');
+      summaryLink.className = 'download-link';
+      summaryLink.href = '#';
+      summaryLink.textContent = '📋 Download Resumo';
+      summaryLink.onclick = (e) => {
+        e.preventDefault();
+        downloadJSON(summary, `backup_resumo_${new Date().toISOString().split('T')[0]}.json`);
+      };
+      linksDiv.appendChild(summaryLink);
+
+      document.getElementById('startBackup').disabled = false;
+    }
+  </script>
+</body>
+</html>

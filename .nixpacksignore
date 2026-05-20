@@ -1,0 +1,17 @@
+# Ignorar arquivos que podem causar conflitos no Nixpacks
+supabase/functions/
+*.md
+.git/
+.vscode/
+.bolt/
+node_modules/
+dist/
+.env*
+*.log
+scripts/
+test-*
+servidor*
+diagnostico*
+emergency*
+fix-*
+check_tables.sql
