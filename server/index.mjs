@@ -591,6 +591,9 @@ if (fs.existsSync(distDir)) {
   app.get(/.*/, (_req, res) => res.sendFile(path.join(distDir, 'index.html')));
 }
 
-app.listen(PORT, HOST, () => {
-  console.log(`Sistema OS API rodando em ${HOST}:${PORT}`);
-});
+const listenPorts = [...new Set([PORT, 3000, 8080].filter(Boolean))];
+for (const port of listenPorts) {
+  app.listen(port, HOST, () => {
+    console.log(`Sistema OS API rodando em ${HOST}:${port}`);
+  });
+}
