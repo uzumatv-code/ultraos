@@ -33,7 +33,7 @@ export function Ordens() {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Usuário não autenticado');
-      let query = supabase
+      const query = supabase
         .from('ordens_servico')
         .select(`*,cliente:clientes(*),instrumento:instrumentos(*),marca:marcas(*)`)
         .eq('user_id', user.id)

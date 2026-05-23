@@ -110,9 +110,9 @@ export default function ConfiguracaoFiscalModal({
 
         certificadoPath = fileName;
         
-        // Criptografar senha do certificado (básico - em produção usar algo mais seguro)
+        // O backend criptografa este valor antes de persistir.
         if (certificadoSenha) {
-          certificadoSenhaEncrypted = btoa(certificadoSenha); // Base64 encoding simples
+          certificadoSenhaEncrypted = certificadoSenha;
         }
 
         toast.success('Certificado enviado com sucesso!');

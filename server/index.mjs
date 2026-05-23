@@ -18,6 +18,7 @@ const HOST = process.env.HOST || '0.0.0.0';
 const DATABASE_URL = process.env.DATABASE_URL || process.env.MYSQL_URL;
 const JWT_SECRET = process.env.JWT_SECRET;
 const TOKEN_TTL = process.env.JWT_TTL || '12h';
+const uploadsDir = path.join(rootDir, 'uploads');
 
 if (!DATABASE_URL) {
   throw new Error('DATABASE_URL ou MYSQL_URL precisa estar configurado no backend');
@@ -78,12 +79,13 @@ const relationMap = {
 
 const columnCache = new Map();
 
+app.disable('x-powered-by');
 app.use(cors({
   origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : false,
   credentials: true,
 }));
 app.use(express.json({ limit: '10mb' }));
-app.use('/uploads', express.static(path.join(rootDir, 'uploads')));
+app.use('/uploads', express.static(uploadsDir));
 
 app.get('/api/health', (_req, res) => {
   res.json({
@@ -112,6 +114,34 @@ function todayDate() {
 
 function uuid() {
   return crypto.randomUUID();
+}
+
+function encryptionKey() {
+  return crypto.createHash('sha256').update(JWT_SECRET).digest();
+}
+
+function encryptSecret(value) {
+  const text = String(value || '');
+  if (!text || text.startsWith('enc:v1:')) return text;
+
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', encryptionKey(), iv);
+  const encrypted = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `enc:v1:${Buffer.concat([iv, tag, encrypted]).toString('base64')}`;
+}
+
+function resolveUploadPath(bucket, filePath) {
+  const safeBucket = String(bucket || '').replace(/[^a-zA-Z0-9_-]/g, '');
+  const cleanPath = String(filePath || '').replace(/^[/\\]+/, '');
+  if (!safeBucket || !cleanPath || cleanPath.includes('\0')) return null;
+
+  const bucketDir = path.resolve(uploadsDir, safeBucket);
+  const target = path.resolve(bucketDir, cleanPath);
+  if (target !== bucketDir && target.startsWith(`${bucketDir}${path.sep}`)) {
+    return { target, path: cleanPath.split(path.sep).join('/') };
+  }
+  return null;
 }
 
 async function getNextOrderNumber(userId) {
@@ -177,6 +207,10 @@ async function filterDataToColumns(table, data) {
       if (key === 'template_type') mappedKey = 'tipo';
       if (key === 'content') mappedKey = 'conteudo';
       if (key === 'is_active') mappedKey = 'ativo';
+    }
+
+    if (table === 'empresa_fiscal' && mappedKey === 'certificado_senha_encrypted') {
+      mappedValue = encryptSecret(mappedValue);
     }
 
     if (!cols.has(mappedKey)) continue;
@@ -564,13 +598,11 @@ app.post('/api/rpc/get_next_rps_number', requireAuth, async (req, res) => {
 
 app.post('/api/storage/:bucket/upload', requireAuth, express.raw({ type: '*/*', limit: '8mb' }), async (req, res) => {
   try {
-    const bucket = req.params.bucket.replace(/[^a-zA-Z0-9_-]/g, '');
-    const filePath = String(req.query.path || '').replaceAll('..', '').replace(/^\/+/, '');
-    if (!bucket || !filePath) return res.status(400).json({ error: { message: 'Caminho invalido' } });
-    const target = path.join(rootDir, 'uploads', bucket, filePath);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, req.body);
-    res.json({ data: { path: filePath }, error: null });
+    const upload = resolveUploadPath(req.params.bucket, req.query.path);
+    if (!upload) return res.status(400).json({ error: { message: 'Caminho invalido' } });
+    fs.mkdirSync(path.dirname(upload.target), { recursive: true });
+    fs.writeFileSync(upload.target, req.body);
+    res.json({ data: { path: upload.path }, error: null });
   } catch (error) {
     res.status(500).json({ error: { message: error.message } });
   }
@@ -579,8 +611,9 @@ app.post('/api/storage/:bucket/upload', requireAuth, express.raw({ type: '*/*', 
 app.delete('/api/storage/:bucket', requireAuth, async (req, res) => {
   const paths = Array.isArray(req.body?.paths) ? req.body.paths : [];
   for (const item of paths) {
-    const target = path.join(rootDir, 'uploads', req.params.bucket, String(item).replaceAll('..', ''));
-    if (fs.existsSync(target)) fs.rmSync(target, { force: true });
+    const upload = resolveUploadPath(req.params.bucket, item);
+    if (!upload) continue;
+    if (fs.existsSync(upload.target)) fs.rmSync(upload.target, { force: true });
   }
   res.json({ data: null, error: null });
 });
@@ -591,9 +624,6 @@ if (fs.existsSync(distDir)) {
   app.get(/.*/, (_req, res) => res.sendFile(path.join(distDir, 'index.html')));
 }
 
-const listenPorts = [...new Set([PORT, 3000, 8080].filter(Boolean))];
-for (const port of listenPorts) {
-  app.listen(port, HOST, () => {
-    console.log(`Sistema OS API rodando em ${HOST}:${port}`);
-  });
-}
+app.listen(PORT, HOST, () => {
+  console.log(`Sistema OS API rodando em ${HOST}:${PORT}`);
+});

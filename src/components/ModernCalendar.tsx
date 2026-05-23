@@ -199,7 +199,7 @@ export function ModernCalendar({ orders, onEventClick, loading = false, onUpdate
             await WhatsAppService.sendCompletionMessage(selectedEvent.ordem);
             toast.success('Ordem finalizada e cliente notificado via WhatsApp! 🎉');
             break;
-          default:
+          default: {
             const statusLabels: Record<string, string> = {
               em_andamento: 'Em Andamento',
               cancelado: 'Cancelado/Atrasado',
@@ -207,6 +207,7 @@ export function ModernCalendar({ orders, onEventClick, loading = false, onUpdate
               atraso: 'Em Atraso',
             };
             toast.success(`Status alterado para: ${statusLabels[newStatus] || newStatus}`);
+          }
         }
       } catch (whatsappError: any) {
         console.error('Erro ao enviar mensagem WhatsApp:', whatsappError);
