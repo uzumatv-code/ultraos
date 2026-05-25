@@ -207,6 +207,39 @@ try {
     }
   }
 
+  try {
+    const [result] = await conn.query(`
+      INSERT INTO avaliacoes_lembretes
+        (id, user_id, ordem_servico_id, cliente_id, telefone, data_envio, status, comentario, tentativas, created_at, updated_at)
+      SELECT
+        UUID(),
+        o.user_id,
+        o.id,
+        o.cliente_id,
+        c.telefone,
+        COALESCE(NULLIF(o.data_entrega, ''), NULLIF(o.data_previsao, ''), o.updated_at, o.created_at),
+        'enviado',
+        'Historico migrado de solicita_avaliacao/clientes.avaliou',
+        1,
+        COALESCE(o.updated_at, o.created_at),
+        NOW()
+      FROM ordens_servico o
+      JOIN clientes c ON c.id = o.cliente_id
+      LEFT JOIN avaliacoes_lembretes al
+        ON al.user_id = o.user_id
+       AND al.ordem_servico_id = o.id
+      WHERE al.id IS NULL
+        AND o.status = 'concluido'
+        AND (COALESCE(o.solicita_avaliacao, 0) = 1 OR COALESCE(c.avaliou, 0) = 1)
+        AND COALESCE(NULLIF(c.telefone, ''), '') <> ''
+    `);
+    if (Number(result.affectedRows || 0) > 0) {
+      console.log(`Backfill de avaliacoes_lembretes: ${result.affectedRows} registro(s) criado(s).`);
+    }
+  } catch (error) {
+    console.warn(`Aviso: nao foi possivel executar backfill de avaliacoes: ${error.message}`);
+  }
+
   console.log('Migracao MySQL concluida.');
 } finally {
   await conn.end();
