@@ -187,6 +187,7 @@ export function Header() {
     { path: '/ordens', icon: Tool, label: 'Ordens' },
     { path: '/notas-fiscais', icon: FileText, label: 'Notas Fiscais' },
     { path: '/financeiro', icon: DollarSign, label: 'Financeiro' },
+    { path: '/financeiro/ia', icon: DollarSign, label: 'IA Financeira' },
     { path: '/contas', icon: Receipt, label: 'Contas a Pagar' },
   ];
 

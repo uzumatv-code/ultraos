@@ -58,7 +58,12 @@ const allowedTables = new Set([
   'ordens_servico',
   'categorias_financeiras',
   'contas_pagar',
+  'contas_receber',
+  'os_pagamentos',
+  'anexos_financeiros',
   'transacoes_financeiras',
+  'financeiro_ia_autorizados',
+  'financeiro_ia_logs',
   'configuracoes_empresa',
   'configuracoes_whatsapp',
   'system_settings',
@@ -84,6 +89,20 @@ const relationMap = {
   transacoes_financeiras: {
     categoria: ['categorias_financeiras', 'categoria_id'],
     conta_pagar: ['contas_pagar', 'conta_pagar_id'],
+    ordem_servico: ['ordens_servico', 'ordem_servico_id'],
+  },
+  contas_receber: {
+    categoria: ['categorias_financeiras', 'categoria_id'],
+    cliente: ['clientes', 'cliente_id'],
+    ordem_servico: ['ordens_servico', 'ordem_servico_id'],
+  },
+  os_pagamentos: {
+    cliente: ['clientes', 'cliente_id'],
+    ordem_servico: ['ordens_servico', 'ordem_servico_id'],
+    transacao_financeira: ['transacoes_financeiras', 'transacao_financeira_id'],
+  },
+  financeiro_ia_logs: {
+    autorizado: ['financeiro_ia_autorizados', 'autorizado_id'],
   },
   notas_fiscais: {
     ordem_servico: ['ordens_servico', 'ordem_servico_id'],
@@ -647,6 +666,477 @@ app.delete('/api/storage/:bucket', requireAuth, async (req, res) => {
     if (fs.existsSync(upload.target)) fs.rmSync(upload.target, { force: true });
   }
   res.json({ data: null, error: null });
+});
+
+function money(value) {
+  return Number(Number(value || 0).toFixed(2));
+}
+
+function normalizeWhatsappPhone(phone) {
+  return String(phone || '').replace(/\D/g, '');
+}
+
+function parseMoneyFromText(text) {
+  const normalized = String(text || '').toLowerCase().replace(/\s+/g, ' ');
+  const match = normalized.match(/(?:r\$\s*)?(\d{1,3}(?:\.\d{3})*|\d+)(?:[,.](\d{1,2}))?\s*(?:reais|real|rs|brl)?/);
+  if (!match) return null;
+  return Number(`${match[1].replace(/\./g, '')}.${(match[2] || '00').padEnd(2, '0')}`);
+}
+
+function extractPaymentMethod(text) {
+  const value = String(text || '').toLowerCase();
+  if (value.includes('pix')) return 'pix';
+  if (value.includes('dinheiro')) return 'dinheiro';
+  if (value.includes('crédito') || value.includes('credito')) return 'credito';
+  if (value.includes('débito') || value.includes('debito')) return 'debito';
+  if (value.includes('boleto')) return 'boleto';
+  return null;
+}
+
+function parseFinancialIntent(text) {
+  const raw = String(text || '').trim();
+  const lower = raw.toLowerCase();
+  const value = parseMoneyFromText(raw);
+  const formaPagamento = extractPaymentMethod(raw);
+  const osMatch = lower.match(/\bos\s*#?\s*(\d+)\b|ordem\s*(?:de\s*servi[cç]o)?\s*#?\s*(\d+)\b/);
+  const osNumero = osMatch ? Number(osMatch[1] || osMatch[2]) : null;
+
+  if (/^confirmar\s+[a-z0-9-]+/i.test(raw)) {
+    return { intent: 'confirmar_acao', token: raw.split(/\s+/)[1] };
+  }
+
+  if (/(cadastre|registre|lan[cç]a|lançar|lance).*(despesa|gasto|compra)|despesa de|gastei|paguei(?!.*os)/.test(lower)) {
+    const description = raw
+      .replace(/cadastre|registre|lan[cç]a|lançar|lance|uma|um|despesa|gasto|compra|de|r\$|reais|real|paguei/gi, ' ')
+      .replace(/\d+[,.]?\d*/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim() || 'Despesa via WhatsApp';
+    return { intent: 'registrar_despesa', value, description, formaPagamento };
+  }
+
+  if (osNumero && /(paga|pago|recebi|recebido|quitad|pagamento)/.test(lower)) {
+    return { intent: 'registrar_pagamento_os', osNumero, value, formaPagamento };
+  }
+
+  if (/contas?.*vencem hoje|vence hoje|vencimentos hoje/.test(lower)) return { intent: 'contas_vencem_hoje' };
+  if (/quanto.*receber.*m[eê]s|a receber.*m[eê]s|receber este m[eê]s/.test(lower)) return { intent: 'a_receber_mes' };
+  if (/faturamento.*m[eê]s|receita.*m[eê]s|quanto faturei/.test(lower)) return { intent: 'faturamento_mes' };
+  if (/pendentes?.*pagamento|os.*pendentes?.*pagamento|ordens.*devem/.test(lower)) return { intent: 'os_pendentes_pagamento' };
+  if (/cliente\s+(.+).*(deve|devendo|d[eé]bito)/.test(lower)) {
+    const cliente = lower.match(/cliente\s+(.+?)(?:\s+(?:deve|devendo|d[eé]bito)|$)/)?.[1]?.trim();
+    return { intent: 'divida_cliente', cliente };
+  }
+
+  return { intent: 'desconhecida' };
+}
+
+function canWriteFinancial(permission) {
+  return ['escrita', 'admin'].includes(String(permission || '').toLowerCase());
+}
+
+async function ensureDefaultFinancialCategory(userId, tipo, nome, cor) {
+  const [rows] = await pool.query(
+    'SELECT id FROM categorias_financeiras WHERE user_id = ? AND tipo = ? AND LOWER(nome) = LOWER(?) LIMIT 1',
+    [userId, tipo, nome],
+  );
+  if (rows[0]?.id) return rows[0].id;
+  const id = uuid();
+  await pool.query(
+    `INSERT INTO categorias_financeiras (id, user_id, nome, tipo, cor, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [id, userId, nome, tipo, cor, now(), now()],
+  );
+  return id;
+}
+
+async function syncOrderFinancialStatus(conn, userId, ordemId) {
+  const [[totals]] = await conn.query(
+    `SELECT o.valor_total, o.status, COALESCE(SUM(CASE WHEN p.status = 'confirmado' THEN p.valor ELSE 0 END), 0) AS total_pago,
+            MAX(CASE WHEN p.status = 'confirmado' THEN p.data_pagamento ELSE NULL END) AS ultima_data
+       FROM ordens_servico o
+       LEFT JOIN os_pagamentos p ON p.user_id = o.user_id AND p.ordem_servico_id = o.id
+      WHERE o.user_id = ? AND o.id = ?
+      GROUP BY o.id, o.valor_total, o.status`,
+    [userId, ordemId],
+  );
+  if (!totals) return null;
+  const total = money(totals.valor_total);
+  const paid = money(totals.total_pago);
+  const status = totals.status === 'cancelado' ? 'cancelado' : paid >= total && total > 0 ? 'pago' : paid > 0 ? 'parcial' : 'pendente';
+  await conn.query(
+    `UPDATE ordens_servico
+        SET valor_pago = ?, status_financeiro = ?, data_ultimo_pagamento = ?, updated_at = ?
+      WHERE user_id = ? AND id = ?`,
+    [paid, status, totals.ultima_data, now(), userId, ordemId],
+  );
+  await conn.query(
+    `UPDATE contas_receber
+        SET valor_recebido = ?, status = ?, data_recebimento = CASE WHEN ? = 'pago' THEN ? ELSE data_recebimento END, updated_at = ?
+      WHERE user_id = ? AND ordem_servico_id = ?`,
+    [paid, status === 'pago' ? 'recebido' : status, status, totals.ultima_data, now(), userId, ordemId],
+  );
+  return { total, paid, status };
+}
+
+async function ensureReceivableForOrder(conn, userId, order) {
+  const [existing] = await conn.query(
+    'SELECT id FROM contas_receber WHERE user_id = ? AND ordem_servico_id = ? LIMIT 1',
+    [userId, order.id],
+  );
+  if (existing[0]?.id) return existing[0].id;
+
+  const id = uuid();
+  const total = money(order.valor_total ?? (Number(order.valor_servicos || 0) - Number(order.desconto || 0)));
+  await conn.query(
+    `INSERT INTO contas_receber
+     (id, user_id, ordem_servico_id, cliente_id, descricao, valor, valor_recebido, data_vencimento,
+      status, forma_pagamento, parcelas, parcela_atual, observacoes, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 1, ?, ?, ?)`,
+    [
+      id,
+      userId,
+      order.id,
+      order.cliente_id,
+      `OS #${order.numero} - ${order.cliente_nome || 'Cliente'}`,
+      total,
+      order.data_previsao || order.data_entrega || todayDate(),
+      order.status === 'cancelado' ? 'cancelado' : 'pendente',
+      order.forma_pagamento || null,
+      Number(order.parcelas || 1),
+      'Recebivel criado automaticamente a partir da OS',
+      now(),
+      now(),
+    ],
+  );
+  return id;
+}
+
+async function registerOrderPayment({ userId, ordemNumero, ordemId, valor, formaPagamento, origem = 'manual', observacoes = null }) {
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [orders] = await conn.query(
+      `SELECT o.*, c.nome AS cliente_nome
+         FROM ordens_servico o
+         JOIN clientes c ON c.id = o.cliente_id
+        WHERE o.user_id = ? AND ${ordemId ? 'o.id = ?' : 'o.numero = ?'}
+        LIMIT 1`,
+      [userId, ordemId || ordemNumero],
+    );
+    const order = orders[0];
+    if (!order) throw new Error('Ordem de servico nao encontrada');
+    if (order.status === 'cancelado') throw new Error('Nao e possivel pagar uma OS cancelada');
+
+    await ensureReceivableForOrder(conn, userId, order);
+
+    const [[currentPaidRow]] = await conn.query(
+      `SELECT COALESCE(SUM(valor), 0) AS total_pago
+         FROM os_pagamentos
+        WHERE user_id = ? AND ordem_servico_id = ? AND status = 'confirmado'`,
+      [userId, order.id],
+    );
+    const remaining = money(Number(order.valor_total || 0) - Number(currentPaidRow?.total_pago || 0));
+    const amount = money(valor || remaining);
+    if (amount <= 0) throw new Error('Valor de pagamento invalido');
+    if (remaining <= 0) throw new Error('Esta OS ja esta quitada');
+    if (amount > remaining) throw new Error(`Valor maior que o saldo pendente da OS (${remaining.toFixed(2)})`);
+
+    const categoriaId = await ensureDefaultFinancialCategory(userId, 'receita', 'Servicos', '#10B981');
+    const dataPagamento = now();
+    const paymentId = uuid();
+    const transactionId = uuid();
+    const description = `Pagamento OS #${order.numero} - ${order.cliente_nome}`;
+
+    await conn.query(
+      `INSERT INTO transacoes_financeiras
+       (id, user_id, descricao, valor, tipo, data, categoria_id, ordem_servico_id, forma_pagamento, origem, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'receita', ?, ?, ?, ?, ?, ?, ?)`,
+      [transactionId, userId, description, amount, dataPagamento, categoriaId, order.id, formaPagamento || order.forma_pagamento || null, origem, dataPagamento, dataPagamento],
+    );
+
+    await conn.query(
+      `INSERT INTO os_pagamentos
+       (id, user_id, ordem_servico_id, cliente_id, transacao_financeira_id, valor, forma_pagamento, data_pagamento, observacoes, origem, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmado', ?, ?)`,
+      [paymentId, userId, order.id, order.cliente_id, transactionId, amount, formaPagamento || order.forma_pagamento || null, dataPagamento, observacoes, origem, dataPagamento, dataPagamento],
+    );
+
+    const financial = await syncOrderFinancialStatus(conn, userId, order.id);
+    await conn.commit();
+    return { order, amount, transactionId, paymentId, financial };
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
+}
+
+async function createExpense({ userId, descricao, valor, formaPagamento, origem = 'manual' }) {
+  const categoriaId = await ensureDefaultFinancialCategory(userId, 'despesa', 'Operacional', '#EF4444');
+  const id = uuid();
+  await pool.query(
+    `INSERT INTO transacoes_financeiras
+     (id, user_id, descricao, valor, tipo, data, categoria_id, forma_pagamento, origem, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'despesa', ?, ?, ?, ?, ?, ?)`,
+    [id, userId, descricao, money(valor), now(), categoriaId, formaPagamento || null, origem, now(), now()],
+  );
+  return { id };
+}
+
+async function payAccountPayable({ userId, contaId, formaPagamento, origem = 'manual' }) {
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [rows] = await conn.query(
+      `SELECT cp.*, cf.id AS categoria_id_existente
+         FROM contas_pagar cp
+         LEFT JOIN categorias_financeiras cf ON cf.id = cp.categoria_id
+        WHERE cp.user_id = ? AND cp.id = ?
+        LIMIT 1`,
+      [userId, contaId],
+    );
+    const conta = rows[0];
+    if (!conta) throw new Error('Conta a pagar nao encontrada');
+    if (conta.status === 'pago') throw new Error('Conta ja esta paga');
+    if (conta.status === 'cancelado') throw new Error('Conta cancelada nao pode ser paga');
+
+    const transactionId = uuid();
+    const paidAt = now();
+    const categoriaId = conta.categoria_id || await ensureDefaultFinancialCategory(userId, 'despesa', 'Operacional', '#EF4444');
+    await conn.query(
+      `INSERT INTO transacoes_financeiras
+       (id, user_id, descricao, valor, tipo, data, categoria_id, conta_pagar_id, forma_pagamento, origem, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'despesa', ?, ?, ?, ?, ?, ?, ?)`,
+      [transactionId, userId, conta.descricao, money(conta.valor), paidAt, categoriaId, conta.id, formaPagamento || conta.forma_pagamento || null, origem, paidAt, paidAt],
+    );
+    await conn.query(
+      `UPDATE contas_pagar
+          SET status = 'pago', data_pagamento = ?, forma_pagamento = COALESCE(?, forma_pagamento), updated_at = ?
+        WHERE user_id = ? AND id = ?`,
+      [paidAt, formaPagamento || null, now(), userId, conta.id],
+    );
+    await conn.commit();
+    return { conta, transactionId };
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
+}
+
+async function transcribeAudioFromUrl(audioUrl) {
+  if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY nao configurada para transcricao de audio');
+  const audioResponse = await fetch(audioUrl);
+  if (!audioResponse.ok) throw new Error(`Falha ao baixar audio: HTTP ${audioResponse.status}`);
+  const blob = await audioResponse.blob();
+  const form = new FormData();
+  form.append('model', process.env.OPENAI_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe');
+  form.append('file', blob, 'audio.ogg');
+  const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+    body: form,
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(json.error?.message || `OpenAI transcription HTTP ${response.status}`);
+  return json.text || '';
+}
+
+async function logFinancialAi(data) {
+  const id = data.id || uuid();
+  await pool.query(
+    `INSERT INTO financeiro_ia_logs
+     (id, user_id, autorizado_id, telefone, mensagem, tipo_mensagem, intencao, entidades, status, resposta, confirmacao_token, confirmado_em, erro, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE status = VALUES(status), resposta = VALUES(resposta), confirmado_em = VALUES(confirmado_em), erro = VALUES(erro), updated_at = VALUES(updated_at)`,
+    [
+      id,
+      data.user_id,
+      data.autorizado_id || null,
+      data.telefone,
+      data.mensagem || null,
+      data.tipo_mensagem || 'texto',
+      data.intencao || null,
+      data.entidades ? JSON.stringify(data.entidades) : null,
+      data.status || 'recebido',
+      data.resposta || null,
+      data.confirmacao_token || null,
+      data.confirmado_em || null,
+      data.erro || null,
+      data.created_at || now(),
+      now(),
+    ],
+  );
+  return id;
+}
+
+async function answerFinancialQuery(userId, intent) {
+  const today = todayDate();
+  const monthStart = today.slice(0, 8) + '01';
+  const monthEnd = today.slice(0, 8) + '31';
+
+  if (intent.intent === 'contas_vencem_hoje') {
+    const [rows] = await pool.query(
+      `SELECT descricao, valor FROM contas_pagar
+        WHERE user_id = ? AND status IN ('pendente', 'atrasado') AND LEFT(data_vencimento, 10) = ?
+        ORDER BY data_vencimento ASC LIMIT 10`,
+      [userId, today],
+    );
+    if (!rows.length) return 'Nenhuma conta a pagar vence hoje.';
+    return rows.map((row) => `${row.descricao}: R$ ${Number(row.valor).toFixed(2)}`).join('\n');
+  }
+
+  if (intent.intent === 'a_receber_mes') {
+    const [[row]] = await pool.query(
+      `SELECT COALESCE(SUM(valor - COALESCE(valor_recebido, 0)), 0) AS total FROM contas_receber
+        WHERE user_id = ? AND status IN ('pendente', 'parcial', 'atrasado') AND LEFT(data_vencimento, 10) BETWEEN ? AND ?`,
+      [userId, monthStart, monthEnd],
+    );
+    return `A receber este mes: R$ ${Number(row.total || 0).toFixed(2)}.`;
+  }
+
+  if (intent.intent === 'faturamento_mes') {
+    const [[row]] = await pool.query(
+      `SELECT COALESCE(SUM(valor), 0) AS total FROM transacoes_financeiras
+        WHERE user_id = ? AND tipo = 'receita' AND LEFT(data, 10) BETWEEN ? AND ?`,
+      [userId, monthStart, monthEnd],
+    );
+    return `Faturamento recebido no mes: R$ ${Number(row.total || 0).toFixed(2)}.`;
+  }
+
+  if (intent.intent === 'os_pendentes_pagamento') {
+    const [rows] = await pool.query(
+      `SELECT numero, valor_total, valor_pago FROM ordens_servico
+        WHERE user_id = ? AND status <> 'cancelado' AND COALESCE(status_financeiro, 'pendente') IN ('pendente', 'parcial')
+        ORDER BY numero DESC LIMIT 10`,
+      [userId],
+    );
+    if (!rows.length) return 'Nenhuma OS pendente de pagamento.';
+    return rows.map((row) => `OS #${row.numero}: falta R$ ${(Number(row.valor_total || 0) - Number(row.valor_pago || 0)).toFixed(2)}`).join('\n');
+  }
+
+  if (intent.intent === 'divida_cliente' && intent.cliente) {
+    const [rows] = await pool.query(
+      `SELECT c.nome, o.numero, o.valor_total, o.valor_pago
+         FROM ordens_servico o
+         JOIN clientes c ON c.id = o.cliente_id
+        WHERE o.user_id = ? AND LOWER(c.nome) LIKE ? AND o.status <> 'cancelado'
+          AND COALESCE(o.status_financeiro, 'pendente') IN ('pendente', 'parcial')
+        ORDER BY o.numero DESC LIMIT 10`,
+      [userId, `%${intent.cliente.toLowerCase()}%`],
+    );
+    if (!rows.length) return `Nao encontrei debitos pendentes para ${intent.cliente}.`;
+    const total = rows.reduce((acc, row) => acc + Number(row.valor_total || 0) - Number(row.valor_pago || 0), 0);
+    return `${rows[0].nome} deve R$ ${total.toFixed(2)}.\n` + rows.map((row) => `OS #${row.numero}: R$ ${(Number(row.valor_total || 0) - Number(row.valor_pago || 0)).toFixed(2)}`).join('\n');
+  }
+
+  return 'Nao entendi o pedido financeiro. Tente, por exemplo: "quais contas vencem hoje?" ou "registre que a OS 125 foi paga em dinheiro".';
+}
+
+app.post('/api/financeiro/os/:id/pagamentos', requireAuth, async (req, res) => {
+  try {
+    const result = await registerOrderPayment({
+      userId: req.user.id,
+      ordemId: req.params.id,
+      valor: req.body?.valor,
+      formaPagamento: req.body?.forma_pagamento,
+      origem: 'manual',
+      observacoes: req.body?.observacoes || null,
+    });
+    res.json({ data: result, error: null });
+  } catch (error) {
+    res.status(400).json({ data: null, error: { message: error.message } });
+  }
+});
+
+app.post('/api/financeiro/contas-pagar/:id/pagar', requireAuth, async (req, res) => {
+  try {
+    const result = await payAccountPayable({
+      userId: req.user.id,
+      contaId: req.params.id,
+      formaPagamento: req.body?.forma_pagamento,
+      origem: 'manual',
+    });
+    res.json({ data: result, error: null });
+  } catch (error) {
+    res.status(400).json({ data: null, error: { message: error.message } });
+  }
+});
+
+app.post('/api/financeiro/ia/webhook', async (req, res) => {
+  const phone = normalizeWhatsappPhone(req.body?.phone || req.body?.telefone || req.body?.from);
+  let message = String(req.body?.text || req.body?.message || req.body?.mensagem || '').trim();
+  const audioUrl = req.body?.audio_url || req.body?.audioUrl || null;
+  const tipoMensagem = audioUrl && !message ? 'audio' : 'texto';
+
+  try {
+    if (!phone) throw new Error('Telefone ausente');
+    const [authorizedRows] = await pool.query(
+      `SELECT * FROM financeiro_ia_autorizados
+        WHERE ativo = 1 AND REPLACE(REPLACE(REPLACE(REPLACE(telefone, '+', ''), ' ', ''), '-', ''), '(', '') LIKE ?
+        ORDER BY updated_at DESC LIMIT 1`,
+      [`%${phone.slice(-11)}%`],
+    );
+    const authorized = authorizedRows[0];
+    if (!authorized) {
+      await logFinancialAi({ user_id: 'unauthorized', telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, status: 'bloqueado', erro: 'Numero nao autorizado' }).catch(() => {});
+      return res.status(403).json({ reply: 'Numero nao autorizado para usar a IA financeira.' });
+    }
+
+    if (!message && audioUrl) message = await transcribeAudioFromUrl(audioUrl);
+    const intent = parseFinancialIntent(message);
+
+    if (intent.intent === 'confirmar_acao') {
+      const [logs] = await pool.query(
+        `SELECT * FROM financeiro_ia_logs
+          WHERE user_id = ? AND telefone = ? AND confirmacao_token = ? AND status = 'aguardando_confirmacao'
+          ORDER BY created_at DESC LIMIT 1`,
+        [authorized.user_id, phone, intent.token],
+      );
+      const pending = logs[0];
+      if (!pending) return res.json({ reply: 'Nao encontrei uma acao pendente para esse codigo.' });
+      const entities = typeof pending.entidades === 'string' ? JSON.parse(pending.entidades || '{}') : pending.entidades || {};
+      let reply = 'Acao confirmada.';
+      if (pending.intencao === 'registrar_despesa') {
+        await createExpense({ userId: authorized.user_id, descricao: entities.description, valor: entities.value, formaPagamento: entities.formaPagamento, origem: 'whatsapp_ia' });
+        reply = `Despesa registrada: ${entities.description} - R$ ${Number(entities.value).toFixed(2)}.`;
+      }
+      if (pending.intencao === 'registrar_pagamento_os') {
+        const payment = await registerOrderPayment({ userId: authorized.user_id, ordemNumero: entities.osNumero, valor: entities.value, formaPagamento: entities.formaPagamento, origem: 'whatsapp_ia' });
+        reply = `Pagamento registrado na OS #${payment.order.numero}: R$ ${Number(payment.amount).toFixed(2)}.`;
+      }
+      await logFinancialAi({ id: pending.id, user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: pending.mensagem, tipo_mensagem: pending.tipo_mensagem, intencao: pending.intencao, entidades, status: 'executado', resposta: reply, confirmacao_token: intent.token, confirmado_em: now() });
+      return res.json({ reply });
+    }
+
+    if (['registrar_despesa', 'registrar_pagamento_os'].includes(intent.intent)) {
+      if (!canWriteFinancial(authorized.permissao)) {
+        const reply = 'Seu numero tem permissao apenas de consulta.';
+        await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, intencao: intent.intent, entidades: intent, status: 'negado', resposta: reply });
+        return res.status(403).json({ reply });
+      }
+      if (!intent.value || intent.value <= 0) {
+        const reply = 'Informe um valor valido para registrar essa acao.';
+        await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, intencao: intent.intent, entidades: intent, status: 'erro', resposta: reply, erro: 'Valor ausente' });
+        return res.json({ reply });
+      }
+      const token = crypto.randomBytes(3).toString('hex').toUpperCase();
+      const actionText = intent.intent === 'registrar_despesa'
+        ? `registrar despesa "${intent.description}" de R$ ${Number(intent.value).toFixed(2)}`
+        : `registrar pagamento da OS #${intent.osNumero} de R$ ${Number(intent.value).toFixed(2)}`;
+      const reply = `Confirme para ${actionText}. Responda: confirmar ${token}`;
+      await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, intencao: intent.intent, entidades: intent, status: 'aguardando_confirmacao', resposta: reply, confirmacao_token: token });
+      return res.json({ reply, confirmation_required: true, token });
+    }
+
+    const reply = await answerFinancialQuery(authorized.user_id, intent);
+    await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, intencao: intent.intent, entidades: intent, status: 'respondido', resposta: reply });
+    res.json({ reply });
+  } catch (error) {
+    res.status(400).json({ reply: `Erro: ${error.message}`, error: { message: error.message } });
+  }
 });
 
 let evaluationJobRunning = false;

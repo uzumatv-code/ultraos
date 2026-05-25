@@ -216,18 +216,22 @@ export function ContasPagar() {
 
   async function handlePagar(conta: ContaPagar) {
     try {
-      // Atualizar status da conta
-      const { error: contaError } = await supabase
-        .from('contas_pagar')
-        .update({
-          status: 'pago',
-          data_pagamento: new Date().toISOString()
+      const sessionRaw = localStorage.getItem('mysql-auth-session');
+      const token = sessionRaw ? JSON.parse(sessionRaw)?.access_token : null;
+      const response = await fetch(`/api/financeiro/contas-pagar/${conta.id}/pagar`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({
+          forma_pagamento: conta.forma_pagamento
         })
-        .eq('id', conta.id);
+      });
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(json.error?.message || 'Erro ao pagar conta');
 
-      if (contaError) throw contaError;
-
-      toast.success('Conta marcada como paga!');
+      toast.success('Conta paga e despesa lancada!');
       buscarDados();
     } catch (error) {
       console.error('Erro ao pagar conta:', error);

@@ -17,6 +17,7 @@ import {
   ArrowRight,
   ArrowUpRight,
   CalendarDays,
+  CheckCircle,
   FileText,
   Filter,
   Plus,
@@ -33,7 +34,7 @@ import { formatCurrency } from '../utils/formatters';
 import { TransacaoModal } from '../components/TransacaoModal';
 import { CategoriaFinanceiraModal } from '../components/CategoriaFinanceiraModal';
 import { ImportarCSVModal } from '../components/ImportarCSVModal';
-import type { CategoriaFinanceira, ContaPagar, OrdemServico, TransacaoFinanceira } from '../types/database';
+import type { CategoriaFinanceira, ContaPagar, ContaReceber, OrdemServico, TransacaoFinanceira } from '../types/database';
 
 ChartJS.register(
   CategoryScale,
@@ -156,6 +157,7 @@ export function Financeiro() {
   const [transacoesGrafico, setTransacoesGrafico] = useState<TransacaoFinanceira[]>([]);
   const [categorias, setCategorias] = useState<CategoriaFinanceira[]>([]);
   const [contasPendentes, setContasPendentes] = useState<ContaPagar[]>([]);
+  const [contasReceber, setContasReceber] = useState<ContaReceber[]>([]);
   const [ordensConcluidas, setOrdensConcluidas] = useState<OrdemServico[]>([]);
   const [loading, setLoading] = useState(true);
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -214,6 +216,13 @@ export function Financeiro() {
         .in('status', ['pendente', 'atrasado'])
         .order('data_vencimento', { ascending: true });
 
+      const contasReceberQuery = supabase
+        .from('contas_receber')
+        .select('*, cliente:clientes(*), ordem_servico:ordens_servico(*)')
+        .eq('user_id', user.id)
+        .in('status', ['pendente', 'parcial', 'atrasado'])
+        .order('data_vencimento', { ascending: true });
+
       const ordensQuery = supabase
         .from('ordens_servico')
         .select('id, numero, valor_total, valor_servicos, desconto, data_entrega, data_entrada, cliente:clientes(*)')
@@ -228,19 +237,22 @@ export function Financeiro() {
         { data: transacoesData, error: transacoesError },
         { data: graficoData, error: graficoError },
         { data: contasData, error: contasError },
+        { data: contasReceberData, error: contasReceberError },
         { data: ordensData, error: ordensError },
-      ] = await Promise.all([categoriasQuery, transacoesQuery, transacoesGraficoQuery, contasQuery, ordensQuery]);
+      ] = await Promise.all([categoriasQuery, transacoesQuery, transacoesGraficoQuery, contasQuery, contasReceberQuery, ordensQuery]);
 
       if (categoriasError) throw categoriasError;
       if (transacoesError) throw transacoesError;
       if (graficoError) throw graficoError;
       if (contasError) throw contasError;
+      if (contasReceberError) throw contasReceberError;
       if (ordensError) throw ordensError;
 
       setCategorias(categoriasData || []);
       setTransacoes(transacoesData || []);
       setTransacoesGrafico(graficoData || []);
       setContasPendentes(contasData || []);
+      setContasReceber(contasReceberData || []);
       setOrdensConcluidas(ordensData || []);
     } catch (error) {
       console.error('Erro ao carregar financeiro:', error);
@@ -276,6 +288,13 @@ export function Financeiro() {
     [contasPendentes],
   );
 
+  const totalReceberPendente = useMemo(
+    () => contasReceber.reduce((acc, conta) => acc + Math.max(0, Number(conta.valor || 0) - Number(conta.valor_recebido || 0)), 0),
+    [contasReceber],
+  );
+
+  const lucroLiquido = saldoMes;
+
   const contasAtrasadas = useMemo(
     () => contasPendentes.filter((conta) => conta.status === 'atrasado' || (conta.status === 'pendente' && conta.data_vencimento < toDateInput(new Date()))),
     [contasPendentes],
@@ -286,6 +305,7 @@ export function Financeiro() {
   const despesasPorCategoria = useMemo(() => summarizeByCategory(transacoes, 'despesa'), [transacoes]);
   const ultimasTransacoes = transacoes.slice(0, 8);
   const proximasContas = contasPendentes.slice(0, 6);
+  const proximosRecebimentos = contasReceber.slice(0, 6);
 
   const lineData = {
     labels: fluxoMensal.map((item) => item.label),
@@ -340,6 +360,59 @@ export function Financeiro() {
     setCurrentDate((current) => new Date(current.getFullYear(), current.getMonth() + offset, 1));
   }
 
+  function authHeaders() {
+    const sessionRaw = localStorage.getItem('mysql-auth-session');
+    const token = sessionRaw ? JSON.parse(sessionRaw)?.access_token : null;
+    return {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    };
+  }
+
+  async function pagarConta(conta: ContaPagar) {
+    try {
+      const response = await fetch(`/api/financeiro/contas-pagar/${conta.id}/pagar`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ forma_pagamento: conta.forma_pagamento })
+      });
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(json.error?.message || 'Erro ao pagar conta');
+      toast.success('Conta paga e despesa lancada');
+      buscarDados();
+    } catch (error: any) {
+      console.error('Erro ao pagar conta:', error);
+      toast.error(error.message || 'Erro ao pagar conta');
+    }
+  }
+
+  async function receberConta(conta: ContaReceber) {
+    if (!conta.ordem_servico_id) {
+      toast.error('Recebivel sem OS vinculada');
+      return;
+    }
+
+    try {
+      const saldo = Math.max(0, Number(conta.valor || 0) - Number(conta.valor_recebido || 0));
+      const response = await fetch(`/api/financeiro/os/${conta.ordem_servico_id}/pagamentos`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({
+          valor: saldo,
+          forma_pagamento: conta.forma_pagamento,
+          observacoes: 'Recebimento registrado pela tela financeira'
+        })
+      });
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(json.error?.message || 'Erro ao receber conta');
+      toast.success('Recebimento lancado como receita');
+      buscarDados();
+    } catch (error: any) {
+      console.error('Erro ao receber conta:', error);
+      toast.error(error.message || 'Erro ao receber conta');
+    }
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-950">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
@@ -368,8 +441,8 @@ export function Financeiro() {
         <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
           <StatCard title="Receitas do mes" value={formatCurrency(receitasMes)} description="Lancamentos filtrados no periodo" tone="green" icon={<ArrowUpRight className="h-5 w-5" />} />
           <StatCard title="Despesas do mes" value={formatCurrency(despesasMes)} description="Saidas registradas no periodo" tone="red" icon={<ArrowDownRight className="h-5 w-5" />} />
-          <StatCard title="Saldo operacional" value={formatCurrency(saldoMes)} description="Receitas menos despesas" tone={saldoMes >= 0 ? 'blue' : 'amber'} icon={<Wallet className="h-5 w-5" />} />
-          <StatCard title="OS concluidas" value={formatCurrency(totalOrdensConcluidas)} description={`${ordensConcluidas.length} ordem(ns) no mes`} tone="blue" icon={<Receipt className="h-5 w-5" />} />
+          <StatCard title="Lucro liquido" value={formatCurrency(lucroLiquido)} description="Recebido menos despesas" tone={saldoMes >= 0 ? 'blue' : 'amber'} icon={<Wallet className="h-5 w-5" />} />
+          <StatCard title="A receber" value={formatCurrency(totalReceberPendente)} description={`${contasReceber.length} recebivel(is) em aberto`} tone="amber" icon={<Receipt className="h-5 w-5" />} />
         </div>
 
         <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -392,6 +465,10 @@ export function Financeiro() {
               <div className="rounded-lg bg-gray-50 p-4 dark:bg-gray-950">
                 <p className="text-sm text-gray-500">Contas pendentes</p>
                 <p className="mt-1 text-xl font-semibold text-gray-950 dark:text-white">{formatCurrency(totalContasPendentes)}</p>
+              </div>
+              <div className="rounded-lg bg-gray-50 p-4 dark:bg-gray-950">
+                <p className="text-sm text-gray-500">Recebiveis pendentes</p>
+                <p className="mt-1 text-xl font-semibold text-amber-600">{formatCurrency(totalReceberPendente)}</p>
               </div>
               <div className="rounded-lg bg-gray-50 p-4 dark:bg-gray-950">
                 <p className="text-sm text-gray-500">Contas atrasadas</p>
@@ -440,6 +517,71 @@ export function Financeiro() {
                 <Upload className="h-4 w-4" />
                 CSV
               </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="mb-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
+          <div className="rounded-lg border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900">
+            <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4 dark:border-gray-800">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-950 dark:text-white">Contas a receber</h2>
+                <p className="text-sm text-gray-500 dark:text-gray-400">{formatCurrency(totalReceberPendente)} em aberto</p>
+              </div>
+              <Receipt className="h-5 w-5 text-amber-500" />
+            </div>
+            <div className="divide-y divide-gray-100 dark:divide-gray-800">
+              {proximosRecebimentos.length === 0 ? (
+                <p className="px-5 py-6 text-sm text-gray-500">Nenhum recebivel em aberto.</p>
+              ) : proximosRecebimentos.map((conta) => {
+                const saldo = Math.max(0, Number(conta.valor || 0) - Number(conta.valor_recebido || 0));
+                return (
+                  <div key={conta.id} className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-gray-950 dark:text-white">{conta.descricao}</p>
+                      <p className="text-xs text-gray-500">
+                        {conta.data_vencimento ? new Date(conta.data_vencimento).toLocaleDateString('pt-BR') : 'Sem vencimento'} - {conta.status}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <p className="text-sm font-semibold text-amber-600">{formatCurrency(saldo)}</p>
+                      <button onClick={() => receberConta(conta)} className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-medium text-white hover:bg-emerald-700">
+                        <CheckCircle className="h-4 w-4" />
+                        Receber
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900">
+            <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4 dark:border-gray-800">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-950 dark:text-white">Contas a pagar</h2>
+                <p className="text-sm text-gray-500 dark:text-gray-400">{formatCurrency(totalContasPendentes)} pendente</p>
+              </div>
+              <ArrowDownRight className="h-5 w-5 text-rose-500" />
+            </div>
+            <div className="divide-y divide-gray-100 dark:divide-gray-800">
+              {proximasContas.length === 0 ? (
+                <p className="px-5 py-6 text-sm text-gray-500">Nenhuma conta pendente.</p>
+              ) : proximasContas.map((conta) => (
+                <div key={conta.id} className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-gray-950 dark:text-white">{conta.descricao}</p>
+                    <p className="text-xs text-gray-500">{new Date(conta.data_vencimento).toLocaleDateString('pt-BR')} - {conta.categoria?.nome || 'Sem categoria'}</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <p className="text-sm font-semibold text-rose-600">{formatCurrency(conta.valor)}</p>
+                    <button onClick={() => pagarConta(conta)} className="inline-flex items-center gap-1 rounded-lg bg-gray-950 px-3 py-2 text-xs font-medium text-white hover:bg-gray-800 dark:bg-white dark:text-gray-950">
+                      <CheckCircle className="h-4 w-4" />
+                      Pagar
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         </div>

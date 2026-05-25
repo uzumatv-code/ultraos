@@ -15,6 +15,7 @@ import { ContasPagar } from './pages/ContasPagar';
 import { Transacoes } from './pages/Transacoes';
 import { Perfil } from './pages/Perfil';
 import { Financeiro } from './pages/Financeiro';
+import { FinanceiroIA } from './pages/FinanceiroIA';
 import { ConfiguracoesWhatsApp } from './pages/ConfiguracoesWhatsApp';
 import { ConfiguracoesCompletas } from './pages/ConfiguracoesCompletas';
 import { NotasFiscais } from './pages/NotasFiscais';
@@ -255,6 +256,16 @@ function App() {
             <ProtectedRoute>
               <Layout>
                 <Financeiro />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/financeiro/ia"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <FinanceiroIA />
               </Layout>
             </ProtectedRoute>
           }

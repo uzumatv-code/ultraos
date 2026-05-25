@@ -110,13 +110,13 @@ export function Dashboard() {
       }
 
       const { data } = await supabase
-        .from('ordens_servico')
-        .select('valor_servicos, desconto')
-        .eq('status', 'concluido')
+        .from('transacoes_financeiras')
+        .select('valor')
+        .eq('tipo', 'receita')
         .eq('user_id', user.id);
 
       const total = data?.reduce((acc, order) => 
-        acc + (Number(order.valor_servicos) - Number(order.desconto)), 0) || 0;
+        acc + Number(order.valor || 0), 0) || 0;
       setRevenue(total);
     } catch (error: any) {
       if (error?.message && !error.message.includes('Failed to fetch')) {

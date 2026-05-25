@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { PenTool as Tool, Search, Plus, Trash2, ChevronLeft, ChevronRight, Send, Edit, Printer, Star, FileText } from 'lucide-react';
+import { PenTool as Tool, Search, Plus, Trash2, ChevronLeft, ChevronRight, Send, Edit, Printer, Star, FileText, DollarSign } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { toast } from '../components/ToastCustom';
@@ -95,6 +95,39 @@ export function Ordens() {
     cancelado: 'Cancelado'
   };
 
+  function getFinancialStatus(ordem: OrdemServico) {
+    const total = Number(ordem.valor_total ?? (Number(ordem.valor_servicos || 0) - Number(ordem.desconto || 0)));
+    const paid = Number(ordem.valor_pago || 0);
+    if (ordem.status === 'cancelado') return { label: 'Cancelado', className: 'bg-gray-100 text-gray-700', remaining: 0 };
+    if (paid >= total && total > 0) return { label: 'Pago', className: 'bg-green-100 text-green-800', remaining: 0 };
+    if (paid > 0) return { label: 'Parcial', className: 'bg-blue-100 text-blue-800', remaining: Math.max(0, total - paid) };
+    return { label: 'Pendente', className: 'bg-yellow-100 text-yellow-800', remaining: Math.max(0, total - paid) };
+  }
+
+  function getAuthHeaders() {
+    const sessionRaw = localStorage.getItem('mysql-auth-session');
+    const token = sessionRaw ? JSON.parse(sessionRaw)?.access_token : null;
+    return {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    };
+  }
+
+  async function registrarPagamentoOS(ordem: OrdemServico, valor?: number, observacoes = 'Pagamento registrado pela tela de OS') {
+    const response = await fetch(`/api/financeiro/os/${ordem.id}/pagamentos`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({
+        valor,
+        forma_pagamento: ordem.forma_pagamento,
+        observacoes
+      })
+    });
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(json.error?.message || 'Erro ao registrar pagamento');
+    return json.data;
+  }
+
   // Definição das colunas para TanStack Table v8+
   const columns = useMemo<ColumnDef<OrdemServico, any>[]>(() => [
     {
@@ -132,6 +165,23 @@ export function Ordens() {
           <option value="cancelado">Cancelado</option>
         </select>
       ),
+    },
+    {
+      header: 'Financeiro',
+      id: 'financeiro',
+      cell: info => {
+        const financial = getFinancialStatus(info.row.original);
+        return (
+          <div className="space-y-1">
+            <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${financial.className}`}>
+              {financial.label}
+            </span>
+            {financial.remaining > 0 && (
+              <p className="text-xs text-gray-500">Falta {formatCurrency(financial.remaining)}</p>
+            )}
+          </div>
+        );
+      },
     },
     {
       header: 'Ações',
@@ -203,6 +253,16 @@ export function Ordens() {
           >
             <FileText className="w-4 h-4" />
           </motion.button>
+
+          <motion.button
+            whileHover={{ scale: 1.1 }}
+            whileTap={{ scale: 0.9 }}
+            onClick={() => handleRegistrarPagamento(info.row.original)}
+            className="p-2 text-emerald-600 dark:text-emerald-400 hover:text-emerald-900 dark:hover:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 rounded-lg transition-all duration-200"
+            title="Registrar pagamento"
+          >
+            <DollarSign className="w-4 h-4" />
+          </motion.button>
           
           <motion.button
             whileHover={{ scale: 1.1 }}
@@ -268,6 +328,18 @@ export function Ordens() {
         .eq('id', ordem.id);
 
       if (error) throw error;
+
+      if (newStatus === 'concluido') {
+        try {
+          await registrarPagamentoOS(ordem, undefined, 'Receita lancada automaticamente ao concluir a OS');
+        } catch (paymentError: any) {
+          const message = paymentError?.message || '';
+          if (!message.includes('ja esta quitada')) {
+            console.error('Erro ao lancar receita da OS:', paymentError);
+            toast.error(`Status atualizado, mas a receita nao foi lancada: ${message}`);
+          }
+        }
+      }
 
       // If changing to completed status, send WhatsApp message
       if (newStatus === 'concluido' && ordem.cliente?.telefone) {
@@ -368,6 +440,31 @@ export function Ordens() {
       } else {
         alerts.error(error.message || 'Erro ao gerar NFS-e');
       }
+    }
+  }
+
+  async function handleRegistrarPagamento(ordem: OrdemServico) {
+    const financial = getFinancialStatus(ordem);
+    if (financial.remaining <= 0) {
+      toast.success('Esta OS ja esta quitada');
+      return;
+    }
+
+    const result = await alerts.confirm({
+      title: 'Registrar pagamento',
+      text: `Registrar pagamento restante de ${formatCurrency(financial.remaining)} na OS #${ordem.numero}?`,
+      icon: 'question',
+      confirmButtonText: 'Registrar'
+    });
+    if (!result.isConfirmed) return;
+
+    try {
+      await registrarPagamentoOS(ordem, financial.remaining);
+      toast.success('Pagamento registrado com sucesso!');
+      buscarOrdens();
+    } catch (error: any) {
+      console.error('Erro ao registrar pagamento:', error);
+      toast.error(error.message || 'Erro ao registrar pagamento');
     }
   }
 

@@ -132,7 +132,12 @@ CREATE TABLE IF NOT EXISTS `ordens_servico` (
   `valor_servicos` DECIMAL(10,2) DEFAULT 0.00,
   `desconto` DECIMAL(10,2) DEFAULT 0.00,
   `valor_total` DECIMAL(10,2) DEFAULT 0.00,
+  `valor_pago` DECIMAL(10,2) DEFAULT 0.00,
+  `status_financeiro` VARCHAR(50) DEFAULT 'pendente',
+  `data_ultimo_pagamento` VARCHAR(50) NULL,
+  `observacoes_financeiras` TEXT NULL,
   `forma_pagamento` ENUM('credito', 'debito', 'pix', 'dinheiro', 'boleto') DEFAULT 'pix',
+  `parcelas` INT DEFAULT 1,
   `observacoes` TEXT NULL,
   `data_entrada` DATE NOT NULL,
   `data_previsao` DATE NULL,
@@ -163,11 +168,14 @@ CREATE TABLE IF NOT EXISTS `contas_pagar` (
   `valor` DECIMAL(10,2) NOT NULL,
   `data_vencimento` DATE NOT NULL,
   `data_pagamento` DATE NULL,
+  `forma_pagamento` VARCHAR(50) NULL,
+  `parcelas` INT DEFAULT 1,
   `status` ENUM('pendente', 'pago', 'atrasado', 'cancelado') DEFAULT 'pendente',
   `categoria_id` VARCHAR(36) NULL,
   `recorrente` BOOLEAN DEFAULT FALSE,
   `periodicidade` ENUM('unica', 'diaria', 'semanal', 'quinzenal', 'mensal', 'bimestral', 'trimestral', 'semestral', 'anual') DEFAULT 'unica',
   `observacoes` TEXT NULL,
+  `comprovante_url` VARCHAR(500) NULL,
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   INDEX `idx_contas_user` (`user_id`),
@@ -190,6 +198,9 @@ CREATE TABLE IF NOT EXISTS `transacoes_financeiras` (
   `categoria_id` VARCHAR(36) NULL,
   `conta_pagar_id` VARCHAR(36) NULL,
   `ordem_servico_id` VARCHAR(36) NULL,
+  `forma_pagamento` VARCHAR(50) NULL,
+  `comprovante_url` VARCHAR(500) NULL,
+  `origem` VARCHAR(50) DEFAULT 'manual',
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   INDEX `idx_transacoes_user` (`user_id`),
   INDEX `idx_transacoes_tipo` (`tipo`),
@@ -198,6 +209,99 @@ CREATE TABLE IF NOT EXISTS `transacoes_financeiras` (
   FOREIGN KEY (`categoria_id`) REFERENCES `categorias_financeiras`(`id`) ON DELETE SET NULL,
   FOREIGN KEY (`conta_pagar_id`) REFERENCES `contas_pagar`(`id`) ON DELETE SET NULL,
   FOREIGN KEY (`ordem_servico_id`) REFERENCES `ordens_servico`(`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ===========================================
+-- TABELA: contas_receber
+-- ===========================================
+CREATE TABLE IF NOT EXISTS `contas_receber` (
+  `id` VARCHAR(36) NOT NULL PRIMARY KEY,
+  `user_id` VARCHAR(36) NOT NULL,
+  `ordem_servico_id` VARCHAR(36) NULL,
+  `cliente_id` VARCHAR(36) NULL,
+  `descricao` VARCHAR(255) NOT NULL,
+  `valor` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  `valor_recebido` DECIMAL(10,2) DEFAULT 0.00,
+  `data_vencimento` VARCHAR(50) NULL,
+  `data_recebimento` VARCHAR(50) NULL,
+  `status` VARCHAR(50) DEFAULT 'pendente',
+  `categoria_id` VARCHAR(36) NULL,
+  `forma_pagamento` VARCHAR(50) NULL,
+  `parcelas` INT DEFAULT 1,
+  `parcela_atual` INT DEFAULT 1,
+  `observacoes` TEXT NULL,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY `unique_conta_receber_ordem_user` (`user_id`, `ordem_servico_id`),
+  INDEX `idx_contas_receber_user` (`user_id`),
+  INDEX `idx_contas_receber_status` (`status`),
+  INDEX `idx_contas_receber_vencimento` (`data_vencimento`),
+  INDEX `idx_contas_receber_cliente` (`cliente_id`),
+  INDEX `idx_contas_receber_ordem` (`ordem_servico_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ===========================================
+-- TABELA: os_pagamentos
+-- ===========================================
+CREATE TABLE IF NOT EXISTS `os_pagamentos` (
+  `id` VARCHAR(36) NOT NULL PRIMARY KEY,
+  `user_id` VARCHAR(36) NOT NULL,
+  `ordem_servico_id` VARCHAR(36) NOT NULL,
+  `cliente_id` VARCHAR(36) NULL,
+  `transacao_financeira_id` VARCHAR(36) NULL,
+  `valor` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  `forma_pagamento` VARCHAR(50) NULL,
+  `data_pagamento` VARCHAR(50) NOT NULL,
+  `observacoes` TEXT NULL,
+  `origem` VARCHAR(50) DEFAULT 'manual',
+  `status` VARCHAR(50) DEFAULT 'confirmado',
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX `idx_os_pagamentos_user` (`user_id`),
+  INDEX `idx_os_pagamentos_ordem` (`ordem_servico_id`),
+  INDEX `idx_os_pagamentos_cliente` (`cliente_id`),
+  INDEX `idx_os_pagamentos_data` (`data_pagamento`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ===========================================
+-- TABELAS: financeiro IA WhatsApp
+-- ===========================================
+CREATE TABLE IF NOT EXISTS `financeiro_ia_autorizados` (
+  `id` VARCHAR(36) NOT NULL PRIMARY KEY,
+  `user_id` VARCHAR(36) NOT NULL,
+  `nome` VARCHAR(255) NOT NULL,
+  `telefone` VARCHAR(30) NOT NULL,
+  `permissao` VARCHAR(50) DEFAULT 'consulta',
+  `nivel_acesso` VARCHAR(50) DEFAULT 'operador',
+  `ativo` BOOLEAN DEFAULT TRUE,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY `unique_financeiro_ia_phone_user` (`user_id`, `telefone`),
+  INDEX `idx_financeiro_ia_aut_user` (`user_id`),
+  INDEX `idx_financeiro_ia_aut_telefone` (`telefone`),
+  INDEX `idx_financeiro_ia_aut_ativo` (`ativo`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `financeiro_ia_logs` (
+  `id` VARCHAR(36) NOT NULL PRIMARY KEY,
+  `user_id` VARCHAR(36) NOT NULL,
+  `autorizado_id` VARCHAR(36) NULL,
+  `telefone` VARCHAR(30) NOT NULL,
+  `mensagem` TEXT NULL,
+  `tipo_mensagem` VARCHAR(50) DEFAULT 'texto',
+  `intencao` VARCHAR(100) NULL,
+  `entidades` JSON NULL,
+  `status` VARCHAR(50) DEFAULT 'recebido',
+  `resposta` TEXT NULL,
+  `confirmacao_token` VARCHAR(100) NULL,
+  `confirmado_em` VARCHAR(50) NULL,
+  `erro` TEXT NULL,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX `idx_financeiro_ia_logs_user` (`user_id`),
+  INDEX `idx_financeiro_ia_logs_telefone` (`telefone`),
+  INDEX `idx_financeiro_ia_logs_status` (`status`),
+  INDEX `idx_financeiro_ia_logs_created` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ===========================================

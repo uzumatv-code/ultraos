@@ -54,7 +54,12 @@ export interface OrdemServico {
   valor_servicos: number;
   desconto: number;
   valor_total: number;
+  valor_pago?: number;
+  status_financeiro?: 'pendente' | 'parcial' | 'pago' | 'cancelado';
+  data_ultimo_pagamento?: string;
+  observacoes_financeiras?: string;
   forma_pagamento: 'credito' | 'debito' | 'pix';
+  parcelas?: number;
   observacoes: string;
   data_entrada: string;
   data_previsao: string;
@@ -90,6 +95,8 @@ export interface ContaPagar {
   valor: number;
   data_vencimento: string;
   data_pagamento?: string;
+  forma_pagamento?: string;
+  parcelas?: number;
   status: ContaStatus;
   categoria_id?: string;
   recorrente: boolean;
@@ -110,10 +117,85 @@ export interface TransacaoFinanceira {
   categoria_id: string;
   conta_pagar_id?: string;
   ordem_servico_id?: string;
+  forma_pagamento?: string;
+  comprovante_url?: string;
+  origem?: string;
   created_at: string;
+  updated_at?: string;
   user_id: string;
   categoria?: CategoriaFinanceira;
   conta_pagar?: ContaPagar;
+}
+
+export interface ContaReceber {
+  id: string;
+  descricao: string;
+  valor: number;
+  valor_recebido: number;
+  data_vencimento?: string;
+  data_recebimento?: string;
+  status: 'pendente' | 'parcial' | 'recebido' | 'atrasado' | 'cancelado';
+  categoria_id?: string;
+  cliente_id?: string;
+  ordem_servico_id?: string;
+  forma_pagamento?: string;
+  parcelas: number;
+  parcela_atual: number;
+  observacoes?: string;
+  comprovante_url?: string;
+  created_at: string;
+  updated_at: string;
+  user_id: string;
+  categoria?: CategoriaFinanceira;
+  cliente?: Cliente;
+  ordem_servico?: OrdemServico;
+}
+
+export interface OSPagamento {
+  id: string;
+  ordem_servico_id: string;
+  cliente_id?: string;
+  transacao_financeira_id?: string;
+  valor: number;
+  forma_pagamento?: string;
+  data_pagamento: string;
+  observacoes?: string;
+  origem: string;
+  status: 'confirmado' | 'estornado' | 'cancelado';
+  created_at: string;
+  updated_at: string;
+  user_id: string;
+}
+
+export interface FinanceiroIAAutorizado {
+  id: string;
+  nome: string;
+  telefone: string;
+  permissao: 'consulta' | 'escrita' | 'admin';
+  nivel_acesso: 'operador' | 'gerente' | 'admin';
+  ativo: boolean;
+  created_at: string;
+  updated_at: string;
+  user_id: string;
+}
+
+export interface FinanceiroIALog {
+  id: string;
+  autorizado_id?: string;
+  telefone: string;
+  mensagem?: string;
+  tipo_mensagem: 'texto' | 'audio';
+  intencao?: string;
+  entidades?: any;
+  status: string;
+  resposta?: string;
+  confirmacao_token?: string;
+  confirmado_em?: string;
+  erro?: string;
+  created_at: string;
+  updated_at: string;
+  user_id: string;
+  autorizado?: FinanceiroIAAutorizado;
 }
 
 // Tipos para NFS-e

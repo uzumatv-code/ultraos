@@ -333,5 +333,24 @@ export const alerts = {
       .eq('id', ordemId);
 
     if (error) throw error;
+
+    if (status === 'concluido') {
+      const sessionRaw = localStorage.getItem('mysql-auth-session');
+      const token = sessionRaw ? JSON.parse(sessionRaw)?.access_token : null;
+      const response = await fetch(`/api/financeiro/os/${ordemId}/pagamentos`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({
+          observacoes: 'Receita lancada automaticamente ao concluir a OS'
+        })
+      });
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok && !String(json.error?.message || '').includes('ja esta quitada')) {
+        throw new Error(json.error?.message || 'Erro ao lancar receita da OS');
+      }
+    }
   }
 };
