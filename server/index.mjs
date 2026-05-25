@@ -696,6 +696,146 @@ function parseMoneyFromText(text) {
   return Number(`${match[1].replace(/\./g, '')}.${(match[2] || '00').padEnd(2, '0')}`);
 }
 
+function normalizeTextForAi(text) {
+  return String(text || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+const numberWordValues = new Map(Object.entries({
+  zero: 0,
+  um: 1,
+  uma: 1,
+  dois: 2,
+  duas: 2,
+  tres: 3,
+  quatro: 4,
+  cinco: 5,
+  seis: 6,
+  sete: 7,
+  oito: 8,
+  nove: 9,
+  dez: 10,
+  onze: 11,
+  doze: 12,
+  treze: 13,
+  quatorze: 14,
+  catorze: 14,
+  quinze: 15,
+  dezesseis: 16,
+  dezassete: 17,
+  dezessete: 17,
+  dezoito: 18,
+  dezenove: 19,
+  vinte: 20,
+  trinta: 30,
+  quarenta: 40,
+  cinquenta: 50,
+  sessenta: 60,
+  setenta: 70,
+  oitenta: 80,
+  noventa: 90,
+  cem: 100,
+  cento: 100,
+  duzentos: 200,
+  trezentos: 300,
+  quatrocentos: 400,
+  quinhentos: 500,
+  seiscentos: 600,
+  setecentos: 700,
+  oitocentos: 800,
+  novecentos: 900,
+}));
+
+function parsePortugueseNumberWords(text) {
+  const tokens = normalizeTextForAi(text)
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((token) => token && token !== 'e' && token !== 'de' && token !== 'reais' && token !== 'real');
+  let total = 0;
+  let current = 0;
+
+  for (const token of tokens) {
+    if (/^\d+$/.test(token)) {
+      current += Number(token);
+      continue;
+    }
+    if (token === 'mil') {
+      total += (current || 1) * 1000;
+      current = 0;
+      continue;
+    }
+    if (!numberWordValues.has(token)) return null;
+    current += numberWordValues.get(token);
+  }
+
+  return total + current;
+}
+
+function parseMoneyWordsFromText(text) {
+  const normalized = normalizeTextForAi(text);
+  const afterValue = normalized.match(/(?:valor\s+de|no\s+valor\s+de|de)\s+(.+?)(?:\s*,?\s*(?:vencimento|vence|para|com|em)\b|$)/)?.[1];
+  if (!afterValue) return null;
+
+  const explicitCents = afterValue.match(/(.+?)\s+(?:reais|real)\s+e\s+(.+?)\s+centavos?/);
+  if (explicitCents) {
+    const reais = parsePortugueseNumberWords(explicitCents[1]);
+    const cents = parsePortugueseNumberWords(explicitCents[2]);
+    if (reais !== null && cents !== null) return Number((reais + cents / 100).toFixed(2));
+  }
+
+  const parts = afterValue.split(/\s+e\s+/).map((part) => part.trim()).filter(Boolean);
+  if (parts.length >= 4) {
+    const cents = parsePortugueseNumberWords(parts.slice(-2).join(' e '));
+    const reais = parsePortugueseNumberWords(parts.slice(0, -2).join(' e '));
+    if (reais !== null && cents !== null && cents > 0 && cents < 100) {
+      return Number((reais + cents / 100).toFixed(2));
+    }
+  }
+
+  const value = parsePortugueseNumberWords(afterValue);
+  return value === null ? null : Number(value.toFixed(2));
+}
+
+function parseFinancialMoney(text) {
+  return parseMoneyWordsFromText(text) ?? parseMoneyFromText(text);
+}
+
+function parseDueDateFromText(text) {
+  const normalized = normalizeTextForAi(text);
+  const numeric = normalized.match(/(?:vencimento|vence|dia)(?:\s+dia)?\s+(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?/);
+  if (numeric) {
+    const year = numeric[3] ? Number(numeric[3].length === 2 ? `20${numeric[3]}` : numeric[3]) : new Date().getFullYear();
+    return `${year}-${String(Number(numeric[2])).padStart(2, '0')}-${String(Number(numeric[1])).padStart(2, '0')}`;
+  }
+
+  const wordDay = normalized.match(/(?:vencimento|vence|dia)(?:\s+dia)?\s+([a-z\s]+?)[/-](\d{1,2})(?:[/-](\d{2,4}))?/);
+  if (wordDay) {
+    const day = parsePortugueseNumberWords(wordDay[1]);
+    if (!day) return null;
+    const year = wordDay[3] ? Number(wordDay[3].length === 2 ? `20${wordDay[3]}` : wordDay[3]) : new Date().getFullYear();
+    return `${year}-${String(Number(wordDay[2])).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  }
+
+  return null;
+}
+
+function titleCaseDescription(text) {
+  return String(text || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function extractAccountPayableDescription(text) {
+  const raw = String(text || '').trim();
+  const match = raw.match(/(?:conta|boleto|fatura)\s+(?:da|do|de)?\s*(.+?)(?:\s+(?:no\s+)?valor\b|\s+vencimento\b|\s+vence\b|$)/i);
+  return titleCaseDescription(match?.[1] || 'Conta via WhatsApp');
+}
+
 function extractPaymentMethod(text) {
   const value = String(text || '').toLowerCase();
   if (value.includes('pix')) return 'pix';
@@ -709,13 +849,24 @@ function extractPaymentMethod(text) {
 function parseFinancialIntent(text) {
   const raw = String(text || '').trim();
   const lower = raw.toLowerCase();
-  const value = parseMoneyFromText(raw);
+  const normalized = normalizeTextForAi(raw);
+  const value = parseFinancialMoney(raw);
   const formaPagamento = extractPaymentMethod(raw);
   const osMatch = lower.match(/\bos\s*#?\s*(\d+)\b|ordem\s*(?:de\s*servi[cç]o)?\s*#?\s*(\d+)\b/);
   const osNumero = osMatch ? Number(osMatch[1] || osMatch[2]) : null;
 
   if (/^confirmar\s+[a-z0-9-]+/i.test(raw)) {
     return { intent: 'confirmar_acao', token: raw.split(/\s+/)[1] };
+  }
+
+  if (/(cadastre|registre|lanca|lancar|lance).*(conta|boleto|fatura)/.test(normalized)) {
+    return {
+      intent: 'registrar_conta_pagar',
+      value,
+      description: extractAccountPayableDescription(raw),
+      dataVencimento: parseDueDateFromText(raw),
+      formaPagamento,
+    };
   }
 
   if (/(cadastre|registre|lan[cç]a|lançar|lance).*(despesa|gasto|compra)|despesa de|gastei|paguei(?!.*os)/.test(lower)) {
@@ -895,6 +1046,29 @@ async function createExpense({ userId, descricao, valor, formaPagamento, origem 
     [id, userId, descricao, money(valor), now(), categoriaId, formaPagamento || null, origem, now(), now()],
   );
   return { id };
+}
+
+async function createAccountPayable({ userId, descricao, valor, dataVencimento, formaPagamento, origem = 'whatsapp_ia' }) {
+  const categoriaId = await ensureDefaultFinancialCategory(userId, 'despesa', 'Operacional', '#EF4444');
+  const id = uuid();
+  await pool.query(
+    `INSERT INTO contas_pagar
+     (id, user_id, descricao, valor, data_vencimento, forma_pagamento, parcelas, status, categoria_id, recorrente, periodicidade, observacoes, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, 1, 'pendente', ?, 0, 'unica', ?, ?, ?)`,
+    [
+      id,
+      userId,
+      titleCaseDescription(descricao),
+      money(valor),
+      dataVencimento,
+      formaPagamento || null,
+      categoriaId,
+      `Cadastrada pela IA financeira via ${origem}`,
+      now(),
+      now(),
+    ],
+  );
+  return { id, descricao: titleCaseDescription(descricao), valor: money(valor), dataVencimento };
 }
 
 async function payAccountPayable({ userId, contaId, formaPagamento, origem = 'manual' }) {
@@ -1274,12 +1448,16 @@ app.post('/api/financeiro/ia/webhook', async (req, res) => {
         const payment = await registerOrderPayment({ userId: authorized.user_id, ordemNumero: entities.osNumero, valor: entities.value, formaPagamento: entities.formaPagamento, origem: 'whatsapp_ia' });
         reply = `Pagamento registrado na OS #${payment.order.numero}: R$ ${Number(payment.amount).toFixed(2)}.`;
       }
+      if (pending.intencao === 'registrar_conta_pagar') {
+        const conta = await createAccountPayable({ userId: authorized.user_id, descricao: entities.description, valor: entities.value, dataVencimento: entities.dataVencimento, formaPagamento: entities.formaPagamento, origem: 'whatsapp_ia' });
+        reply = `Conta cadastrada: ${conta.descricao} - R$ ${Number(conta.valor).toFixed(2)}. Vencimento: ${conta.dataVencimento}.`;
+      }
       await logFinancialAi({ id: pending.id, user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: pending.mensagem, tipo_mensagem: pending.tipo_mensagem, intencao: pending.intencao, entidades, status: 'executado', resposta: reply, confirmacao_token: intent.token, confirmado_em: now() });
       await sendFinancialAiReply(authorized.user_id, phone, reply);
       return res.json({ reply, whatsapp_sent: true });
     }
 
-    if (['registrar_despesa', 'registrar_pagamento_os'].includes(intent.intent)) {
+    if (['registrar_despesa', 'registrar_pagamento_os', 'registrar_conta_pagar'].includes(intent.intent)) {
       if (!canWriteFinancial(authorized.permissao)) {
         const reply = 'Seu numero tem permissao apenas de consulta.';
         await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, intencao: intent.intent, entidades: intent, status: 'negado', resposta: reply });
@@ -1292,10 +1470,18 @@ app.post('/api/financeiro/ia/webhook', async (req, res) => {
         await sendFinancialAiReply(authorized.user_id, phone, reply);
         return res.json({ reply, whatsapp_sent: true });
       }
+      if (intent.intent === 'registrar_conta_pagar' && !intent.dataVencimento) {
+        const reply = 'Informe a data de vencimento da conta.';
+        await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, intencao: intent.intent, entidades: intent, status: 'erro', resposta: reply, erro: 'Vencimento ausente' });
+        await sendFinancialAiReply(authorized.user_id, phone, reply);
+        return res.json({ reply, whatsapp_sent: true });
+      }
       const token = crypto.randomBytes(3).toString('hex').toUpperCase();
       const actionText = intent.intent === 'registrar_despesa'
         ? `registrar despesa "${intent.description}" de R$ ${Number(intent.value).toFixed(2)}`
-        : `registrar pagamento da OS #${intent.osNumero} de R$ ${Number(intent.value).toFixed(2)}`;
+        : intent.intent === 'registrar_conta_pagar'
+          ? `cadastrar conta "${intent.description}" de R$ ${Number(intent.value).toFixed(2)} com vencimento em ${intent.dataVencimento}`
+          : `registrar pagamento da OS #${intent.osNumero} de R$ ${Number(intent.value).toFixed(2)}`;
       const reply = `Confirme para ${actionText}. Responda: confirmar ${token}`;
       await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, intencao: intent.intent, entidades: intent, status: 'aguardando_confirmacao', resposta: reply, confirmacao_token: token });
       await sendFinancialAiReply(authorized.user_id, phone, reply);
