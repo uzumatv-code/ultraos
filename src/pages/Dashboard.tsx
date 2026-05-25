@@ -13,7 +13,7 @@ import { ModernCalendar } from '../components/ModernCalendar';
 export function Dashboard() {
   const navigate = useNavigate();
   const [showCalendar, setShowCalendar] = React.useState(true);
-  const [calendarType, setCalendarType] = React.useState<'custom' | 'modern'>('custom');
+  const [calendarType, setCalendarType] = React.useState<'custom' | 'modern'>('modern');
   const [loading, setLoading] = useState(true);
   const [showRevenue, setShowRevenue] = useState(false);
   const [revenue, setRevenue] = useState(0);

@@ -89,6 +89,42 @@ const ddl = [
     updated_at varchar(50) DEFAULT NULL,
     UNIQUE KEY unique_system_settings_user (user_id)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  `CREATE TABLE IF NOT EXISTS agenda_logs (
+    id varchar(36) NOT NULL PRIMARY KEY,
+    user_id varchar(36) NOT NULL,
+    ordem_servico_id varchar(36) NOT NULL,
+    data_anterior varchar(50) NOT NULL,
+    data_nova varchar(50) NOT NULL,
+    profissional_anterior varchar(100) DEFAULT NULL,
+    profissional_novo varchar(100) DEFAULT NULL,
+    acao varchar(50) DEFAULT 'reagendamento',
+    created_at varchar(50) DEFAULT NULL,
+    INDEX idx_agenda_logs_user (user_id),
+    INDEX idx_agenda_logs_ordem (ordem_servico_id),
+    INDEX idx_agenda_logs_created_at (created_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  `CREATE TABLE IF NOT EXISTS avaliacoes_lembretes (
+    id varchar(36) NOT NULL PRIMARY KEY,
+    user_id varchar(36) NOT NULL,
+    ordem_servico_id varchar(36) NOT NULL,
+    cliente_id varchar(36) NOT NULL,
+    telefone varchar(30) DEFAULT NULL,
+    mensagem text DEFAULT NULL,
+    data_envio varchar(50) DEFAULT NULL,
+    status varchar(50) DEFAULT 'pendente',
+    avaliacao int DEFAULT NULL,
+    comentario text DEFAULT NULL,
+    mensagem_erro text DEFAULT NULL,
+    tentativas int DEFAULT 0,
+    created_at varchar(50) DEFAULT NULL,
+    updated_at varchar(50) DEFAULT NULL,
+    UNIQUE KEY unique_avaliacao_ordem_user (user_id, ordem_servico_id),
+    INDEX idx_avaliacoes_user (user_id),
+    INDEX idx_avaliacoes_ordem (ordem_servico_id),
+    INDEX idx_avaliacoes_status (status)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 ];
 
 const alters = [
@@ -96,6 +132,16 @@ const alters = [
   ['ordens_servico', 'problema_descricao', "ALTER TABLE ordens_servico ADD COLUMN problema_descricao text AFTER problemas_descricoes"],
   ['ordens_servico', 'servico_descricao', "ALTER TABLE ordens_servico ADD COLUMN servico_descricao text AFTER servicos_descricoes"],
   ['clientes', 'avaliou', "ALTER TABLE clientes ADD COLUMN avaliou tinyint(1) DEFAULT 0"],
+  ['configuracoes_empresa', 'avaliacoes_enabled', "ALTER TABLE configuracoes_empresa ADD COLUMN avaliacoes_enabled tinyint(1) DEFAULT 1 AFTER instagram_handle"],
+  ['configuracoes_empresa', 'avaliacoes_days_after_completion', "ALTER TABLE configuracoes_empresa ADD COLUMN avaliacoes_days_after_completion int DEFAULT 7 AFTER avaliacoes_enabled"],
+  ['configuracoes_empresa', 'avaliacoes_trigger_hour', "ALTER TABLE configuracoes_empresa ADD COLUMN avaliacoes_trigger_hour int DEFAULT 11 AFTER avaliacoes_days_after_completion"],
+  ['configuracoes_empresa', 'avaliacoes_daily_limit', "ALTER TABLE configuracoes_empresa ADD COLUMN avaliacoes_daily_limit int DEFAULT 20 AFTER avaliacoes_trigger_hour"],
+  ['configuracoes_empresa', 'avaliacoes_min_interval_seconds', "ALTER TABLE configuracoes_empresa ADD COLUMN avaliacoes_min_interval_seconds int DEFAULT 20 AFTER avaliacoes_daily_limit"],
+  ['configuracoes_empresa', 'avaliacoes_last_processed_date', "ALTER TABLE configuracoes_empresa ADD COLUMN avaliacoes_last_processed_date varchar(10) DEFAULT NULL AFTER avaliacoes_min_interval_seconds"],
+  ['avaliacoes_lembretes', 'telefone', "ALTER TABLE avaliacoes_lembretes ADD COLUMN telefone varchar(30) DEFAULT NULL AFTER cliente_id"],
+  ['avaliacoes_lembretes', 'mensagem', "ALTER TABLE avaliacoes_lembretes ADD COLUMN mensagem text DEFAULT NULL AFTER telefone"],
+  ['avaliacoes_lembretes', 'mensagem_erro', "ALTER TABLE avaliacoes_lembretes ADD COLUMN mensagem_erro text DEFAULT NULL AFTER comentario"],
+  ['avaliacoes_lembretes', 'tentativas', "ALTER TABLE avaliacoes_lembretes ADD COLUMN tentativas int DEFAULT 0 AFTER mensagem_erro"],
   ['templates_mensagem', 'template_type', "ALTER TABLE templates_mensagem ADD COLUMN template_type varchar(50) GENERATED ALWAYS AS (tipo) VIRTUAL"],
   ['templates_mensagem', 'is_active', "ALTER TABLE templates_mensagem ADD COLUMN is_active tinyint(1) GENERATED ALWAYS AS (ativo) VIRTUAL"],
 ];
@@ -104,6 +150,8 @@ const modifications = [
   "ALTER TABLE ordens_servico MODIFY COLUMN data_entrada varchar(50) DEFAULT NULL",
   "ALTER TABLE ordens_servico MODIFY COLUMN data_previsao varchar(50) DEFAULT NULL",
   "ALTER TABLE ordens_servico MODIFY COLUMN data_entrega varchar(50) DEFAULT NULL",
+  "ALTER TABLE avaliacoes_lembretes MODIFY COLUMN status varchar(50) DEFAULT 'pendente'",
+  "ALTER TABLE avaliacoes_lembretes MODIFY COLUMN data_envio varchar(50) DEFAULT NULL",
 ];
 
 async function hasColumn(conn, table, column) {
@@ -112,6 +160,16 @@ async function hasColumn(conn, table, column) {
      FROM information_schema.COLUMNS
      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
     [table, column],
+  );
+  return Number(rows[0].total) > 0;
+}
+
+async function hasIndex(conn, table, indexName) {
+  const [rows] = await conn.query(
+    `SELECT COUNT(*) AS total
+     FROM information_schema.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?`,
+    [table, indexName],
   );
   return Number(rows[0].total) > 0;
 }
@@ -138,6 +196,14 @@ try {
       await conn.query(sql);
     } catch (error) {
       console.warn(`Aviso: nao foi possivel aplicar modificacao: ${error.message}`);
+    }
+  }
+
+  if (!(await hasIndex(conn, 'avaliacoes_lembretes', 'unique_avaliacao_ordem_user'))) {
+    try {
+      await conn.query('ALTER TABLE avaliacoes_lembretes ADD UNIQUE KEY unique_avaliacao_ordem_user (user_id, ordem_servico_id)');
+    } catch (error) {
+      console.warn(`Aviso: nao foi possivel criar indice unico de avaliacoes: ${error.message}`);
     }
   }
 

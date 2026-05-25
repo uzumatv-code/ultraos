@@ -250,6 +250,39 @@ export function AvaliacoesLembretes() {
                       className="w-full px-3 py-2 text-sm bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg"
                     />
                   </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                      Horario do job
+                    </label>
+                    <input
+                      type="text"
+                      value={`${settings.trigger_hour}h`}
+                      readOnly
+                      className="w-full px-3 py-2 text-sm bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                      Limite diario
+                    </label>
+                    <input
+                      type="text"
+                      value={`${settings.daily_limit} envio(s)`}
+                      readOnly
+                      className="w-full px-3 py-2 text-sm bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                      Intervalo entre envios
+                    </label>
+                    <input
+                      type="text"
+                      value={`${settings.min_interval_seconds}s`}
+                      readOnly
+                      className="w-full px-3 py-2 text-sm bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg"
+                    />
+                  </div>
                 </div>
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
                   Configurações podem ser alteradas em Configurações &gt; Empresa
@@ -491,6 +524,8 @@ export function AvaliacoesLembretes() {
             ) : (
               history.map((item, index) => {
                 const cliente = item.cliente as any;
+                const ordem = item.ordem_servico as any;
+                const isError = item.status === 'erro';
                 return (
                   <motion.div
                     key={item.id}
@@ -505,16 +540,20 @@ export function AvaliacoesLembretes() {
                           <h4 className="font-medium text-gray-900 dark:text-white truncate">
                             {cliente?.nome || 'Cliente'}
                           </h4>
-                          <span className="px-2 py-0.5 text-xs bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 rounded-full flex items-center gap-1">
-                            <CheckCircle2 className="w-3 h-3" />
-                            Enviado
+                          <span className={`px-2 py-0.5 text-xs rounded-full flex items-center gap-1 ${
+                            isError
+                              ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'
+                              : 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300'
+                          }`}>
+                            {isError ? <AlertCircle className="w-3 h-3" /> : <CheckCircle2 className="w-3 h-3" />}
+                            {isError ? 'Erro' : 'Enviado'}
                           </span>
                         </div>
                         
                         <div className="flex flex-wrap items-center gap-3 text-sm text-gray-500 dark:text-gray-400">
                           <span className="flex items-center gap-1">
                             <Star className="w-3.5 h-3.5" />
-                            {(item.instrumento as any)?.nome} {(item.marca as any)?.nome} {item.modelo}
+                            {ordem?.modelo || 'Ordem de serviço'}
                           </span>
                           <span className="flex items-center gap-1">
                             <Phone className="w-3.5 h-3.5" />
@@ -522,14 +561,19 @@ export function AvaliacoesLembretes() {
                           </span>
                           <span className="flex items-center gap-1">
                             <Calendar className="w-3.5 h-3.5" />
-                            {formatDate(item.data_previsao)}
+                            {formatDate(item.data_envio || item.created_at || ordem?.data_entrega || ordem?.data_previsao)}
                           </span>
+                          {item.mensagem_erro && (
+                            <span className="text-red-600 dark:text-red-300">
+                              {item.mensagem_erro}
+                            </span>
+                          )}
                         </div>
                       </div>
 
                       <div className="text-right">
                         <span className="text-sm font-medium text-gray-600 dark:text-gray-300">
-                          OS #{item.numero}
+                          OS #{ordem?.numero || '-'}
                         </span>
                       </div>
                     </div>

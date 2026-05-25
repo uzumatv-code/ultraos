@@ -1,19 +1,9 @@
 import { supabase } from '../lib/supabase';
 import { WhatsAppService } from './whatsapp-service';
 
-/**
- * Serviço de Lembretes de Avaliação
- * 
- * Funciona exatamente como o workflow N8N:
- * 1. Busca ordens concluídas há mais de 7 dias onde solicita_avaliacao = false
- * 2. Para cada ordem, busca o cliente e verifica se avaliou = false
- * 3. Envia mensagem WhatsApp via Evolution API
- * 4. Atualiza solicita_avaliacao = true na ordem
- * 5. Atualiza avaliou = true no cliente
- */
-
 export interface PendingEvaluationOrder {
   ordem_id: string;
+  ordem_numero?: number;
   cliente_id: string;
   cliente_nome: string;
   cliente_telefone: string;
@@ -28,326 +18,242 @@ export interface EvaluationSettings {
   enabled: boolean;
   days_after_completion: number;
   trigger_hour: number;
+  daily_limit: number;
+  min_interval_seconds: number;
   google_review_link: string;
   instagram_handle: string;
 }
 
 export interface EvaluationLog {
   id: string;
-  ordem_id: string;
+  ordem_servico_id: string;
   cliente_id: string;
-  cliente_nome: string;
-  telefone: string;
-  status: 'enviado' | 'erro';
+  telefone?: string;
+  status: 'pendente' | 'processando' | 'enviado' | 'erro' | 'respondido' | 'cancelado';
   mensagem_erro?: string;
+  data_envio?: string;
   created_at: string;
 }
+
+const FINAL_STATUSES = ['enviado', 'respondido', 'cancelado', 'processando'];
 
 export class EvaluationReminderService {
   private static defaultSettings: EvaluationSettings = {
     enabled: true,
     days_after_completion: 7,
     trigger_hour: 11,
+    daily_limit: 20,
+    min_interval_seconds: 20,
     google_review_link: 'https://g.page/r/Cd8CHsL7KDxCEBM/review',
     instagram_handle: '@luthieriabrasilia'
   };
 
-  /**
-   * Busca ordens elegíveis para solicitação de avaliação
-   * Lógica N8N: 
-   * - status = 'concluido'
-   * - data_previsao < 7 dias atrás
-   * - solicita_avaliacao = false
-   * - cliente.avaliou = false
-   */
   static async getPendingEvaluationOrders(): Promise<PendingEvaluationOrder[]> {
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error('Usuário não autenticado');
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('Usuário não autenticado');
 
-      const settings = await this.getSettings();
-      
-      // Calcular data limite (hoje - X dias)
-      const cutoffDate = new Date();
-      cutoffDate.setDate(cutoffDate.getDate() - settings.days_after_completion);
-      const cutoffISO = cutoffDate.toISOString().split('T')[0];
+    const settings = await this.getSettings();
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - settings.days_after_completion);
+    cutoffDate.setHours(23, 59, 59, 999);
 
-      console.log(`🔍 Buscando ordens concluídas antes de ${cutoffISO}...`);
+    const { data: ordens, error: ordensError } = await supabase
+      .from('ordens_servico')
+      .select(`
+        id,
+        numero,
+        cliente_id,
+        data_previsao,
+        data_entrega,
+        modelo,
+        solicita_avaliacao,
+        cliente:clientes(id, nome, telefone, avaliou),
+        instrumento:instrumentos(nome),
+        marca:marcas(nome)
+      `)
+      .eq('user_id', user.id)
+      .eq('status', 'concluido')
+      .order('data_entrega', { ascending: true });
 
-      // Buscar ordens concluídas há mais de X dias, que ainda não solicitaram avaliação
-      const { data: ordens, error: ordensError } = await supabase
-        .from('ordens_servico')
-        .select(`
-          id,
-          cliente_id,
-          data_previsao,
-          modelo,
-          cliente:clientes(id, nome, telefone, avaliou),
-          instrumento:instrumentos(nome),
-          marca:marcas(nome)
-        `)
-        .eq('user_id', user.id)
-        .eq('status', 'concluido')
-        .eq('solicita_avaliacao', false)
-        .lt('data_previsao', cutoffISO)
-        .order('data_previsao', { ascending: true });
+    if (ordensError) throw ordensError;
+    if (!ordens?.length) return [];
 
-      if (ordensError) {
-        console.error('Erro ao buscar ordens:', ordensError);
-        throw ordensError;
-      }
+    const orderIds = ordens.map((ordem: any) => ordem.id);
+    const { data: reminders, error: remindersError } = await supabase
+      .from('avaliacoes_lembretes')
+      .select('ordem_servico_id, status')
+      .in('ordem_servico_id', orderIds);
 
-      if (!ordens || ordens.length === 0) {
-        console.log('✅ Nenhuma ordem pendente de avaliação');
-        return [];
-      }
+    if (remindersError) throw remindersError;
 
-      console.log(`📋 Encontradas ${ordens.length} ordens concluídas. Filtrando clientes que não avaliaram...`);
+    const reminderByOrder = new Map<string, string>();
+    (reminders || []).forEach((reminder: any) => {
+      reminderByOrder.set(reminder.ordem_servico_id, reminder.status);
+    });
 
-      // Filtrar apenas clientes que ainda não avaliaram (avaliou = false ou null)
-      const pendingOrders: PendingEvaluationOrder[] = [];
+    const pendingOrders: PendingEvaluationOrder[] = [];
 
-      for (const ordem of ordens) {
-        const cliente = ordem.cliente as any;
-        
-        // Verificar se cliente existe, tem telefone e não avaliou ainda
-        if (!cliente || !cliente.telefone) {
-          console.log(`⚠️ Ordem ${ordem.id}: cliente sem telefone, pulando...`);
-          continue;
-        }
+    for (const ordem of ordens as any[]) {
+      const cliente = ordem.cliente as any;
+      const completionDateRaw = ordem.data_entrega || ordem.data_previsao;
+      const reminderStatus = reminderByOrder.get(ordem.id);
 
-        if (cliente.avaliou === true) {
-          console.log(`⚠️ Ordem ${ordem.id}: cliente ${cliente.nome} já avaliou, pulando...`);
-          continue;
-        }
+      if (!completionDateRaw) continue;
+      if (!cliente?.telefone) continue;
+      if (cliente.avaliou === true) continue;
+      if (ordem.solicita_avaliacao === true && !reminderStatus) continue;
+      if (reminderStatus && FINAL_STATUSES.includes(reminderStatus)) continue;
 
-        // Calcular dias desde conclusão
-        const dataConclusao = new Date(ordem.data_previsao);
-        const hoje = new Date();
-        const diffTime = Math.abs(hoje.getTime() - dataConclusao.getTime());
-        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      const completionDate = new Date(completionDateRaw);
+      if (Number.isNaN(completionDate.getTime())) continue;
+      if (completionDate > cutoffDate) continue;
 
-        pendingOrders.push({
-          ordem_id: ordem.id,
-          cliente_id: cliente.id,
-          cliente_nome: cliente.nome,
-          cliente_telefone: cliente.telefone,
-          instrumento_nome: (ordem.instrumento as any)?.nome || 'Instrumento',
-          marca_nome: (ordem.marca as any)?.nome || '',
-          modelo: ordem.modelo || '',
-          data_conclusao: ordem.data_previsao,
-          dias_desde_conclusao: diffDays
-        });
-      }
+      const diffTime = new Date().getTime() - completionDate.getTime();
+      const diffDays = Math.max(0, Math.floor(diffTime / (1000 * 60 * 60 * 24)));
 
-      console.log(`✅ ${pendingOrders.length} ordem(ns) elegíveis para solicitação de avaliação`);
-      return pendingOrders;
-
-    } catch (error) {
-      console.error('❌ Erro ao buscar ordens pendentes de avaliação:', error);
-      throw error;
+      pendingOrders.push({
+        ordem_id: ordem.id,
+        ordem_numero: ordem.numero,
+        cliente_id: cliente.id,
+        cliente_nome: cliente.nome,
+        cliente_telefone: cliente.telefone,
+        instrumento_nome: (ordem.instrumento as any)?.nome || 'Instrumento',
+        marca_nome: (ordem.marca as any)?.nome || '',
+        modelo: ordem.modelo || '',
+        data_conclusao: completionDateRaw,
+        dias_desde_conclusao: diffDays
+      });
     }
+
+    return pendingOrders;
   }
 
-  /**
-   * Envia solicitação de avaliação para um cliente
-   * Lógica N8N:
-   * 1. Envia mensagem WhatsApp via Evolution API
-   * 2. Atualiza solicita_avaliacao = true na ordem
-   * 3. Atualiza avaliou = true no cliente
-   */
+  static async sendEvaluationForOrder(ordem: any): Promise<boolean> {
+    if (!ordem?.cliente) throw new Error('Cliente não encontrado');
+    if (!ordem.cliente.telefone) throw new Error('Cliente não possui telefone cadastrado');
+
+    const completionDate = ordem.data_entrega || ordem.data_previsao || new Date().toISOString();
+    const dataConclusao = new Date(completionDate);
+    const diffTime = new Date().getTime() - dataConclusao.getTime();
+
+    return this.sendEvaluationRequest({
+      ordem_id: ordem.id,
+      ordem_numero: ordem.numero,
+      cliente_id: ordem.cliente.id || ordem.cliente_id,
+      cliente_nome: ordem.cliente.nome,
+      cliente_telefone: ordem.cliente.telefone,
+      instrumento_nome: ordem.instrumento?.nome || 'Instrumento',
+      marca_nome: ordem.marca?.nome || '',
+      modelo: ordem.modelo || '',
+      data_conclusao: completionDate,
+      dias_desde_conclusao: Math.max(0, Math.floor(diffTime / (1000 * 60 * 60 * 24)))
+    });
+  }
+
   static async sendEvaluationRequest(order: PendingEvaluationOrder): Promise<boolean> {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('Usuário não autenticado');
+
+    const phoneValidation = this.validatePhone(order.cliente_telefone);
+    if (!phoneValidation.valid) {
+      await this.saveLog(order, 'erro', {
+        mensagem_erro: phoneValidation.message,
+        telefone: order.cliente_telefone
+      });
+      return false;
+    }
+
+    const existing = await this.getExistingReminder(order.ordem_id);
+    if (existing && FINAL_STATUSES.includes(existing.status)) {
+      return false;
+    }
+
+    const settings = await this.getSettings();
+    const message = this.buildEvaluationMessage(order, settings);
+
+    await this.saveLog(order, 'processando', {
+      telefone: order.cliente_telefone,
+      mensagem: message,
+      tentativas: Number(existing?.tentativas || 0) + 1
+    });
+
     try {
-      const settings = await this.getSettings();
-
-      // Montar mensagem (igual ao N8N)
-      const message = this.buildEvaluationMessage(order, settings);
-
-      console.log(`📤 Enviando solicitação de avaliação para ${order.cliente_nome}...`);
-
-      // Enviar via WhatsApp (Evolution API)
       const success = await WhatsAppService.sendMessage(order.cliente_telefone, message);
+      if (!success) throw new Error('Provider retornou falha no envio');
 
-      if (!success) {
-        console.error(`❌ Falha ao enviar WhatsApp para ${order.cliente_nome}`);
-        return false;
-      }
+      await this.saveLog(order, 'enviado', {
+        telefone: order.cliente_telefone,
+        mensagem: message,
+        mensagem_erro: null,
+        data_envio: new Date().toISOString()
+      });
 
-      console.log(`✅ Mensagem enviada para ${order.cliente_nome}`);
-
-      // Atualizar solicita_avaliacao = true na ordem
       const { error: ordemError } = await supabase
         .from('ordens_servico')
         .update({ solicita_avaliacao: true })
         .eq('id', order.ordem_id);
 
-      if (ordemError) {
-        console.error('Erro ao atualizar ordem:', ordemError);
-        // Não falhar se a mensagem foi enviada
-      }
+      if (ordemError) throw ordemError;
 
-      // Atualizar avaliou = true no cliente
-      const { error: clienteError } = await supabase
-        .from('clientes')
-        .update({ avaliou: true })
-        .eq('id', order.cliente_id);
-
-      if (clienteError) {
-        console.error('Erro ao atualizar cliente:', clienteError);
-        // Não falhar se a mensagem foi enviada
-      }
-
-      console.log(`✅ Avaliação solicitada e registrada para ${order.cliente_nome}`);
       return true;
-
-    } catch (error) {
-      console.error(`❌ Erro ao enviar solicitação de avaliação para ${order.cliente_nome}:`, error);
-      throw error;
+    } catch (error: any) {
+      await this.saveLog(order, 'erro', {
+        telefone: order.cliente_telefone,
+        mensagem,
+        mensagem_erro: error?.message || String(error)
+      });
+      return false;
     }
   }
 
-  /**
-   * Monta a mensagem de solicitação de avaliação
-   * Template igual ao do N8N
-   */
   private static buildEvaluationMessage(order: PendingEvaluationOrder, settings: EvaluationSettings): string {
     return `E ai ${order.cliente_nome}! Beleza? 😊
 
 Espero que esteja feliz com o reparo do seu instrumento!
 
-Poderia nos ajudar avaliando nosso trabalho no Google? 
+Poderia nos ajudar avaliando nosso trabalho no Google?
 Sua avaliação ajuda outros músicos a me conhecerem!
 👍 Link para avaliar: ${settings.google_review_link}
 
-Muito obrigado pela confiança! 
+Muito obrigado pela confiança!
 Forte abraço 🎸`;
   }
 
-  /**
-   * Processa todas as avaliações pendentes automaticamente
-   * Esta é a função principal chamada pelo agendador
-   */
   static async processAutomaticEvaluations(): Promise<{ sent: number; errors: number; skipped: number }> {
     const result = { sent: 0, errors: 0, skipped: 0 };
+    const settings = await this.getSettings();
 
-    try {
-      const settings = await this.getSettings();
+    if (!settings.enabled) return result;
 
-      if (!settings.enabled) {
-        console.log('⏸️ Sistema de avaliações automáticas está desabilitado');
-        return result;
-      }
+    const currentHour = new Date().getHours();
+    if (Math.abs(currentHour - settings.trigger_hour) > 1) return result;
 
-      // Verificar se é a hora configurada (com tolerância de 1 hora)
-      const now = new Date();
-      const currentHour = now.getHours();
-
-      if (Math.abs(currentHour - settings.trigger_hour) > 1) {
-        console.log(`⏰ Fora do horário de envio (configurado: ${settings.trigger_hour}h, atual: ${currentHour}h)`);
-        return result;
-      }
-
-      console.log('🚀 Iniciando processamento automático de avaliações...');
-
-      // Buscar ordens pendentes
-      const pendingOrders = await this.getPendingEvaluationOrders();
-
-      if (pendingOrders.length === 0) {
-        console.log('✅ Nenhuma avaliação pendente para enviar');
-        return result;
-      }
-
-      console.log(`📋 ${pendingOrders.length} avaliação(ões) para processar`);
-
-      // Processar cada ordem com intervalo de 3 segundos entre envios
-      for (let i = 0; i < pendingOrders.length; i++) {
-        const order = pendingOrders[i];
-
-        try {
-          // Aguardar 3 segundos entre envios (evitar rate limit)
-          if (i > 0) {
-            console.log('⏳ Aguardando 3 segundos antes do próximo envio...');
-            await this.delay(3000);
-          }
-
-          const success = await this.sendEvaluationRequest(order);
-
-          if (success) {
-            result.sent++;
-            console.log(`✅ [${i + 1}/${pendingOrders.length}] Enviado para ${order.cliente_nome}`);
-          } else {
-            result.errors++;
-            console.log(`❌ [${i + 1}/${pendingOrders.length}] Falha para ${order.cliente_nome}`);
-          }
-
-        } catch (error) {
-          result.errors++;
-          console.error(`❌ [${i + 1}/${pendingOrders.length}] Erro para ${order.cliente_nome}:`, error);
-        }
-      }
-
-      console.log(`🎉 Processamento concluído: ${result.sent} enviados, ${result.errors} erros`);
-      return result;
-
-    } catch (error) {
-      console.error('❌ Erro no processamento automático de avaliações:', error);
-      throw error;
+    const pendingOrders = (await this.getPendingEvaluationOrders()).slice(0, settings.daily_limit);
+    for (let i = 0; i < pendingOrders.length; i++) {
+      if (i > 0) await this.delay(settings.min_interval_seconds * 1000);
+      const success = await this.sendEvaluationRequest(pendingOrders[i]);
+      if (success) result.sent++;
+      else result.errors++;
     }
+
+    return result;
   }
 
-  /**
-   * Envia todas as avaliações pendentes manualmente (sem verificar horário)
-   */
   static async sendAllPendingEvaluations(): Promise<{ sent: number; errors: number }> {
     const result = { sent: 0, errors: 0 };
+    const settings = await this.getSettings();
+    const pendingOrders = (await this.getPendingEvaluationOrders()).slice(0, settings.daily_limit);
 
-    try {
-      console.log('🚀 Enviando todas as avaliações pendentes...');
-
-      const pendingOrders = await this.getPendingEvaluationOrders();
-
-      if (pendingOrders.length === 0) {
-        console.log('✅ Nenhuma avaliação pendente para enviar');
-        return result;
-      }
-
-      console.log(`📋 ${pendingOrders.length} avaliação(ões) para enviar`);
-
-      for (let i = 0; i < pendingOrders.length; i++) {
-        const order = pendingOrders[i];
-
-        try {
-          // Aguardar 2 segundos entre envios
-          if (i > 0) {
-            await this.delay(2000);
-          }
-
-          const success = await this.sendEvaluationRequest(order);
-
-          if (success) {
-            result.sent++;
-          } else {
-            result.errors++;
-          }
-
-        } catch (error) {
-          result.errors++;
-          console.error(`Erro ao enviar para ${order.cliente_nome}:`, error);
-        }
-      }
-
-      console.log(`🎉 Envio concluído: ${result.sent} enviados, ${result.errors} erros`);
-      return result;
-
-    } catch (error) {
-      console.error('❌ Erro ao enviar avaliações pendentes:', error);
-      throw error;
+    for (let i = 0; i < pendingOrders.length; i++) {
+      if (i > 0) await this.delay(settings.min_interval_seconds * 1000);
+      const success = await this.sendEvaluationRequest(pendingOrders[i]);
+      if (success) result.sent++;
+      else result.errors++;
     }
+
+    return result;
   }
 
-  /**
-   * Busca configurações de avaliação
-   */
   static async getSettings(): Promise<EvaluationSettings> {
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -355,163 +261,162 @@ Forte abraço 🎸`;
 
       const { data, error } = await supabase
         .from('configuracoes_empresa')
-        .select('google_review_link, instagram_handle')
+        .select('google_review_link, instagram_handle, avaliacoes_enabled, avaliacoes_days_after_completion, avaliacoes_trigger_hour, avaliacoes_daily_limit, avaliacoes_min_interval_seconds')
         .eq('user_id', user.id)
         .single();
 
-      if (error || !data) {
-        return this.defaultSettings;
-      }
+      if (error || !data) return this.defaultSettings;
 
       return {
         ...this.defaultSettings,
+        enabled: data.avaliacoes_enabled ?? this.defaultSettings.enabled,
+        days_after_completion: Number(data.avaliacoes_days_after_completion ?? this.defaultSettings.days_after_completion),
+        trigger_hour: Number(data.avaliacoes_trigger_hour ?? this.defaultSettings.trigger_hour),
+        daily_limit: Number(data.avaliacoes_daily_limit ?? this.defaultSettings.daily_limit),
+        min_interval_seconds: Number(data.avaliacoes_min_interval_seconds ?? this.defaultSettings.min_interval_seconds),
         google_review_link: data.google_review_link || this.defaultSettings.google_review_link,
         instagram_handle: data.instagram_handle || this.defaultSettings.instagram_handle
       };
-
-    } catch (error) {
-      console.error('Erro ao buscar configurações:', error);
+    } catch {
       return this.defaultSettings;
     }
   }
 
-  /**
-   * Salva configurações de avaliação
-   */
   static async saveSettings(settings: Partial<EvaluationSettings>): Promise<void> {
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error('Usuário não autenticado');
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('Usuário não autenticado');
 
-      const { error } = await supabase
-        .from('configuracoes_empresa')
-        .upsert({
-          user_id: user.id,
-          google_review_link: settings.google_review_link,
-          instagram_handle: settings.instagram_handle,
-          updated_at: new Date().toISOString()
-        }, {
-          onConflict: 'user_id'
-        });
+    const payload: Record<string, any> = {
+      user_id: user.id,
+      updated_at: new Date().toISOString()
+    };
 
-      if (error) throw error;
+    if (settings.google_review_link !== undefined) payload.google_review_link = settings.google_review_link;
+    if (settings.instagram_handle !== undefined) payload.instagram_handle = settings.instagram_handle;
+    if (settings.enabled !== undefined) payload.avaliacoes_enabled = settings.enabled;
+    if (settings.days_after_completion !== undefined) payload.avaliacoes_days_after_completion = settings.days_after_completion;
+    if (settings.trigger_hour !== undefined) payload.avaliacoes_trigger_hour = settings.trigger_hour;
+    if (settings.daily_limit !== undefined) payload.avaliacoes_daily_limit = settings.daily_limit;
+    if (settings.min_interval_seconds !== undefined) payload.avaliacoes_min_interval_seconds = settings.min_interval_seconds;
 
-    } catch (error) {
-      console.error('Erro ao salvar configurações:', error);
-      throw error;
-    }
+    const { error } = await supabase
+      .from('configuracoes_empresa')
+      .upsert(payload, {
+        onConflict: 'user_id'
+      });
+
+    if (error) throw error;
   }
 
-  /**
-   * Resetar flag de avaliação de um cliente (para permitir nova solicitação)
-   */
   static async resetClientEvaluationFlag(clienteId: string): Promise<void> {
-    try {
-      const { error } = await supabase
-        .from('clientes')
-        .update({ avaliou: false })
-        .eq('id', clienteId);
+    const { error } = await supabase
+      .from('clientes')
+      .update({ avaliou: false })
+      .eq('id', clienteId);
 
-      if (error) throw error;
-
-      console.log(`✅ Flag de avaliação resetada para cliente ${clienteId}`);
-
-    } catch (error) {
-      console.error('Erro ao resetar flag de avaliação:', error);
-      throw error;
-    }
+    if (error) throw error;
   }
 
-  /**
-   * Busca histórico de avaliações enviadas
-   */
   static async getEvaluationHistory(limit: number = 50): Promise<any[]> {
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return [];
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return [];
 
-      // Buscar ordens onde solicita_avaliacao = true (avaliações já enviadas)
-      const { data, error } = await supabase
-        .from('ordens_servico')
-        .select(`
-          id,
-          numero,
-          data_previsao,
-          modelo,
-          solicita_avaliacao,
-          cliente:clientes(id, nome, telefone, avaliou),
-          instrumento:instrumentos(nome),
-          marca:marcas(nome)
-        `)
-        .eq('user_id', user.id)
-        .eq('status', 'concluido')
-        .eq('solicita_avaliacao', true)
-        .order('data_previsao', { ascending: false })
-        .limit(limit);
+    const { data, error } = await supabase
+      .from('avaliacoes_lembretes')
+      .select(`
+        *,
+        cliente:clientes(id, nome, telefone, avaliou),
+        ordem_servico:ordens_servico(id, numero, data_entrega, data_previsao, modelo)
+      `)
+      .in('status', ['enviado', 'erro', 'respondido'])
+      .order('data_envio', { ascending: false })
+      .limit(limit);
 
-      if (error) throw error;
-
-      return data || [];
-
-    } catch (error) {
-      console.error('Erro ao buscar histórico de avaliações:', error);
-      return [];
-    }
+    if (error) throw error;
+    return data || [];
   }
 
-  /**
-   * Busca estatísticas de avaliação
-   */
   static async getStats(): Promise<{
     pendentes: number;
     enviados: number;
     total_clientes: number;
     clientes_avaliaram: number;
+    erros: number;
   }> {
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return { pendentes: 0, enviados: 0, total_clientes: 0, clientes_avaliaram: 0 };
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return { pendentes: 0, enviados: 0, total_clientes: 0, clientes_avaliaram: 0, erros: 0 };
 
-      // Contar pendentes
-      const pendingOrders = await this.getPendingEvaluationOrders();
-      
-      // Contar enviados
-      const { count: enviados } = await supabase
-        .from('ordens_servico')
-        .select('id', { count: 'exact', head: true })
-        .eq('user_id', user.id)
-        .eq('status', 'concluido')
-        .eq('solicita_avaliacao', true);
+    const pendingOrders = await this.getPendingEvaluationOrders();
 
-      // Contar total de clientes
-      const { count: total_clientes } = await supabase
-        .from('clientes')
-        .select('id', { count: 'exact', head: true })
-        .eq('user_id', user.id);
+    const { count: enviados } = await supabase
+      .from('avaliacoes_lembretes')
+      .select('id', { count: 'exact', head: true })
+      .in('status', ['enviado', 'respondido']);
 
-      // Contar clientes que avaliaram
-      const { count: clientes_avaliaram } = await supabase
-        .from('clientes')
-        .select('id', { count: 'exact', head: true })
-        .eq('user_id', user.id)
-        .eq('avaliou', true);
+    const { count: erros } = await supabase
+      .from('avaliacoes_lembretes')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'erro');
 
-      return {
-        pendentes: pendingOrders.length,
-        enviados: enviados || 0,
-        total_clientes: total_clientes || 0,
-        clientes_avaliaram: clientes_avaliaram || 0
-      };
+    const { count: total_clientes } = await supabase
+      .from('clientes')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', user.id);
 
-    } catch (error) {
-      console.error('Erro ao buscar estatísticas:', error);
-      return { pendentes: 0, enviados: 0, total_clientes: 0, clientes_avaliaram: 0 };
-    }
+    const { count: clientes_avaliaram } = await supabase
+      .from('clientes')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', user.id)
+      .eq('avaliou', true);
+
+    return {
+      pendentes: pendingOrders.length,
+      enviados: enviados || 0,
+      total_clientes: total_clientes || 0,
+      clientes_avaliaram: clientes_avaliaram || 0,
+      erros: erros || 0
+    };
   }
 
-  /**
-   * Utility: delay
-   */
+  private static async getExistingReminder(ordemId: string): Promise<any | null> {
+    const { data, error } = await supabase
+      .from('avaliacoes_lembretes')
+      .select('*')
+      .eq('ordem_servico_id', ordemId)
+      .maybeSingle();
+
+    if (error) throw error;
+    return data;
+  }
+
+  private static async saveLog(
+    order: PendingEvaluationOrder,
+    status: EvaluationLog['status'],
+    extra: Record<string, any> = {}
+  ): Promise<void> {
+    const { error } = await supabase
+      .from('avaliacoes_lembretes')
+      .upsert({
+        ordem_servico_id: order.ordem_id,
+        cliente_id: order.cliente_id,
+        status,
+        updated_at: new Date().toISOString(),
+        ...extra
+      }, {
+        onConflict: 'user_id,ordem_servico_id'
+      });
+
+    if (error) throw error;
+  }
+
+  private static validatePhone(phone: string): { valid: boolean; message?: string } {
+    const cleaned = String(phone || '').replace(/\D/g, '');
+    if (cleaned.length < 10 || cleaned.length > 13) {
+      return { valid: false, message: 'Telefone inválido para envio de WhatsApp' };
+    }
+    return { valid: true };
+  }
+
   private static delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
   }

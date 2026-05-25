@@ -7,6 +7,7 @@ import { toast } from '../components/ToastCustom';
 import { alerts } from '../utils/alerts';
 import { formatDate, formatCurrency } from '../utils/formatters';
 import { WhatsAppService } from '../utils/whatsapp-service';
+import { EvaluationReminderService } from '../utils/evaluation-reminder-service';
 import { NFSeService } from '../utils/nfse-service';
 import { PrintOrdemModal } from '../components/PrintOrdemModal';
 import type { OrdemServico } from '../types/database';
@@ -316,19 +317,8 @@ export function Ordens() {
 
     try {
       // Enviar solicitação via WhatsApp
-      await WhatsAppService.sendEvaluationRequest(ordem);
-      
-      // Atualizar o campo solicita_avaliacao no Supabase
-      const { error: updateError } = await supabase
-        .from('ordens_servico')
-        .update({ solicita_avaliacao: true })
-        .eq('id', ordem.id);
-
-      if (updateError) {
-        console.error('Erro ao atualizar status de avaliação:', updateError);
-        toast.error('Avaliação enviada, mas houve erro ao atualizar o registro');
-        return;
-      }
+      const success = await EvaluationReminderService.sendEvaluationForOrder(ordem);
+      if (!success) throw new Error('Não foi possível enviar a solicitação');
 
       // Atualizar a lista local de ordens
       await buscarOrdens();

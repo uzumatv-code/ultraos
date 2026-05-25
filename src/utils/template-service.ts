@@ -265,7 +265,14 @@ Muito obrigado pela confiança! 🎸
       throw new Error(`Template ${templateType} não encontrado`);
     }
 
-    let message = template.template_content;
+    let message = template.template_content || (template as any).content;
+    if (typeof message !== 'string' || !message.trim()) {
+      const defaultTemplate = this.getDefaultTemplate(templateType);
+      message = defaultTemplate?.template_content;
+    }
+    if (typeof message !== 'string' || !message.trim()) {
+      throw new Error(`Template ${templateType} está sem conteúdo`);
+    }
 
     // Substituir variáveis básicas da ordem
     if (data.cliente) {

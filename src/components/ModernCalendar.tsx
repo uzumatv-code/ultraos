@@ -1,14 +1,17 @@
 import { Calendar, dateFnsLocalizer, Event } from 'react-big-calendar';
+import withDragAndDrop, { type EventInteractionArgs } from 'react-big-calendar/lib/addons/dragAndDrop';
 import { format, parse, startOfWeek, getDay } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Calendar as CalendarIcon, Clock, User, Wrench, DollarSign, ChevronLeft, ChevronRight, X, Play, AlertTriangle, CheckCircle, List } from 'lucide-react';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import 'react-big-calendar/lib/css/react-big-calendar.css';
+import 'react-big-calendar/lib/addons/dragAndDrop/styles.css';
 import type { OrdemServico } from '../types/database';
 import { supabase } from '../lib/supabase';
 import { toast } from './ToastCustom';
 import { WhatsAppService } from '../utils/whatsapp-service';
+import { alerts } from '../utils/alerts';
 
 const locales = {
   'pt-BR': ptBR,
@@ -22,11 +25,23 @@ const localizer = dateFnsLocalizer({
   locales,
 });
 
+const BUSINESS_START_HOUR = 8;
+const BUSINESS_END_HOUR = 18;
+const DEFAULT_EVENT_DURATION_MINUTES = 60;
+
 interface CalendarEvent extends Event {
   id: string;
   ordem: OrdemServico;
   status: string;
+  resourceId?: string;
 }
+
+interface CalendarResource {
+  id: string;
+  title: string;
+}
+
+const DragAndDropCalendar = withDragAndDrop<CalendarEvent, CalendarResource>(Calendar);
 
 interface ModernCalendarProps {
   orders: OrdemServico[];
@@ -39,10 +54,29 @@ export function ModernCalendar({ orders, onEventClick, loading = false, onUpdate
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
   const [view, setView] = useState<'month' | 'week' | 'day'>('month');
   const [updatingStatus, setUpdatingStatus] = useState(false);
+  const [dragRefreshKey, setDragRefreshKey] = useState(0);
+
+  const minTime = useMemo(() => {
+    const date = new Date();
+    date.setHours(BUSINESS_START_HOUR, 0, 0, 0);
+    return date;
+  }, []);
+
+  const maxTime = useMemo(() => {
+    const date = new Date();
+    date.setHours(BUSINESS_END_HOUR, 0, 0, 0);
+    return date;
+  }, []);
+
+  const getOrderResourceId = (ordem: OrdemServico) => {
+    const record = ordem as any;
+    return record.profissional_id || record.responsavel_id || record.profissional?.id || record.responsavel?.id;
+  };
 
   // Converter ordens para eventos
   const events: CalendarEvent[] = orders.map((ordem) => {
     const startDate = ordem.data_previsao ? new Date(ordem.data_previsao) : new Date();
+    const endDate = new Date(startDate.getTime() + DEFAULT_EVENT_DURATION_MINUTES * 60 * 1000);
     
     // Determinar cor baseado no status
     let statusColor = '#ef4444'; // red - default (atraso)
@@ -58,9 +92,10 @@ export function ModernCalendar({ orders, onEventClick, loading = false, onUpdate
       id: ordem.id,
       title: ordem.cliente?.nome || 'Sem cliente',
       start: startDate,
-      end: startDate,
+      end: endDate,
       ordem,
       status: ordem.status,
+      resourceId: getOrderResourceId(ordem),
       resource: {
         color: statusColor,
         cliente: ordem.cliente?.nome,
@@ -69,6 +104,27 @@ export function ModernCalendar({ orders, onEventClick, loading = false, onUpdate
       },
     };
   });
+
+  const resources = useMemo(() => {
+    const professionals = new Map<string, { id: string; title: string }>();
+
+    orders.forEach((ordem) => {
+      const record = ordem as any;
+      const id = getOrderResourceId(ordem);
+      if (!id) return;
+
+      const title =
+        record.profissional?.nome ||
+        record.responsavel?.nome ||
+        record.profissional_nome ||
+        record.responsavel_nome ||
+        'Profissional';
+
+      professionals.set(String(id), { id: String(id), title });
+    });
+
+    return Array.from(professionals.values());
+  }, [orders]);
 
   const eventStyleGetter = (event: CalendarEvent) => {
     const statusColors = {
@@ -161,6 +217,127 @@ export function ModernCalendar({ orders, onEventClick, loading = false, onUpdate
         </div>
       </div>
     );
+  };
+
+  const formatSchedule = (date: Date) => {
+    return format(date, "dd/MM/yyyy 'às' HH:mm", { locale: ptBR });
+  };
+
+  const hasTime = (date: Date) => {
+    return date.getHours() !== 0 || date.getMinutes() !== 0 || date.getSeconds() !== 0;
+  };
+
+  const normalizeDroppedDate = (originalDate: Date, droppedDate: Date, isAllDay?: boolean) => {
+    const nextDate = new Date(droppedDate);
+
+    if (isAllDay || !hasTime(nextDate)) {
+      if (hasTime(originalDate)) {
+        nextDate.setHours(originalDate.getHours(), originalDate.getMinutes(), 0, 0);
+      } else {
+        nextDate.setHours(BUSINESS_START_HOUR, 0, 0, 0);
+      }
+    }
+
+    return nextDate;
+  };
+
+  const getScheduleValidationError = (event: CalendarEvent, newStart: Date, newEnd: Date, nextResourceId?: string) => {
+    const now = new Date();
+    if (newStart < now) {
+      return 'Não é possível mover um agendamento para um horário passado.';
+    }
+
+    const startHour = newStart.getHours() + newStart.getMinutes() / 60;
+    const endHour = newEnd.getHours() + newEnd.getMinutes() / 60;
+    if (startHour < BUSINESS_START_HOUR || endHour > BUSINESS_END_HOUR) {
+      return `Horário indisponível. Use horários entre ${BUSINESS_START_HOUR}:00 e ${BUSINESS_END_HOUR}:00.`;
+    }
+
+    const hasConflict = events.some((candidate) => {
+      if (candidate.id === event.id) return false;
+      if (['concluido', 'cancelado'].includes(candidate.status)) return false;
+      if (resources.length && String(candidate.resourceId || '') !== String(nextResourceId || '')) return false;
+
+      const candidateStart = candidate.start instanceof Date ? candidate.start : new Date(candidate.start as string);
+      const candidateEnd = candidate.end instanceof Date ? candidate.end : new Date(candidate.end as string);
+
+      return newStart < candidateEnd && newEnd > candidateStart;
+    });
+
+    if (hasConflict) {
+      return 'Já existe outro agendamento nesse horário.';
+    }
+
+    return null;
+  };
+
+  const updateOrderSchedule = async ({ event, start, isAllDay, resourceId }: EventInteractionArgs<CalendarEvent>) => {
+    const originalDate = new Date(event.ordem.data_previsao || (event.start as Date));
+    const droppedStart = start instanceof Date ? start : new Date(start);
+    const newStart = normalizeDroppedDate(originalDate, droppedStart, isAllDay);
+    const newEnd = new Date(newStart.getTime() + DEFAULT_EVENT_DURATION_MINUTES * 60 * 1000);
+    const currentResourceId = event.resourceId;
+    const nextResourceId = resourceId ? String(resourceId) : currentResourceId;
+    const validationError = getScheduleValidationError(event, newStart, newEnd, nextResourceId);
+
+    if (validationError) {
+      toast.error(validationError);
+      setDragRefreshKey((value) => value + 1);
+      return;
+    }
+
+    const confirm = await alerts.confirm({
+      title: 'Confirmar reagendamento',
+      text: `Mover OS #${event.ordem.numero} de ${formatSchedule(originalDate)} para ${formatSchedule(newStart)}?`,
+      icon: 'question',
+      confirmButtonText: 'Sim, reagendar',
+      cancelButtonText: 'Cancelar',
+    });
+
+    if (!confirm.isConfirmed) {
+      setDragRefreshKey((value) => value + 1);
+      return;
+    }
+
+    try {
+      const updatePayload: Record<string, any> = {
+        data_previsao: newStart.toISOString(),
+      };
+
+      const orderRecord = event.ordem as any;
+      if (nextResourceId && nextResourceId !== currentResourceId) {
+        if ('profissional_id' in orderRecord) updatePayload.profissional_id = nextResourceId;
+        if ('responsavel_id' in orderRecord) updatePayload.responsavel_id = nextResourceId;
+      }
+
+      const { error: updateError } = await supabase
+        .from('ordens_servico')
+        .update(updatePayload)
+        .eq('id', event.id);
+
+      if (updateError) throw updateError;
+
+      const { error: logError } = await supabase
+        .from('agenda_logs')
+        .insert({
+          ordem_servico_id: event.id,
+          data_anterior: originalDate.toISOString(),
+          data_nova: newStart.toISOString(),
+          profissional_anterior: currentResourceId || null,
+          profissional_novo: nextResourceId || null,
+          acao: 'reagendamento',
+        });
+
+      if (logError) throw logError;
+
+      toast.success('Agendamento reagendado com sucesso!');
+      if (onUpdate) onUpdate();
+    } catch (error: any) {
+      console.error('Erro ao reagendar ordem:', error);
+      toast.error(error?.message || 'Erro ao reagendar. A alteração foi revertida.');
+      setDragRefreshKey((value) => value + 1);
+      if (onUpdate) onUpdate();
+    }
   };
 
   const formatCurrency = (value: number) => {
@@ -265,14 +442,26 @@ export function ModernCalendar({ orders, onEventClick, loading = false, onUpdate
         </div>
       ) : (
         <>
-          <Calendar
+          <DragAndDropCalendar
+            key={dragRefreshKey}
             localizer={localizer}
             events={events}
             startAccessor="start"
             endAccessor="end"
+            resourceAccessor="resourceId"
+            resourceIdAccessor="id"
+            resourceTitleAccessor="title"
+            resources={resources.length ? resources : undefined}
             style={{ height: 600 }}
             culture="pt-BR"
             view={view}
+            min={minTime}
+            max={maxTime}
+            step={30}
+            timeslots={2}
+            resizable={false}
+            draggableAccessor={(event) => !['concluido', 'cancelado'].includes(event.status)}
+            onEventDrop={updateOrderSchedule}
             onView={(newView: any) => setView(newView as 'month' | 'week' | 'day')}
             eventPropGetter={eventStyleGetter}
             onSelectEvent={(event: any) => setSelectedEvent(event as CalendarEvent)}

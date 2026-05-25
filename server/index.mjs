@@ -19,6 +19,18 @@ const DATABASE_URL = process.env.DATABASE_URL || process.env.MYSQL_URL;
 const JWT_SECRET = process.env.JWT_SECRET;
 const TOKEN_TTL = process.env.JWT_TTL || '12h';
 const uploadsDir = path.join(rootDir, 'uploads');
+const EVALUATION_JOB_ENABLED = process.env.EVALUATION_JOB_ENABLED !== 'false';
+const EVALUATION_JOB_INTERVAL_MS = Number(process.env.EVALUATION_JOB_INTERVAL_MS || 60_000);
+const EVALUATION_TIMEZONE = process.env.EVALUATION_TIMEZONE || 'America/Sao_Paulo';
+const EVALUATION_DEFAULTS = {
+  enabled: true,
+  daysAfterCompletion: 7,
+  triggerHour: 11,
+  dailyLimit: 20,
+  minIntervalSeconds: 20,
+  googleReviewLink: 'https://g.page/r/Cd8CHsL7KDxCEBM/review',
+  instagramHandle: '@luthieriabrasilia',
+};
 
 if (!DATABASE_URL) {
   throw new Error('DATABASE_URL ou MYSQL_URL precisa estar configurado no backend');
@@ -55,6 +67,7 @@ const allowedTables = new Set([
   'empresa_fiscal',
   'notas_fiscais',
   'nfse_logs',
+  'agenda_logs',
   'avaliacoes_lembretes',
 ]);
 
@@ -73,6 +86,10 @@ const relationMap = {
     conta_pagar: ['contas_pagar', 'conta_pagar_id'],
   },
   notas_fiscais: {
+    ordem_servico: ['ordens_servico', 'ordem_servico_id'],
+  },
+  avaliacoes_lembretes: {
+    cliente: ['clientes', 'cliente_id'],
     ordem_servico: ['ordens_servico', 'ordem_servico_id'],
   },
 };
@@ -200,12 +217,14 @@ async function filterDataToColumns(table, data) {
     if (table === 'message_templates') {
       if (key === 'template_type') mappedKey = 'tipo';
       if (key === 'content') mappedKey = 'conteudo';
+      if (key === 'template_content') mappedKey = 'conteudo';
       if (key === 'is_active') mappedKey = 'ativo';
     }
 
     if (table === 'templates_mensagem') {
       if (key === 'template_type') mappedKey = 'tipo';
       if (key === 'content') mappedKey = 'conteudo';
+      if (key === 'template_content') mappedKey = 'conteudo';
       if (key === 'is_active') mappedKey = 'ativo';
     }
 
@@ -242,6 +261,9 @@ function normalizeRow(table, row) {
   if (table === 'templates_mensagem' || table === 'message_templates') {
     copy.template_type = copy.tipo;
     copy.content = copy.conteudo;
+    copy.template_content = copy.conteudo;
+    copy.template_name = copy.template_name || copy.nome || copy.tipo;
+    copy.variables = copy.variables || [];
     copy.is_active = Boolean(copy.ativo);
   }
 
@@ -371,6 +393,7 @@ function addFilter(where, params, cols, filter) {
   let { column, operator, value } = filter;
   if (column?.includes('.')) return;
   if (column === 'template_type') column = 'tipo';
+  if (column === 'template_content') column = 'conteudo';
   if (column === 'is_active') column = 'ativo';
   if (!cols.has(column)) return;
 
@@ -520,7 +543,15 @@ app.post('/api/query', requireAuth, async (req, res) => {
     if (action === 'upsert') {
       const inputRows = Array.isArray(payload) ? payload : [payload];
       const conflict = upsertOptions?.onConflict || (cols.has('user_id') && cols.has('tipo') ? 'user_id,tipo' : 'id');
-      const conflictCols = conflict.split(',').map((item) => item.trim()).filter((col) => cols.has(col));
+      const conflictCols = conflict.split(',')
+        .map((item) => item.trim())
+        .map((col) => {
+          if (physicalTable === 'templates_mensagem' && col === 'template_type') return 'tipo';
+          if (physicalTable === 'templates_mensagem' && col === 'template_content') return 'conteudo';
+          if (physicalTable === 'templates_mensagem' && col === 'is_active') return 'ativo';
+          return col;
+        })
+        .filter((col) => cols.has(col));
       const upserted = [];
 
       for (const row of inputRows) {
@@ -618,6 +649,327 @@ app.delete('/api/storage/:bucket', requireAuth, async (req, res) => {
   res.json({ data: null, error: null });
 });
 
+let evaluationJobRunning = false;
+
+function datePartsInTimeZone(timeZone = EVALUATION_TIMEZONE) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    hourCycle: 'h23',
+    hour12: false,
+  }).formatToParts(new Date());
+  const byType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return byType;
+}
+
+function todayInTimeZone(timeZone = EVALUATION_TIMEZONE) {
+  const parts = datePartsInTimeZone(timeZone);
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function currentHourInTimeZone(timeZone = EVALUATION_TIMEZONE) {
+  return Number(datePartsInTimeZone(timeZone).hour || 0);
+}
+
+function dateDaysAgo(days, timeZone = EVALUATION_TIMEZONE) {
+  const date = new Date();
+  date.setDate(date.getDate() - Number(days || 0));
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const byType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${byType.year}-${byType.month}-${byType.day}`;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizePhone(phone) {
+  const original = String(phone || '').trim();
+  const cleaned = original.replace(/\D/g, '');
+  if (!cleaned) return '';
+  if (original.startsWith('+') || cleaned.startsWith('55')) return cleaned;
+  return `55${cleaned}`;
+}
+
+function validatePhone(phone) {
+  const cleaned = String(phone || '').replace(/\D/g, '');
+  return cleaned.length >= 10 && cleaned.length <= 13;
+}
+
+function buildBackendEvaluationMessage(order, settings) {
+  return `E ai ${order.cliente_nome}! Beleza?
+
+Espero que esteja feliz com o reparo do seu instrumento!
+
+Poderia nos ajudar avaliando nosso trabalho no Google?
+Sua avaliacao ajuda outros musicos a me conhecerem!
+Link para avaliar: ${settings.googleReviewLink}
+
+Muito obrigado pela confianca!
+Forte abraco`;
+}
+
+async function ensureEvaluationConfig(userId) {
+  await pool.query(
+    `INSERT INTO configuracoes_empresa
+     (id, user_id, avaliacoes_enabled, avaliacoes_days_after_completion, avaliacoes_trigger_hour, avaliacoes_daily_limit, avaliacoes_min_interval_seconds, created_at, updated_at)
+     VALUES (?, ?, 1, 7, 11, 20, 20, ?, ?)
+     ON DUPLICATE KEY UPDATE user_id = user_id`,
+    [uuid(), userId, now(), now()],
+  );
+}
+
+async function loadEvaluationSettings(userId) {
+  await ensureEvaluationConfig(userId);
+
+  const [rows] = await pool.query(
+    `SELECT google_review_link, instagram_handle, avaliacoes_enabled, avaliacoes_days_after_completion,
+            avaliacoes_trigger_hour, avaliacoes_daily_limit, avaliacoes_min_interval_seconds,
+            avaliacoes_last_processed_date
+       FROM configuracoes_empresa
+      WHERE user_id = ?
+      LIMIT 1`,
+    [userId],
+  );
+
+  const row = rows[0] || {};
+  return {
+    enabled: row.avaliacoes_enabled === null || row.avaliacoes_enabled === undefined
+      ? EVALUATION_DEFAULTS.enabled
+      : Boolean(row.avaliacoes_enabled),
+    daysAfterCompletion: Number(row.avaliacoes_days_after_completion || EVALUATION_DEFAULTS.daysAfterCompletion),
+    triggerHour: Number(row.avaliacoes_trigger_hour || EVALUATION_DEFAULTS.triggerHour),
+    dailyLimit: Math.max(1, Number(row.avaliacoes_daily_limit || EVALUATION_DEFAULTS.dailyLimit)),
+    minIntervalSeconds: Math.max(5, Number(row.avaliacoes_min_interval_seconds || EVALUATION_DEFAULTS.minIntervalSeconds)),
+    googleReviewLink: row.google_review_link || EVALUATION_DEFAULTS.googleReviewLink,
+    instagramHandle: row.instagram_handle || EVALUATION_DEFAULTS.instagramHandle,
+    lastProcessedDate: row.avaliacoes_last_processed_date || null,
+  };
+}
+
+async function loadWhatsAppConfig(userId) {
+  const [rows] = await pool.query(
+    'SELECT method, webhook_url, api_key, instance_name FROM configuracoes_whatsapp WHERE user_id = ? LIMIT 1',
+    [userId],
+  );
+  return rows[0] || null;
+}
+
+async function reserveEvaluationProcessing(userId, today) {
+  const [result] = await pool.query(
+    `UPDATE configuracoes_empresa
+        SET avaliacoes_last_processed_date = ?, updated_at = ?
+      WHERE user_id = ?
+        AND (avaliacoes_last_processed_date IS NULL OR avaliacoes_last_processed_date <> ?)`,
+    [today, now(), userId, today],
+  );
+  return Number(result.affectedRows || 0) > 0;
+}
+
+async function getPendingEvaluationOrdersForUser(userId, settings) {
+  const cutoffDate = dateDaysAgo(settings.daysAfterCompletion);
+  const limit = settings.dailyLimit;
+  const [rows] = await pool.query(
+    `SELECT o.id AS ordem_id,
+            o.numero AS ordem_numero,
+            o.cliente_id,
+            o.modelo,
+            COALESCE(NULLIF(o.data_entrega, ''), NULLIF(o.data_previsao, '')) AS data_conclusao,
+            c.nome AS cliente_nome,
+            c.telefone AS cliente_telefone,
+            COALESCE(i.nome, 'Instrumento') AS instrumento_nome,
+            COALESCE(m.nome, '') AS marca_nome,
+            al.status AS lembrete_status,
+            al.tentativas AS tentativas
+       FROM ordens_servico o
+       JOIN clientes c ON c.id = o.cliente_id
+       LEFT JOIN instrumentos i ON i.id = o.instrumento_id
+       LEFT JOIN marcas m ON m.id = o.marca_id
+       LEFT JOIN avaliacoes_lembretes al
+              ON al.user_id = o.user_id
+             AND al.ordem_servico_id = o.id
+      WHERE o.user_id = ?
+        AND o.status = 'concluido'
+        AND COALESCE(c.avaliou, 0) = 0
+        AND COALESCE(NULLIF(c.telefone, ''), '') <> ''
+        AND COALESCE(NULLIF(o.data_entrega, ''), NULLIF(o.data_previsao, '')) IS NOT NULL
+        AND DATE(COALESCE(NULLIF(o.data_entrega, ''), NULLIF(o.data_previsao, ''))) <= ?
+        AND (al.status IS NULL OR al.status NOT IN ('enviado', 'respondido', 'cancelado', 'processando'))
+        AND NOT (COALESCE(o.solicita_avaliacao, 0) = 1 AND al.id IS NULL)
+      ORDER BY DATE(COALESCE(NULLIF(o.data_entrega, ''), NULLIF(o.data_previsao, ''))) ASC
+      LIMIT ?`,
+    [userId, cutoffDate, limit],
+  );
+  return rows;
+}
+
+async function upsertEvaluationLog(userId, order, status, extra = {}) {
+  const data = {
+    id: uuid(),
+    user_id: userId,
+    ordem_servico_id: order.ordem_id,
+    cliente_id: order.cliente_id,
+    status,
+    created_at: now(),
+    updated_at: now(),
+    ...extra,
+  };
+  const keys = Object.keys(data);
+  const updates = keys
+    .filter((key) => key !== 'id' && key !== 'user_id' && key !== 'ordem_servico_id' && key !== 'created_at')
+    .map((key) => `\`${key}\` = VALUES(\`${key}\`)`)
+    .join(', ');
+
+  await pool.query(
+    `INSERT INTO avaliacoes_lembretes (${keys.map((key) => `\`${key}\``).join(',')})
+     VALUES (${keys.map(() => '?').join(',')})
+     ON DUPLICATE KEY UPDATE ${updates}`,
+    Object.values(data),
+  );
+}
+
+async function sendEvaluationViaEvolution(phone, message, config) {
+  if (!config || config.method !== 'webhook' || !config.webhook_url) {
+    throw new Error('Backend exige WhatsApp por webhook/Evolution API para envio automatico');
+  }
+
+  const baseUrl = String(config.webhook_url).replace(/\/$/, '');
+  const instanceName = config.instance_name || 'default';
+  const url = `${baseUrl}/message/sendText/${instanceName}`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: config.api_key || '',
+    },
+    body: JSON.stringify({
+      number: normalizePhone(phone),
+      text: message,
+    }),
+  });
+
+  const responseText = await response.text();
+  if (!response.ok) {
+    throw new Error(`Evolution API HTTP ${response.status}: ${responseText}`);
+  }
+}
+
+async function processEvaluationsForUser(userId) {
+  const settings = await loadEvaluationSettings(userId);
+  if (!settings.enabled) return { sent: 0, errors: 0, skipped: 0 };
+
+  const currentHour = currentHourInTimeZone();
+  if (currentHour !== settings.triggerHour) return { sent: 0, errors: 0, skipped: 0 };
+
+  const whatsappConfig = await loadWhatsAppConfig(userId);
+  if (!whatsappConfig || whatsappConfig.method !== 'webhook' || !whatsappConfig.webhook_url) {
+    console.warn(`[avaliacoes-job] Usuario ${userId} sem webhook WhatsApp configurado; envio automatico ignorado.`);
+    return { sent: 0, errors: 0, skipped: 0 };
+  }
+
+  const today = todayInTimeZone();
+  if (!(await reserveEvaluationProcessing(userId, today))) {
+    return { sent: 0, errors: 0, skipped: 0 };
+  }
+
+  const pendingOrders = await getPendingEvaluationOrdersForUser(userId, settings);
+  const result = { sent: 0, errors: 0, skipped: 0 };
+
+  for (let i = 0; i < pendingOrders.length; i++) {
+    const order = pendingOrders[i];
+    const message = buildBackendEvaluationMessage(order, settings);
+
+    if (!validatePhone(order.cliente_telefone)) {
+      await upsertEvaluationLog(userId, order, 'erro', {
+        telefone: order.cliente_telefone,
+        mensagem: message,
+        mensagem_erro: 'Telefone invalido para envio de WhatsApp',
+        tentativas: Number(order.tentativas || 0) + 1,
+      });
+      result.errors++;
+      continue;
+    }
+
+    if (i > 0) await sleep(settings.minIntervalSeconds * 1000);
+
+    try {
+      await upsertEvaluationLog(userId, order, 'processando', {
+        telefone: order.cliente_telefone,
+        mensagem: message,
+        mensagem_erro: null,
+        tentativas: Number(order.tentativas || 0) + 1,
+      });
+      await sendEvaluationViaEvolution(order.cliente_telefone, message, whatsappConfig);
+      await upsertEvaluationLog(userId, order, 'enviado', {
+        telefone: order.cliente_telefone,
+        mensagem: message,
+        mensagem_erro: null,
+        data_envio: now(),
+      });
+      await pool.query(
+        'UPDATE ordens_servico SET solicita_avaliacao = 1, updated_at = ? WHERE id = ? AND user_id = ?',
+        [now(), order.ordem_id, userId],
+      );
+      result.sent++;
+    } catch (error) {
+      await upsertEvaluationLog(userId, order, 'erro', {
+        telefone: order.cliente_telefone,
+        mensagem: message,
+        mensagem_erro: error.message,
+      });
+      result.errors++;
+    }
+  }
+
+  if (result.sent || result.errors) {
+    console.log(`[avaliacoes-job] Usuario ${userId}: ${result.sent} enviados, ${result.errors} erros.`);
+  }
+
+  return result;
+}
+
+async function runEvaluationBackendJob() {
+  if (evaluationJobRunning) return;
+  evaluationJobRunning = true;
+
+  try {
+    const [users] = await pool.query(
+      `SELECT u.id
+         FROM usuarios u
+         LEFT JOIN configuracoes_empresa ce ON ce.user_id = u.id
+        WHERE COALESCE(u.ativo, 1) = 1
+          AND COALESCE(ce.avaliacoes_enabled, 1) = 1`,
+    );
+
+    for (const user of users) {
+      await processEvaluationsForUser(user.id);
+    }
+  } catch (error) {
+    console.error('[avaliacoes-job] Erro no processamento automatico:', error);
+  } finally {
+    evaluationJobRunning = false;
+  }
+}
+
+function startEvaluationBackendJob() {
+  if (!EVALUATION_JOB_ENABLED) {
+    console.log('[avaliacoes-job] Desabilitado por EVALUATION_JOB_ENABLED=false');
+    return;
+  }
+
+  setTimeout(() => void runEvaluationBackendJob(), 10_000);
+  setInterval(() => void runEvaluationBackendJob(), EVALUATION_JOB_INTERVAL_MS);
+  console.log(`[avaliacoes-job] Ativo. Intervalo ${EVALUATION_JOB_INTERVAL_MS}ms, timezone ${EVALUATION_TIMEZONE}.`);
+}
+
 const distDir = path.join(rootDir, 'dist');
 if (fs.existsSync(distDir)) {
   app.use(express.static(distDir));
@@ -626,4 +978,5 @@ if (fs.existsSync(distDir)) {
 
 app.listen(PORT, HOST, () => {
   console.log(`Sistema OS API rodando em ${HOST}:${PORT}`);
+  startEvaluationBackendJob();
 });

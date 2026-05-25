@@ -214,6 +214,12 @@ CREATE TABLE IF NOT EXISTS `configuracoes_empresa` (
   `endereco` TEXT NULL,
   `google_review_link` VARCHAR(500) NULL,
   `instagram_handle` VARCHAR(100) NULL,
+  `avaliacoes_enabled` BOOLEAN DEFAULT TRUE,
+  `avaliacoes_days_after_completion` INT DEFAULT 7,
+  `avaliacoes_trigger_hour` INT DEFAULT 11,
+  `avaliacoes_daily_limit` INT DEFAULT 20,
+  `avaliacoes_min_interval_seconds` INT DEFAULT 20,
+  `avaliacoes_last_processed_date` VARCHAR(10) NULL,
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   FOREIGN KEY (`user_id`) REFERENCES `usuarios`(`id`) ON DELETE CASCADE
@@ -357,6 +363,26 @@ CREATE TABLE IF NOT EXISTS `nfse_logs` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ===========================================
+-- TABELA: agenda_logs
+-- ===========================================
+CREATE TABLE IF NOT EXISTS `agenda_logs` (
+  `id` VARCHAR(36) NOT NULL PRIMARY KEY,
+  `user_id` VARCHAR(36) NOT NULL,
+  `ordem_servico_id` VARCHAR(36) NOT NULL,
+  `data_anterior` VARCHAR(50) NOT NULL,
+  `data_nova` VARCHAR(50) NOT NULL,
+  `profissional_anterior` VARCHAR(100) NULL,
+  `profissional_novo` VARCHAR(100) NULL,
+  `acao` VARCHAR(50) DEFAULT 'reagendamento',
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX `idx_agenda_logs_user` (`user_id`),
+  INDEX `idx_agenda_logs_ordem` (`ordem_servico_id`),
+  INDEX `idx_agenda_logs_created_at` (`created_at`),
+  FOREIGN KEY (`user_id`) REFERENCES `usuarios`(`id`) ON DELETE CASCADE,
+  FOREIGN KEY (`ordem_servico_id`) REFERENCES `ordens_servico`(`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ===========================================
 -- TABELA: avaliacoes_lembretes
 -- ===========================================
 CREATE TABLE IF NOT EXISTS `avaliacoes_lembretes` (
@@ -364,12 +390,17 @@ CREATE TABLE IF NOT EXISTS `avaliacoes_lembretes` (
   `user_id` VARCHAR(36) NOT NULL,
   `ordem_servico_id` VARCHAR(36) NOT NULL,
   `cliente_id` VARCHAR(36) NOT NULL,
-  `data_envio` DATETIME NULL,
-  `status` ENUM('pendente', 'enviado', 'respondido', 'cancelado') DEFAULT 'pendente',
+  `telefone` VARCHAR(30) NULL,
+  `mensagem` TEXT NULL,
+  `data_envio` VARCHAR(50) NULL,
+  `status` VARCHAR(50) DEFAULT 'pendente',
   `avaliacao` INT NULL,
   `comentario` TEXT NULL,
+  `mensagem_erro` TEXT NULL,
+  `tentativas` INT DEFAULT 0,
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY `unique_avaliacao_ordem_user` (`user_id`, `ordem_servico_id`),
   INDEX `idx_avaliacoes_user` (`user_id`),
   INDEX `idx_avaliacoes_ordem` (`ordem_servico_id`),
   INDEX `idx_avaliacoes_status` (`status`),

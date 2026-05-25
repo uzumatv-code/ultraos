@@ -53,6 +53,11 @@ self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
+  if (request.method !== 'GET') {
+    event.respondWith(fetch(request));
+    return;
+  }
+
   // Ignora requisições para outras origens
   if (url.origin !== location.origin) {
     return;
@@ -75,7 +80,9 @@ self.addEventListener('fetch', (event) => {
           // Clona a resposta antes de cachear
           const responseToCache = response.clone();
           caches.open(CACHE_NAME).then(cache => {
-            cache.put(request, responseToCache);
+            cache.put(request, responseToCache).catch(err => {
+              console.warn('Falha ao cachear navegacao:', request.url, err.message);
+            });
           });
           return response;
         })
@@ -104,7 +111,9 @@ self.addEventListener('fetch', (event) => {
           // Clona a resposta antes de cachear
           const responseToCache = response.clone();
           caches.open(CACHE_NAME).then(cache => {
-            cache.put(request, responseToCache);
+            cache.put(request, responseToCache).catch(err => {
+              console.warn('Falha ao cachear asset:', request.url, err.message);
+            });
           });
 
           return response;
