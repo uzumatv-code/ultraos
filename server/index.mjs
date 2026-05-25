@@ -676,6 +676,19 @@ function normalizeWhatsappPhone(phone) {
   return String(phone || '').replace(/\D/g, '');
 }
 
+function whatsappPhoneCandidates(phone) {
+  const cleaned = normalizeWhatsappPhone(phone);
+  if (!cleaned) return [];
+
+  const candidates = new Set([cleaned]);
+  if (cleaned.startsWith('55') && cleaned.length > 11) {
+    candidates.add(cleaned.slice(2));
+  } else if (cleaned.length >= 10 && cleaned.length <= 11) {
+    candidates.add(`55${cleaned}`);
+  }
+  return [...candidates];
+}
+
 function parseMoneyFromText(text) {
   const normalized = String(text || '').toLowerCase().replace(/\s+/g, ' ');
   const match = normalized.match(/(?:r\$\s*)?(\d{1,3}(?:\.\d{3})*|\d+)(?:[,.](\d{1,2}))?\s*(?:reais|real|rs|brl)?/);
@@ -944,6 +957,130 @@ async function transcribeAudioFromUrl(audioUrl) {
   return json.text || '';
 }
 
+async function transcribeAudioFromBase64(base64Audio, mimetype = 'audio/ogg') {
+  if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY nao configurada para transcricao de audio');
+  const cleaned = String(base64Audio || '').replace(/^data:[^;]+;base64,/, '');
+  const bytes = Buffer.from(cleaned, 'base64');
+  if (!bytes.length) throw new Error('Audio em base64 vazio');
+  const blob = new Blob([bytes], { type: mimetype || 'audio/ogg' });
+  const form = new FormData();
+  form.append('model', process.env.OPENAI_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe');
+  form.append('file', blob, mimetype.includes('mpeg') ? 'audio.mp3' : 'audio.ogg');
+  const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+    body: form,
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(json.error?.message || `OpenAI transcription HTTP ${response.status}`);
+  return json.text || '';
+}
+
+const recentFinancialAiReplies = new Map();
+
+function rememberFinancialAiReply(phone, reply) {
+  const key = `${normalizeWhatsappPhone(phone)}:${String(reply || '').trim()}`;
+  recentFinancialAiReplies.set(key, Date.now());
+  for (const [itemKey, timestamp] of recentFinancialAiReplies.entries()) {
+    if (Date.now() - timestamp > 5 * 60 * 1000) recentFinancialAiReplies.delete(itemKey);
+  }
+}
+
+function isRecentFinancialAiReply(phone, text) {
+  const key = `${normalizeWhatsappPhone(phone)}:${String(text || '').trim()}`;
+  const timestamp = recentFinancialAiReplies.get(key);
+  return Boolean(timestamp && Date.now() - timestamp < 5 * 60 * 1000);
+}
+
+function getNestedValue(source, paths) {
+  for (const path of paths) {
+    const value = path.split('.').reduce((acc, key) => acc?.[key], source);
+    if (value !== undefined && value !== null && value !== '' && typeof value !== 'object') return value;
+  }
+  return null;
+}
+
+function extractEvolutionWebhookMessage(body = {}) {
+  const data = body.data || body;
+  const key = data.key || body.key || {};
+  const messageNode = data.message || body.message || {};
+  const audioNode = messageNode.audioMessage || data.audioMessage || body.audioMessage || {};
+  const text = getNestedValue(body, [
+    'text',
+    'mensagem',
+    'data.text',
+    'data.message.conversation',
+    'data.message.extendedTextMessage.text',
+    'data.message.text',
+    'message.conversation',
+    'message.extendedTextMessage.text',
+    'message',
+  ]);
+  const remoteJid = key.remoteJid || data.remoteJid || body.remoteJid || body.from || body.phone || body.telefone;
+  const participant = key.participant || data.participant || body.participant;
+  const phone = normalizeWhatsappPhone(participant || remoteJid || body.phone || body.telefone || body.from);
+  const audioUrl = getNestedValue(body, [
+    'audio_url',
+    'audioUrl',
+    'data.audio_url',
+    'data.audioUrl',
+    'data.message.audioMessage.url',
+    'message.audioMessage.url',
+  ]);
+  const audioBase64 = getNestedValue(body, [
+    'audio_base64',
+    'audioBase64',
+    'base64',
+    'data.audio_base64',
+    'data.audioBase64',
+    'data.message.base64',
+  ]);
+  const mimetype = audioNode.mimetype || body.mimetype || data.mimetype || 'audio/ogg';
+
+  return {
+    phone,
+    text: String(text || '').trim(),
+    audioUrl,
+    audioBase64,
+    mimetype,
+    fromMe: Boolean(key.fromMe ?? data.fromMe ?? body.fromMe),
+    event: body.event || data.event || null,
+    instance: body.instance || data.instance || null,
+    remoteJid,
+    messageKey: key.id ? { id: key.id, remoteJid: key.remoteJid, fromMe: key.fromMe, participant: key.participant } : null,
+    hasAudioMessage: Boolean(messageNode.audioMessage || data.audioMessage || body.audioMessage),
+  };
+}
+
+async function sendFinancialAiReply(userId, phone, reply) {
+  const whatsappConfig = await loadWhatsAppConfig(userId);
+  await sendEvaluationViaEvolution(phone, reply, whatsappConfig);
+  rememberFinancialAiReply(phone, reply);
+}
+
+async function getEvolutionMediaBase64(config, webhookMessage) {
+  if (!webhookMessage.messageKey?.id) return null;
+  if (!config || config.method !== 'webhook' || !config.webhook_url) return null;
+
+  const baseUrl = String(config.webhook_url).replace(/\/$/, '');
+  const instanceName = webhookMessage.instance || config.instance_name || 'default';
+  const response = await fetch(`${baseUrl}/chat/getBase64FromMediaMessage/${instanceName}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: config.api_key || '',
+    },
+    body: JSON.stringify({
+      message: { key: webhookMessage.messageKey },
+      convertToMp4: false,
+    }),
+  });
+  const responseText = await response.text();
+  if (!response.ok) throw new Error(`Evolution media HTTP ${response.status}: ${responseText}`);
+  const json = JSON.parse(responseText || '{}');
+  return json.base64 || json.data?.base64 || json.media?.base64 || json.message?.base64 || null;
+}
+
 async function logFinancialAi(data) {
   const id = data.id || uuid();
   await pool.query(
@@ -1066,18 +1203,31 @@ app.post('/api/financeiro/contas-pagar/:id/pagar', requireAuth, async (req, res)
 });
 
 app.post('/api/financeiro/ia/webhook', async (req, res) => {
-  const phone = normalizeWhatsappPhone(req.body?.phone || req.body?.telefone || req.body?.from);
-  let message = String(req.body?.text || req.body?.message || req.body?.mensagem || '').trim();
-  const audioUrl = req.body?.audio_url || req.body?.audioUrl || null;
-  const tipoMensagem = audioUrl && !message ? 'audio' : 'texto';
+  const webhookMessage = extractEvolutionWebhookMessage(req.body);
+  const phone = webhookMessage.phone;
+  let message = webhookMessage.text;
+  const audioUrl = webhookMessage.audioUrl;
+  const audioBase64 = webhookMessage.audioBase64;
+  const tipoMensagem = (audioUrl || audioBase64) && !message ? 'audio' : 'texto';
 
   try {
     if (!phone) throw new Error('Telefone ausente');
+    if (String(webhookMessage.remoteJid || '').includes('@g.us') || String(webhookMessage.remoteJid || '').includes('status@broadcast')) {
+      return res.json({ ignored: true, reason: 'Origem nao individual' });
+    }
+    if (webhookMessage.fromMe && message && isRecentFinancialAiReply(phone, message)) {
+      return res.json({ ignored: true, reason: 'Mensagem enviada pela propria IA' });
+    }
+
+    const phoneCandidates = whatsappPhoneCandidates(phone);
+    if (!phoneCandidates.length) throw new Error('Telefone invalido');
+    const placeholders = phoneCandidates.map(() => '?').join(', ');
     const [authorizedRows] = await pool.query(
       `SELECT * FROM financeiro_ia_autorizados
-        WHERE ativo = 1 AND REPLACE(REPLACE(REPLACE(REPLACE(telefone, '+', ''), ' ', ''), '-', ''), '(', '') LIKE ?
+        WHERE ativo = 1
+          AND REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(telefone, '+', ''), ' ', ''), '-', ''), '(', ''), ')', ''), '.', '') IN (${placeholders})
         ORDER BY updated_at DESC LIMIT 1`,
-      [`%${phone.slice(-11)}%`],
+      phoneCandidates,
     );
     const authorized = authorizedRows[0];
     if (!authorized) {
@@ -1086,6 +1236,19 @@ app.post('/api/financeiro/ia/webhook', async (req, res) => {
     }
 
     if (!message && audioUrl) message = await transcribeAudioFromUrl(audioUrl);
+    if (!message && audioBase64) message = await transcribeAudioFromBase64(audioBase64, webhookMessage.mimetype);
+    if (!message && webhookMessage.hasAudioMessage) {
+      const whatsappConfig = await loadWhatsAppConfig(authorized.user_id);
+      const mediaBase64 = await getEvolutionMediaBase64(whatsappConfig, webhookMessage);
+      if (mediaBase64) message = await transcribeAudioFromBase64(mediaBase64, webhookMessage.mimetype);
+    }
+    if (!message) {
+      const reply = 'Nao consegui ler a mensagem. Envie texto ou audio com arquivo acessivel.';
+      await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: null, tipo_mensagem: tipoMensagem, status: 'erro', resposta: reply, erro: 'Mensagem vazia' });
+      await sendFinancialAiReply(authorized.user_id, phone, reply);
+      return res.json({ reply, whatsapp_sent: true });
+    }
+
     const intent = parseFinancialIntent(message);
 
     if (intent.intent === 'confirmar_acao') {
@@ -1096,7 +1259,11 @@ app.post('/api/financeiro/ia/webhook', async (req, res) => {
         [authorized.user_id, phone, intent.token],
       );
       const pending = logs[0];
-      if (!pending) return res.json({ reply: 'Nao encontrei uma acao pendente para esse codigo.' });
+      if (!pending) {
+        const reply = 'Nao encontrei uma acao pendente para esse codigo.';
+        await sendFinancialAiReply(authorized.user_id, phone, reply);
+        return res.json({ reply, whatsapp_sent: true });
+      }
       const entities = typeof pending.entidades === 'string' ? JSON.parse(pending.entidades || '{}') : pending.entidades || {};
       let reply = 'Acao confirmada.';
       if (pending.intencao === 'registrar_despesa') {
@@ -1108,19 +1275,22 @@ app.post('/api/financeiro/ia/webhook', async (req, res) => {
         reply = `Pagamento registrado na OS #${payment.order.numero}: R$ ${Number(payment.amount).toFixed(2)}.`;
       }
       await logFinancialAi({ id: pending.id, user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: pending.mensagem, tipo_mensagem: pending.tipo_mensagem, intencao: pending.intencao, entidades, status: 'executado', resposta: reply, confirmacao_token: intent.token, confirmado_em: now() });
-      return res.json({ reply });
+      await sendFinancialAiReply(authorized.user_id, phone, reply);
+      return res.json({ reply, whatsapp_sent: true });
     }
 
     if (['registrar_despesa', 'registrar_pagamento_os'].includes(intent.intent)) {
       if (!canWriteFinancial(authorized.permissao)) {
         const reply = 'Seu numero tem permissao apenas de consulta.';
         await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, intencao: intent.intent, entidades: intent, status: 'negado', resposta: reply });
-        return res.status(403).json({ reply });
+        await sendFinancialAiReply(authorized.user_id, phone, reply);
+        return res.status(403).json({ reply, whatsapp_sent: true });
       }
       if (!intent.value || intent.value <= 0) {
         const reply = 'Informe um valor valido para registrar essa acao.';
         await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, intencao: intent.intent, entidades: intent, status: 'erro', resposta: reply, erro: 'Valor ausente' });
-        return res.json({ reply });
+        await sendFinancialAiReply(authorized.user_id, phone, reply);
+        return res.json({ reply, whatsapp_sent: true });
       }
       const token = crypto.randomBytes(3).toString('hex').toUpperCase();
       const actionText = intent.intent === 'registrar_despesa'
@@ -1128,12 +1298,14 @@ app.post('/api/financeiro/ia/webhook', async (req, res) => {
         : `registrar pagamento da OS #${intent.osNumero} de R$ ${Number(intent.value).toFixed(2)}`;
       const reply = `Confirme para ${actionText}. Responda: confirmar ${token}`;
       await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, intencao: intent.intent, entidades: intent, status: 'aguardando_confirmacao', resposta: reply, confirmacao_token: token });
-      return res.json({ reply, confirmation_required: true, token });
+      await sendFinancialAiReply(authorized.user_id, phone, reply);
+      return res.json({ reply, confirmation_required: true, token, whatsapp_sent: true });
     }
 
     const reply = await answerFinancialQuery(authorized.user_id, intent);
     await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, intencao: intent.intent, entidades: intent, status: 'respondido', resposta: reply });
-    res.json({ reply });
+    await sendFinancialAiReply(authorized.user_id, phone, reply);
+    res.json({ reply, whatsapp_sent: true });
   } catch (error) {
     res.status(400).json({ reply: `Erro: ${error.message}`, error: { message: error.message } });
   }
