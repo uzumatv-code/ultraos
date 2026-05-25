@@ -130,172 +130,91 @@ export function Ordens() {
 
   // Definição das colunas para TanStack Table v8+
   const columns = useMemo<ColumnDef<OrdemServico, any>[]>(() => [
-    {
-      header: 'Número',
-      accessorKey: 'numero',
-      cell: info => `#${info.getValue()}`,
-    },
-    {
-      header: 'Cliente',
-      accessorFn: row => row.cliente?.nome || '',
-      id: 'cliente',
-    },
-    {
-      header: 'Instrumento/Marca',
-      accessorFn: row => `${row.instrumento?.nome || ''} ${row.marca?.nome || ''} ${row.modelo || ''}`,
-      id: 'instrumento',
-    },
-    {
-      header: 'Data Prevista',
-      accessorKey: 'data_previsao',
-      cell: info => formatDate(info.getValue()),
-    },
-    {
-      header: 'Status',
-      accessorKey: 'status',
-      cell: info => (
-        <select
-          value={info.row.original.status}
-          onChange={e => handleChangeStatus(info.row.original, e.target.value as 'pendente' | 'em_andamento' | 'concluido' | 'cancelado')}
-          className={`text-xs font-medium px-2.5 py-0.5 rounded-full ${statusColors[info.row.original.status]}`}
-        >
-          <option value="pendente">Pendente</option>
-          <option value="em_andamento">Em Andamento</option>
-          <option value="concluido">Concluído</option>
-          <option value="cancelado">Cancelado</option>
-        </select>
-      ),
-    },
-    {
-      header: 'Financeiro',
-      id: 'financeiro',
-      cell: info => {
-        const financial = getFinancialStatus(info.row.original);
-        return (
-          <div className="space-y-1">
-            <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${financial.className}`}>
-              {financial.label}
-            </span>
-            {financial.remaining > 0 && (
-              <p className="text-xs text-gray-500">Falta {formatCurrency(financial.remaining)}</p>
-            )}
-          </div>
-        );
+      {
+        header: 'OS',
+        accessorKey: 'numero',
+        cell: info => `#${info.getValue()}`,
+        size: 40,
       },
-    },
-    {
-      header: 'Ações',
-      id: 'acoes',
-      cell: info => (
-        <div className="flex items-center justify-end space-x-2">
-          <motion.button
-            whileHover={{ scale: 1.1 }}
-            whileTap={{ scale: 0.9 }}
-            onClick={() => navigate(`/ordens/editar/${info.row.original.id}`)} 
-            className="p-2 text-purple-600 dark:text-purple-400 hover:text-purple-900 dark:hover:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded-lg transition-all duration-200"
-            title="Editar ordem"
+      {
+        header: 'Cliente',
+        accessorFn: row => row.cliente?.nome || '',
+        id: 'cliente',
+        size: 120,
+      },
+      {
+        header: 'Instrumento',
+        accessorFn: row => `${row.instrumento?.nome || ''} ${row.marca?.nome || ''}\n${row.modelo || ''}`,
+        id: 'instrumento',
+        size: 120,
+        cell: info => (
+          <span style={{ whiteSpace: 'pre-line' }}>{info.getValue()}</span>
+        ),
+      },
+      {
+        header: 'Previsão',
+        accessorKey: 'data_previsao',
+        cell: info => formatDate(info.getValue()),
+        size: 80,
+      },
+      {
+        header: 'Status',
+        accessorKey: 'status',
+        cell: info => (
+          <select
+            value={info.row.original.status}
+            onChange={e => handleChangeStatus(info.row.original, e.target.value as 'pendente' | 'em_andamento' | 'concluido' | 'cancelado')}
+            className={`text-xs font-medium px-2 py-0.5 rounded-full ${statusColors[info.row.original.status]}`}
+            style={{ minWidth: 90 }}
           >
-            <Edit className="w-4 h-4" />
-          </motion.button>
-          
-          <motion.button
-            whileHover={{ scale: 1.1 }}
-            whileTap={{ scale: 0.9 }}
-            onClick={() => { setOrdemParaImprimir(info.row.original); setShowPrintModal(true); }} 
-            className="p-2 text-purple-600 dark:text-purple-400 hover:text-purple-900 dark:hover:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded-lg transition-all duration-200"
-            title="Imprimir ordem"
-          >
-            <Printer className="w-4 h-4" />
-          </motion.button>
-          
-          <motion.button
-            whileHover={{ scale: 1.1 }}
-            whileTap={{ scale: 0.9 }}
-            onClick={() => handleWhatsAppShare(info.row.original)} 
-            className="p-2 text-green-600 dark:text-green-400 hover:text-green-900 dark:hover:text-green-300 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-lg transition-all duration-200"
-            title="Enviar mensagem WhatsApp"
-          >
-            <Send className="w-4 h-4" />
-          </motion.button>
-          
-          <motion.button
-            whileHover={{ scale: 1.1 }}
-            whileTap={{ scale: 0.9 }}
-            onClick={() => handleSendEvaluationRequest(info.row.original)} 
-            className={`p-2 rounded-lg transition-all duration-200 ${
-              info.row.original.status === 'concluido' && !info.row.original.solicita_avaliacao
-                ? 'text-yellow-600 dark:text-yellow-400 hover:text-yellow-900 dark:hover:text-yellow-300 hover:bg-yellow-50 dark:hover:bg-yellow-900/20' 
-                : 'text-gray-400 dark:text-gray-600 cursor-not-allowed'
-            }`}
-            title={
-              info.row.original.solicita_avaliacao 
-                ? 'Avaliação já solicitada' 
-                : info.row.original.status === 'concluido' 
-                  ? 'Solicitar avaliação' 
-                  : 'Disponível apenas para ordens concluídas'
-            }
-            disabled={info.row.original.status !== 'concluido' || info.row.original.solicita_avaliacao === true}
-          >
-            <Star className="w-4 h-4" />
-          </motion.button>
-          
-          <motion.button
-            whileHover={{ scale: 1.1 }}
-            whileTap={{ scale: 0.9 }}
-            onClick={() => info.row.original.status === 'concluido' && handleGerarNFSe(info.row.original)} 
-            className={`p-2 rounded-lg transition-all duration-200 ${
-              info.row.original.status === 'concluido' 
-                ? 'text-blue-600 dark:text-blue-400 hover:text-blue-900 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20' 
-                : 'text-gray-400 dark:text-gray-600 cursor-not-allowed'
-            }`}
-            title={info.row.original.status === 'concluido' ? 'Gerar NFS-e' : 'Disponível apenas para ordens concluídas'}
-            disabled={info.row.original.status !== 'concluido'}
-          >
-            <FileText className="w-4 h-4" />
-          </motion.button>
-
-          <motion.button
-            whileHover={{ scale: 1.1 }}
-            whileTap={{ scale: 0.9 }}
-            onClick={() => handleRegistrarPagamento(info.row.original)}
-            className="p-2 text-emerald-600 dark:text-emerald-400 hover:text-emerald-900 dark:hover:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 rounded-lg transition-all duration-200"
-            title="Registrar pagamento"
-          >
-            <DollarSign className="w-4 h-4" />
-          </motion.button>
-          
-          <motion.button
-            whileHover={{ scale: 1.1 }}
-            whileTap={{ scale: 0.9 }}
-            onClick={() => handleExcluir(info.row.original)} 
-            className="p-2 text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-all duration-200"
-            title="Excluir ordem"
-          >
-            <Trash2 className="w-4 h-4" />
-          </motion.button>
-        </div>
-      ),
-    },
-  ], [navigate, setOrdemParaImprimir, setShowPrintModal, handleWhatsAppShare, handleExcluir, handleChangeStatus, handleGerarNFSe]);
-
-  const table = useReactTable({
-    data: paginatedOrdens,
-    columns,
-    state: {
-      globalFilter,
-      pagination: { pageIndex: pagina, pageSize: itensPorPagina },
-    },
-    getCoreRowModel: getCoreRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-    manualPagination: true,
-    pageCount: totalPaginas,
-  });
+            <option value="pendente">Pendente</option>
+            <option value="em_andamento">Em Andamento</option>
+            <option value="concluido">Concluído</option>
+            <option value="cancelado">Cancelado</option>
+          </select>
+        ),
+        size: 90,
+      },
+      {
+        header: 'Financeiro',
+        id: 'financeiro',
+        cell: info => {
+          const financial = getFinancialStatus(info.row.original);
+          return (
+            <div className="space-y-1">
+              <span className={`inline-flex rounded-full px-2 py-1 text-xs font-medium ${financial.className}`}>
+                {financial.label}
+              </span>
+              {financial.remaining > 0 && (
+                <p className="text-xs text-gray-500">Falta {formatCurrency(financial.remaining)}</p>
+              )}
+            </div>
+          );
+        },
+        size: 90,
+      },
+      {
+        header: 'Ações',
+        id: 'acoes',
+        cell: info => (
+          <div className="flex items-center justify-end gap-1">
+            <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => navigate(`/ordens/editar/${info.row.original.id}`)} className="p-1 text-purple-600 dark:text-purple-400 hover:text-purple-900 dark:hover:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded-lg transition-all duration-200" title="Editar ordem"><Edit className="w-4 h-4" /></motion.button>
+            <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => { setOrdemParaImprimir(info.row.original); setShowPrintModal(true); }} className="p-1 text-purple-600 dark:text-purple-400 hover:text-purple-900 dark:hover:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded-lg transition-all duration-200" title="Imprimir ordem"><Printer className="w-4 h-4" /></motion.button>
+            <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => handleWhatsAppShare(info.row.original)} className="p-1 text-green-600 dark:text-green-400 hover:text-green-900 dark:hover:text-green-300 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-lg transition-all duration-200" title="Enviar mensagem WhatsApp"><Send className="w-4 h-4" /></motion.button>
+            <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => handleRegistrarPagamento(info.row.original)} className="p-1 text-emerald-600 dark:text-emerald-400 hover:text-emerald-900 dark:hover:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 rounded-lg transition-all duration-200" title="Registrar pagamento"><DollarSign className="w-4 h-4" /></motion.button>
+            <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => handleExcluir(info.row.original)} className="p-1 text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-all duration-200" title="Excluir ordem"><Trash2 className="w-4 h-4" /></motion.button>
+          </div>
+        ),
+        size: 90,
+      },
+    ], [navigate, setOrdemParaImprimir, setShowPrintModal, handleWhatsAppShare, handleExcluir, handleChangeStatus]);
 
   async function handleExcluir(ordem: OrdemServico) {
     const result = await alerts.confirm({
-      title: 'Excluir Ordem',
-      text: `Deseja realmente excluir a ordem de serviço #${ordem.numero}?`,
-      icon: 'warning'
+      title: 'Excluir ordem',
+      text: `Deseja excluir a ordem #${ordem.numero}?`,
+      icon: 'warning',
+      confirmButtonText: 'Excluir'
     });
 
     if (!result.isConfirmed) return;
@@ -315,6 +234,19 @@ export function Ordens() {
       alerts.error('Erro ao excluir ordem de serviço');
     }
   }
+
+  const table = useReactTable({
+    data: paginatedOrdens,
+    columns,
+    state: {
+      globalFilter,
+      pagination: { pageIndex: pagina, pageSize: itensPorPagina },
+    },
+    getCoreRowModel: getCoreRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+    manualPagination: true,
+    pageCount: totalPaginas,
+  });
 
   async function handleChangeStatus(ordem: OrdemServico, newStatus: 'pendente' | 'em_andamento' | 'concluido' | 'cancelado') {
     try {
@@ -673,8 +605,8 @@ export function Ordens() {
           animate={{ opacity: 1, y: 0 }}
           className="hidden lg:block glass dark:glass-dark rounded-2xl shadow-lg dark:shadow-2xl overflow-hidden border border-gray-100 dark:border-purple-500/10"
         >
-          <div className="overflow-x-auto">
-            <table className="w-full">
+          <div className="overflow-x-auto" style={{ maxWidth: '100vw' }}>
+            <table className="w-full table-fixed" style={{ minWidth: 700 }}>
               <thead>
                 {table.getHeaderGroups().map(headerGroup => (
                   <tr key={headerGroup.id} className="border-b border-gray-100 dark:border-gray-800 bg-gradient-to-r from-indigo-50/50 to-violet-50/50 dark:from-indigo-900/10 dark:to-violet-900/10">
@@ -720,7 +652,7 @@ export function Ordens() {
                       className="hover:bg-indigo-50/50 dark:hover:bg-indigo-900/10 transition-colors duration-200"
                     >
                       {row.getVisibleCells().map(cell => (
-                        <td key={cell.id} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
+                        <td key={cell.id} className="px-2 py-2 whitespace-nowrap text-xs text-gray-900 dark:text-gray-100 max-w-[180px] overflow-hidden text-ellipsis">
                           {flexRender(cell.column.columnDef.cell, cell.getContext())}
                         </td>
                       ))}
