@@ -542,7 +542,7 @@ export function ModernCalendar({ orders, onEventClick, loading = false, onUpdate
                         <p className="text-xs text-gray-500 dark:text-gray-400">Previsão de Entrega</p>
                         <p className="font-semibold text-gray-800 dark:text-white">
                           {selectedEvent.ordem.data_previsao 
-                            ? format(new Date(selectedEvent.ordem.data_previsao), 'dd/MM/yyyy', { locale: ptBR })
+                            ? format(parseScheduleDate(selectedEvent.ordem.data_previsao), 'dd/MM/yyyy', { locale: ptBR })
                             : 'Não definida'}
                         </p>
                       </div>

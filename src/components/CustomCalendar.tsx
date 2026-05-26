@@ -90,7 +90,7 @@ export function CustomCalendar({ orders, onEventClick, loading = false, onUpdate
   const getOrdersForDate = (date: Date) => {
     return orders.filter((order) => {
       if (!order.data_previsao) return false;
-      const orderDate = new Date(order.data_previsao);
+      const orderDate = parseScheduleDate(order.data_previsao);
       return (
         orderDate.getDate() === date.getDate() &&
         orderDate.getMonth() === date.getMonth() &&
@@ -551,7 +551,7 @@ export function CustomCalendar({ orders, onEventClick, loading = false, onUpdate
                       <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Previsão</p>
                       <p className="font-semibold text-gray-800 dark:text-white">
                         {selectedOrder.data_previsao
-                          ? new Date(selectedOrder.data_previsao).toLocaleDateString('pt-BR')
+                          ? parseScheduleDate(selectedOrder.data_previsao).toLocaleDateString('pt-BR')
                           : 'Não definida'}
                       </p>
                     </div>
@@ -721,7 +721,7 @@ export function CustomCalendar({ orders, onEventClick, loading = false, onUpdate
                           )}
                           {order.data_previsao && (
                             <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                              Previsão: {new Date(order.data_previsao).toLocaleDateString('pt-BR')}
+                              Previsão: {parseScheduleDate(order.data_previsao).toLocaleDateString('pt-BR')}
                             </p>
                           )}
                         </div>
