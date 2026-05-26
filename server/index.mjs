@@ -1491,7 +1491,7 @@ app.post('/api/financeiro/ia/webhook', async (req, res) => {
         const conta = await createAccountPayable({ userId: authorized.user_id, descricao: entities.description, valor: entities.value, dataVencimento: entities.dataVencimento, formaPagamento: entities.formaPagamento, origem: 'whatsapp_ia' });
         reply = `Conta cadastrada: ${conta.descricao} - R$ ${Number(conta.valor).toFixed(2)}. Vencimento: ${conta.dataVencimento}.`;
       }
-      await logFinancialAi({ id: pending.id, user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: pending.mensagem, tipo_mensagem: pending.tipo_mensagem, intencao: pending.intencao, entidades, status: 'executado', resposta: reply, confirmacao_token: intent.token, confirmado_em: now() });
+      await logFinancialAi({ id: pending.id, user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: pending.mensagem, tipo_mensagem: pending.tipo_mensagem, intencao: pending.intencao, entidades, status: 'executado', resposta: reply, confirmacao_token: intent.token || pending.confirmacao_token, confirmado_em: now() });
       await sendFinancialAiReply(authorized.user_id, phone, reply);
       return res.json({ reply, whatsapp_sent: true });
     }
