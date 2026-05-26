@@ -686,6 +686,22 @@ function whatsappPhoneCandidates(phone) {
   } else if (cleaned.length >= 10 && cleaned.length <= 11) {
     candidates.add(`55${cleaned}`);
   }
+
+  const addBrazilMobileVariants = (number) => {
+    const national = number.startsWith('55') ? number.slice(2) : number;
+    if (national.length === 10) {
+      const withNinthDigit = `${national.slice(0, 2)}9${national.slice(2)}`;
+      candidates.add(withNinthDigit);
+      candidates.add(`55${withNinthDigit}`);
+    }
+    if (national.length === 11 && national[2] === '9') {
+      const withoutNinthDigit = `${national.slice(0, 2)}${national.slice(3)}`;
+      candidates.add(withoutNinthDigit);
+      candidates.add(`55${withoutNinthDigit}`);
+    }
+  };
+
+  [...candidates].forEach(addBrazilMobileVariants);
   return [...candidates];
 }
 
@@ -1394,6 +1410,16 @@ app.post('/api/financeiro/ia/webhook', async (req, res) => {
     }
 
     const phoneCandidates = whatsappPhoneCandidates(phone);
+    console.log('[financeiro-ia:webhook]', {
+      event: webhookMessage.event,
+      fromMe: webhookMessage.fromMe,
+      remoteJid: webhookMessage.remoteJid,
+      phone,
+      phoneCandidates,
+      tipoMensagem,
+      hasText: Boolean(message),
+      hasAudio: Boolean(audioUrl || audioBase64 || webhookMessage.hasAudioMessage),
+    });
     if (!phoneCandidates.length) throw new Error('Telefone invalido');
     const placeholders = phoneCandidates.map(() => '?').join(', ');
     const [authorizedRows] = await pool.query(
