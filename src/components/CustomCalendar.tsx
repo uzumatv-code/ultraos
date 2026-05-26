@@ -7,6 +7,7 @@ import type { OrdemServico } from '../types/database';
 import { supabase } from '../lib/supabase';
 import { toast } from './ToastCustom';
 import { WhatsAppService } from '../utils/whatsapp-service';
+import { alerts } from '../utils/alerts';
 
 interface CustomCalendarProps {
   orders: OrdemServico[];
@@ -20,6 +21,7 @@ export function CustomCalendar({ orders, onEventClick, loading = false, onUpdate
   const [selectedOrder, setSelectedOrder] = useState<OrdemServico | null>(null);
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [showDayOrders, setShowDayOrders] = useState<{date: Date, orders: OrdemServico[]} | null>(null);
+  const [draggedOrder, setDraggedOrder] = useState<OrdemServico | null>(null);
 
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('pt-BR', {
@@ -104,6 +106,87 @@ export function CustomCalendar({ orders, onEventClick, loading = false, onUpdate
       date.getMonth() === today.getMonth() &&
       date.getFullYear() === today.getFullYear()
     );
+  };
+
+  const parseScheduleDate = (value?: string | Date) => {
+    if (!value) return new Date();
+    if (value instanceof Date) return value;
+
+    const dateOnly = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (dateOnly) {
+      const [, year, month, day] = dateOnly;
+      return new Date(Number(year), Number(month) - 1, Number(day));
+    }
+
+    return new Date(value);
+  };
+
+  const dateForDatabase = (date: Date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const isSameDate = (first: Date, second: Date) => (
+    first.getDate() === second.getDate() &&
+    first.getMonth() === second.getMonth() &&
+    first.getFullYear() === second.getFullYear()
+  );
+
+  const updateOrderDate = async (order: OrdemServico, newDate: Date) => {
+    const originalDate = parseScheduleDate(order.data_previsao);
+    if (isSameDate(originalDate, newDate)) return;
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const targetDate = new Date(newDate);
+    targetDate.setHours(0, 0, 0, 0);
+
+    if (targetDate < today) {
+      toast.error('Não é possível mover uma ordem para uma data passada.');
+      return;
+    }
+
+    const confirm = await alerts.confirm({
+      title: 'Confirmar reagendamento',
+      text: `Mover OS #${order.numero} para ${targetDate.toLocaleDateString('pt-BR')}?`,
+      icon: 'question',
+      confirmButtonText: 'Sim, reagendar',
+      cancelButtonText: 'Cancelar',
+    });
+
+    if (!confirm.isConfirmed) return;
+
+    try {
+      const dataAnterior = dateForDatabase(originalDate);
+      const dataNova = dateForDatabase(targetDate);
+
+      const { error: updateError } = await supabase
+        .from('ordens_servico')
+        .update({ data_previsao: dataNova })
+        .eq('id', order.id);
+
+      if (updateError) throw updateError;
+
+      const { error: logError } = await supabase
+        .from('agenda_logs')
+        .insert({
+          ordem_servico_id: order.id,
+          data_anterior: dataAnterior,
+          data_nova: dataNova,
+          acao: 'reagendamento',
+        });
+
+      if (logError) throw logError;
+
+      toast.success('Data de entrega atualizada com sucesso');
+      if (onUpdate) onUpdate();
+    } catch (error: any) {
+      console.error('Erro ao reagendar ordem:', error);
+      toast.error(error?.message || 'Erro ao atualizar a data de entrega');
+      if (onUpdate) onUpdate();
+    }
   };
 
   const monthNames = [
@@ -317,6 +400,17 @@ export function CustomCalendar({ orders, onEventClick, loading = false, onUpdate
                     ${isTodayDate ? 'ring-2 ring-primary-500 ring-offset-2 dark:ring-offset-gray-900' : ''}
                     hover:shadow-glass-lg hover:scale-105 cursor-pointer
                   `}
+                  onDragOver={(event) => {
+                    if (draggedOrder) event.preventDefault();
+                  }}
+                  onDrop={async (event) => {
+                    event.preventDefault();
+                    if (!draggedOrder) return;
+
+                    const order = draggedOrder;
+                    setDraggedOrder(null);
+                    await updateOrderDate(order, dayInfo.date);
+                  }}
                 >
                   {/* Número do dia */}
                   <div
@@ -339,6 +433,14 @@ export function CustomCalendar({ orders, onEventClick, loading = false, onUpdate
                       <motion.div
                         key={order.id}
                         whileHover={{ scale: 1.05, zIndex: 10 }}
+                        draggable={!['concluido', 'cancelado'].includes(order.status)}
+                        onDragStart={(event) => {
+                          event.stopPropagation();
+                          setDraggedOrder(order);
+                          event.dataTransfer.effectAllowed = 'move';
+                          event.dataTransfer.setData('text/plain', order.id);
+                        }}
+                        onDragEnd={() => setDraggedOrder(null)}
                         onClick={() => setSelectedOrder(order)}
                         className={`
                           px-2 py-1 rounded-lg text-xs font-medium text-white truncate

@@ -25,10 +25,6 @@ const localizer = dateFnsLocalizer({
   locales,
 });
 
-const BUSINESS_START_HOUR = 8;
-const BUSINESS_END_HOUR = 18;
-const DEFAULT_EVENT_DURATION_MINUTES = 60;
-
 interface CalendarEvent extends Event {
   id: string;
   ordem: OrdemServico;
@@ -56,27 +52,42 @@ export function ModernCalendar({ orders, onEventClick, loading = false, onUpdate
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [dragRefreshKey, setDragRefreshKey] = useState(0);
 
-  const minTime = useMemo(() => {
-    const date = new Date();
-    date.setHours(BUSINESS_START_HOUR, 0, 0, 0);
-    return date;
-  }, []);
-
-  const maxTime = useMemo(() => {
-    const date = new Date();
-    date.setHours(BUSINESS_END_HOUR, 0, 0, 0);
-    return date;
-  }, []);
-
   const getOrderResourceId = (ordem: OrdemServico) => {
     const record = ordem as any;
     return record.profissional_id || record.responsavel_id || record.profissional?.id || record.responsavel?.id;
   };
 
+  const parseScheduleDate = (value?: string | Date) => {
+    if (!value) return new Date();
+    if (value instanceof Date) return value;
+
+    const dateOnly = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (dateOnly) {
+      const [, year, month, day] = dateOnly;
+      return new Date(Number(year), Number(month) - 1, Number(day));
+    }
+
+    return new Date(value);
+  };
+
+  const startOfLocalDay = (date: Date) => {
+    const nextDate = new Date(date);
+    nextDate.setHours(0, 0, 0, 0);
+    return nextDate;
+  };
+
+  const dateForDatabase = (date: Date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
   // Converter ordens para eventos
   const events: CalendarEvent[] = orders.map((ordem) => {
-    const startDate = ordem.data_previsao ? new Date(ordem.data_previsao) : new Date();
-    const endDate = new Date(startDate.getTime() + DEFAULT_EVENT_DURATION_MINUTES * 60 * 1000);
+    const startDate = startOfLocalDay(parseScheduleDate(ordem.data_previsao));
+    const endDate = new Date(startDate);
+    endDate.setDate(endDate.getDate() + 1);
     
     // Determinar cor baseado no status
     let statusColor = '#ef4444'; // red - default (atraso)
@@ -93,6 +104,7 @@ export function ModernCalendar({ orders, onEventClick, loading = false, onUpdate
       title: ordem.cliente?.nome || 'Sem cliente',
       start: startDate,
       end: endDate,
+      allDay: true,
       ordem,
       status: ordem.status,
       resourceId: getOrderResourceId(ordem),
@@ -220,65 +232,25 @@ export function ModernCalendar({ orders, onEventClick, loading = false, onUpdate
   };
 
   const formatSchedule = (date: Date) => {
-    return format(date, "dd/MM/yyyy 'às' HH:mm", { locale: ptBR });
+    return format(date, 'dd/MM/yyyy', { locale: ptBR });
   };
 
-  const hasTime = (date: Date) => {
-    return date.getHours() !== 0 || date.getMinutes() !== 0 || date.getSeconds() !== 0;
-  };
-
-  const normalizeDroppedDate = (originalDate: Date, droppedDate: Date, isAllDay?: boolean) => {
-    const nextDate = new Date(droppedDate);
-
-    if (isAllDay || !hasTime(nextDate)) {
-      if (hasTime(originalDate)) {
-        nextDate.setHours(originalDate.getHours(), originalDate.getMinutes(), 0, 0);
-      } else {
-        nextDate.setHours(BUSINESS_START_HOUR, 0, 0, 0);
-      }
-    }
-
-    return nextDate;
-  };
-
-  const getScheduleValidationError = (event: CalendarEvent, newStart: Date, newEnd: Date, nextResourceId?: string) => {
-    const now = new Date();
-    if (newStart < now) {
-      return 'Não é possível mover um agendamento para um horário passado.';
-    }
-
-    const startHour = newStart.getHours() + newStart.getMinutes() / 60;
-    const endHour = newEnd.getHours() + newEnd.getMinutes() / 60;
-    if (startHour < BUSINESS_START_HOUR || endHour > BUSINESS_END_HOUR) {
-      return `Horário indisponível. Use horários entre ${BUSINESS_START_HOUR}:00 e ${BUSINESS_END_HOUR}:00.`;
-    }
-
-    const hasConflict = events.some((candidate) => {
-      if (candidate.id === event.id) return false;
-      if (['concluido', 'cancelado'].includes(candidate.status)) return false;
-      if (resources.length && String(candidate.resourceId || '') !== String(nextResourceId || '')) return false;
-
-      const candidateStart = candidate.start instanceof Date ? candidate.start : new Date(candidate.start as string);
-      const candidateEnd = candidate.end instanceof Date ? candidate.end : new Date(candidate.end as string);
-
-      return newStart < candidateEnd && newEnd > candidateStart;
-    });
-
-    if (hasConflict) {
-      return 'Já existe outro agendamento nesse horário.';
+  const getScheduleValidationError = (newStart: Date) => {
+    const today = startOfLocalDay(new Date());
+    if (newStart < today) {
+      return 'Não é possível mover um agendamento para uma data passada.';
     }
 
     return null;
   };
 
-  const updateOrderSchedule = async ({ event, start, isAllDay, resourceId }: EventInteractionArgs<CalendarEvent>) => {
-    const originalDate = new Date(event.ordem.data_previsao || (event.start as Date));
+  const updateOrderSchedule = async ({ event, start, resourceId }: EventInteractionArgs<CalendarEvent>) => {
+    const originalDate = startOfLocalDay(parseScheduleDate(event.ordem.data_previsao || (event.start as Date)));
     const droppedStart = start instanceof Date ? start : new Date(start);
-    const newStart = normalizeDroppedDate(originalDate, droppedStart, isAllDay);
-    const newEnd = new Date(newStart.getTime() + DEFAULT_EVENT_DURATION_MINUTES * 60 * 1000);
+    const newStart = startOfLocalDay(droppedStart);
     const currentResourceId = event.resourceId;
     const nextResourceId = resourceId ? String(resourceId) : currentResourceId;
-    const validationError = getScheduleValidationError(event, newStart, newEnd, nextResourceId);
+    const validationError = getScheduleValidationError(newStart);
 
     if (validationError) {
       toast.error(validationError);
@@ -301,7 +273,7 @@ export function ModernCalendar({ orders, onEventClick, loading = false, onUpdate
 
     try {
       const updatePayload: Record<string, any> = {
-        data_previsao: newStart.toISOString(),
+        data_previsao: dateForDatabase(newStart),
       };
 
       const orderRecord = event.ordem as any;
@@ -321,8 +293,8 @@ export function ModernCalendar({ orders, onEventClick, loading = false, onUpdate
         .from('agenda_logs')
         .insert({
           ordem_servico_id: event.id,
-          data_anterior: originalDate.toISOString(),
-          data_nova: newStart.toISOString(),
+          data_anterior: dateForDatabase(originalDate),
+          data_nova: dateForDatabase(newStart),
           profissional_anterior: currentResourceId || null,
           profissional_novo: nextResourceId || null,
           acao: 'reagendamento',
@@ -455,8 +427,6 @@ export function ModernCalendar({ orders, onEventClick, loading = false, onUpdate
             style={{ height: 600 }}
             culture="pt-BR"
             view={view}
-            min={minTime}
-            max={maxTime}
             step={30}
             timeslots={2}
             resizable={false}
