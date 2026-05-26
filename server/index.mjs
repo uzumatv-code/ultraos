@@ -848,8 +848,12 @@ function titleCaseDescription(text) {
 
 function extractAccountPayableDescription(text) {
   const raw = String(text || '').trim();
-  const match = raw.match(/(?:conta|boleto|fatura)\s+(?:da|do|de)?\s*(.+?)(?:\s+(?:no\s+)?valor\b|\s+vencimento\b|\s+vence\b|$)/i);
-  return titleCaseDescription(match?.[1] || 'Conta via WhatsApp');
+  const match = raw.match(/(?:conta|boleto|fatura)\s+(?:da|do|de)?\s*(.+?)(?:\s+(?:no\s+)?valor\b|\s+r\$|\s+\d+(?:[,.]\d{1,2})?\b|\s+vencimento\b|\s+vence\b|$)/i);
+  return titleCaseDescription(
+    (match?.[1] || 'Conta via WhatsApp')
+      .replace(/\s*(?:r\$\s*)?\d+(?:[,.]\d{1,2})?\s*$/i, '')
+      .trim(),
+  );
 }
 
 function extractPaymentMethod(text) {
@@ -871,8 +875,8 @@ function parseFinancialIntent(text) {
   const osMatch = lower.match(/\bos\s*#?\s*(\d+)\b|ordem\s*(?:de\s*servi[cç]o)?\s*#?\s*(\d+)\b/);
   const osNumero = osMatch ? Number(osMatch[1] || osMatch[2]) : null;
 
-  if (/^confirmar\s+[a-z0-9-]+/i.test(raw)) {
-    return { intent: 'confirmar_acao', token: raw.split(/\s+/)[1] };
+  if (/^confirmar(?:\s+[a-z0-9-]+)?$/i.test(raw)) {
+    return { intent: 'confirmar_acao', token: raw.split(/\s+/)[1] || null };
   }
 
   if (/(cadastre|registre|lanca|lancar|lance).*(conta|boleto|fatura)/.test(normalized)) {
@@ -1452,15 +1456,24 @@ app.post('/api/financeiro/ia/webhook', async (req, res) => {
     const intent = parseFinancialIntent(message);
 
     if (intent.intent === 'confirmar_acao') {
+      const queryParams = [authorized.user_id, phone];
+      let tokenFilter = '';
+      if (intent.token) {
+        tokenFilter = 'AND confirmacao_token = ?';
+        queryParams.push(intent.token);
+      }
+
       const [logs] = await pool.query(
         `SELECT * FROM financeiro_ia_logs
-          WHERE user_id = ? AND telefone = ? AND confirmacao_token = ? AND status = 'aguardando_confirmacao'
+          WHERE user_id = ? AND telefone = ? ${tokenFilter} AND status = 'aguardando_confirmacao'
           ORDER BY created_at DESC LIMIT 1`,
-        [authorized.user_id, phone, intent.token],
+        queryParams,
       );
       const pending = logs[0];
       if (!pending) {
-        const reply = 'Nao encontrei uma acao pendente para esse codigo.';
+        const reply = intent.token
+          ? 'Nao encontrei uma acao pendente para esse codigo.'
+          : 'Nao encontrei uma acao pendente para confirmar.';
         await sendFinancialAiReply(authorized.user_id, phone, reply);
         return res.json({ reply, whatsapp_sent: true });
       }
