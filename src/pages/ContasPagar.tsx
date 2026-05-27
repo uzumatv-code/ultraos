@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { DollarSign, Search, Plus, Pencil, Trash2, ChevronLeft, ChevronRight, Check, AlertTriangle, TrendingDown, Calendar } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { toast } from '../components/ToastCustom';
@@ -7,7 +7,6 @@ import { ContaPagarModal } from '../components/ContaPagarModal';
 import { CustomCalendarBills } from '../components/CustomCalendarBills';
 import { ModernCalendarBills } from '../components/ModernCalendarBills';
 import { formatCurrency } from '../utils/formatters';
-import { alerts } from '../utils/alerts';
 import type { ContaPagar, CategoriaFinanceira } from '../types/database';
 import {
   useReactTable,
@@ -19,41 +18,43 @@ import {
 import { Button } from '../components/Button';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/Card';
 
-// Hook personalizado para detectar tamanho da tela
-function useIsMobile() {
-  const [isMobile, setIsMobile] = useState(false);
+function toDateInput(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
 
-  useEffect(() => {
-    const checkIfMobile = () => {
-      setIsMobile(window.innerWidth <= 768);
-    };
+function formatDateBR(value?: string) {
+  if (!value) return '-';
+  const [datePart] = value.split('T');
+  const [year, month, day] = datePart.split('-');
+  if (!year || !month || !day) return new Date(value).toLocaleDateString('pt-BR');
+  return `${day}/${month}/${year}`;
+}
 
-    checkIfMobile();
-    window.addEventListener('resize', checkIfMobile);
-
-    return () => {
-      window.removeEventListener('resize', checkIfMobile);
-    };
-  }, []);
-
-  return isMobile;
+function getMonthRange(date: Date) {
+  const firstDay = new Date(date.getFullYear(), date.getMonth(), 1);
+  const nextMonthFirstDay = new Date(date.getFullYear(), date.getMonth() + 1, 1);
+  return {
+    monthStart: toDateInput(firstDay),
+    nextMonthStart: toDateInput(nextMonthFirstDay),
+  };
 }
 
 export function ContasPagar() {
-  const isMobile = useIsMobile();
   const [contas, setContas] = useState<ContaPagar[]>([]);
   const [categorias, setCategorias] = useState<CategoriaFinanceira[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalAberto, setModalAberto] = useState(false);
   const [contaParaEditar, setContaParaEditar] = useState<ContaPagar>();
-  const [busca, setBusca] = useState('');
   const [buscaCategoria, setBuscaCategoria] = useState('');
   const [pagina, setPagina] = useState(0);
-  const [totalContas, setTotalContas] = useState(0);
   const [statusFiltro, setStatusFiltro] = useState<'todos' | 'pendente' | 'atrasado' | 'pago'>('todos');
   const itensPorPagina = 10;
   const [currentDate, setCurrentDate] = useState(new Date());
   const [totalMes, setTotalMes] = useState(0);
+  const [quantidadeAPagarMes, setQuantidadeAPagarMes] = useState(0);
   const [totalPagoMes, setTotalPagoMes] = useState(0);
   const [contasAtrasadas, setContasAtrasadas] = useState<ContaPagar[]>([]);
   const [globalFilter, setGlobalFilter] = useState('');
@@ -62,16 +63,14 @@ export function ContasPagar() {
   const [contasCalendario, setContasCalendario] = useState<ContaPagar[]>([]);
 
   // Função para obter o primeiro e último dia do mês
-  const getMonthRange = (date: Date) => {
-    const firstDay = new Date(date.getFullYear(), date.getMonth(), 1);
-    const lastDay = new Date(date.getFullYear(), date.getMonth() + 1, 0);
-    return { firstDay, lastDay };
-  };
-
   useEffect(() => {
     buscarDados();
     buscarContasCalendario();
-  }, [pagina, buscaCategoria, statusFiltro, currentDate]);
+  }, [currentDate]);
+
+  useEffect(() => {
+    setPagina(0);
+  }, [globalFilter, buscaCategoria, statusFiltro, currentDate]);
 
   async function buscarContasCalendario() {
     try {
@@ -113,7 +112,7 @@ export function ContasPagar() {
 
       setContasAtrasadas(contasAtrasadasData || []);
 
-      const { firstDay, lastDay } = getMonthRange(currentDate);
+      const { monthStart, nextMonthStart } = getMonthRange(currentDate);
 
       // Buscar total do mês
       const [{ data: contasPendentes }, { data: contasPagas }] = await Promise.all([
@@ -122,16 +121,16 @@ export function ContasPagar() {
         .select('valor, status')
         .eq('user_id', user.id)
         .in('status', ['pendente', 'atrasado'])
-        .gte('data_vencimento', firstDay.toISOString())
-        .lte('data_vencimento', lastDay.toISOString()),
+        .gte('data_vencimento', monthStart)
+        .lt('data_vencimento', nextMonthStart),
         
         supabase
         .from('contas_pagar')
         .select('valor, status')
         .eq('user_id', user.id)
         .eq('status', 'pago')
-        .gte('data_vencimento', firstDay.toISOString())
-        .lte('data_vencimento', lastDay.toISOString())
+        .gte('data_vencimento', monthStart)
+        .lt('data_vencimento', nextMonthStart)
       ]);
 
       const totalPendente = contasPendentes?.reduce((acc, conta) => 
@@ -140,6 +139,7 @@ export function ContasPagar() {
         acc + Number(conta.valor), 0) || 0;
 
       setTotalMes(totalPendente);
+      setQuantidadeAPagarMes(contasPendentes?.length || 0);
       setTotalPagoMes(totalPago);
 
       // Buscar categorias
@@ -152,36 +152,22 @@ export function ContasPagar() {
       setCategorias(categoriasData || []);
 
       // Buscar contas
-      let query = supabase
+      const query = supabase
         .from('contas_pagar')
         .select(`
           *,
           categoria:categorias_financeiras(*)
-        `, { count: 'exact' })
+        `)
         .eq('user_id', user.id)
         .order('data_vencimento', { ascending: true })
-        .gte('data_vencimento', firstDay.toISOString())
-        .lte('data_vencimento', lastDay.toISOString());
+        .gte('data_vencimento', monthStart)
+        .lt('data_vencimento', nextMonthStart);
 
-      if (busca) {
-        query = query.or('descricao.ilike.%' + busca + '%,categoria.nome.ilike.%' + busca + '%');
-      }
-
-      if (buscaCategoria) {
-        query = query.eq('categoria_id', buscaCategoria);
-      }
-
-      if (statusFiltro !== 'todos') {
-        query = query.eq('status', statusFiltro);
-      }
-
-      const { data, count, error } = await query
-        .range(pagina * itensPorPagina, (pagina + 1) * itensPorPagina - 1);
+      const { data, error } = await query;
 
       if (error) throw error;
 
       setContas(data || []);
-      setTotalContas(count || 0);
     } catch (error) {
       console.error('Erro ao buscar dados:', error);
       toast.error('Erro ao carregar contas');
@@ -206,8 +192,9 @@ export function ContasPagar() {
       if (paginatedContas.length === 1 && pagina > 0) {
         setPagina(pagina - 1);
       } else {
-        buscarDados();
+        await buscarDados();
       }
+      await buscarContasCalendario();
     } catch (error) {
       console.error('Erro ao excluir conta:', error);
       toast.error('Erro ao excluir conta');
@@ -232,7 +219,8 @@ export function ContasPagar() {
       if (!response.ok) throw new Error(json.error?.message || 'Erro ao pagar conta');
 
       toast.success('Conta paga e despesa lancada!');
-      buscarDados();
+      await buscarDados();
+      await buscarContasCalendario();
     } catch (error) {
       console.error('Erro ao pagar conta:', error);
       toast.error('Erro ao pagar conta');
@@ -249,7 +237,7 @@ export function ContasPagar() {
           conta.categoria?.nome,
           conta.status,
           formatCurrency(conta.valor),
-          new Date(conta.data_vencimento).toLocaleDateString('pt-BR')
+          formatDateBR(conta.data_vencimento)
         ].join(' ').toLowerCase();
         return values.includes(globalFilter.toLowerCase());
       });
@@ -271,6 +259,13 @@ export function ContasPagar() {
 
   const totalPaginas = Math.ceil(filteredContas.length / itensPorPagina);
 
+  const statusColors = {
+    pendente: 'bg-yellow-100 text-yellow-800',
+    atrasado: 'bg-red-100 text-red-800',
+    pago: 'bg-green-100 text-green-800',
+    cancelado: 'bg-gray-100 text-gray-800'
+  };
+
   // Colunas para TanStack Table
   const columns = useMemo<ColumnDef<ContaPagar, any>[]>(() => [
     {
@@ -288,7 +283,7 @@ export function ContasPagar() {
     {
       header: 'Vencimento',
       accessorKey: 'data_vencimento',
-      cell: info => new Date(info.getValue()).toLocaleDateString('pt-BR'),
+      cell: info => formatDateBR(info.getValue() as string),
     },
     {
       header: 'Valor',
@@ -334,13 +329,6 @@ export function ContasPagar() {
     manualPagination: true,
     pageCount: totalPaginas,
   });
-
-  const statusColors = {
-    pendente: 'bg-yellow-100 text-yellow-800',
-    atrasado: 'bg-red-100 text-red-800',
-    pago: 'bg-green-100 text-green-800',
-    cancelado: 'bg-gray-100 text-gray-800'
-  };
 
   return (
     <div className="min-h-screen overflow-x-hidden bg-gradient-to-br from-purple-50 via-white to-blue-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
@@ -406,6 +394,9 @@ export function ContasPagar() {
                   >
                     {formatCurrency(totalMes)}
                   </motion.p>
+                  <p className="mt-2 text-xs font-medium text-red-600 dark:text-red-400">
+                    {quantidadeAPagarMes} conta(s) pendente(s) ou atrasada(s)
+                  </p>
                 </div>
                 <motion.div 
                   whileHover={{ scale: 1.1, rotate: 10 }}
@@ -735,7 +726,10 @@ export function ContasPagar() {
         }}
         contaParaEditar={contaParaEditar}
         categorias={categorias}
-        onSuccess={buscarDados}
+        onSuccess={async () => {
+          await buscarDados();
+          await buscarContasCalendario();
+        }}
       />
     </div>
   );

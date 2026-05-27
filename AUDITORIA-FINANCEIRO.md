@@ -165,3 +165,42 @@ Financeiro:
 - `npm run migrate:mysql`
 - `node --check server/index.mjs`
 - `npx tsc --noEmit`
+
+## 7. Auditoria de Compatibilidade Mensal - 2026-05-27
+
+### Problemas encontrados
+
+- O dashboard `/financeiro` exibia contas a pagar pendentes/atrasadas sem filtro de mes, enquanto a tela `/contas` filtrava por vencimento do mes selecionado. Isso fazia o total e a quantidade de contas a pagar ficarem incompatíveis entre os módulos.
+- A tela `/contas` aplicava paginação no Supabase com `.range(...)` e depois paginava novamente no cliente com `slice(...)`. Em páginas posteriores, isso podia gerar lista vazia e contagem visual incorreta.
+- Os filtros mensais usavam `toISOString()`, que converte a data local para UTC. Em fuso como America/Sao_Paulo, o primeiro dia do mes pode virar o dia anterior, afetando consultas por `data_vencimento`.
+- O card de `Total a Pagar` mostrava valor, mas não mostrava explicitamente a quantidade de contas pendentes/atrasadas do mes.
+- Após pagar, excluir ou salvar conta a pagar, a lista e o calendário podiam ficar fora de sincronia porque nem todas as rotinas atualizavam os dois conjuntos de dados.
+
+### Correções aplicadas
+
+- `/financeiro` agora calcula contas a pagar usando `data_vencimento >= inicio_do_mes` e `< inicio_do_proximo_mes`.
+- `/financeiro` passou a mostrar um card próprio de `Contas a pagar` com valor e quantidade do mes.
+- `/financeiro` separa `contas atrasadas` em uma consulta própria, para não esconder vencimentos de meses anteriores.
+- `/financeiro` também limita recebíveis pendentes ao mes selecionado, mantendo o painel mensal coerente.
+- `/contas` agora carrega todas as contas do mes selecionado uma vez e aplica filtros/paginação apenas no cliente.
+- `/contas` passou a exibir a quantidade de contas pendentes/atrasadas do mes no card `Total a Pagar`.
+- Datas financeiras passaram a ser formatadas e filtradas com `YYYY-MM-DD` local, evitando deslocamento por UTC.
+- Ações de pagar, excluir e salvar conta a pagar agora atualizam lista e calendário.
+
+### Arquivos alterados nesta auditoria
+
+- `src/pages/Financeiro.tsx`
+- `src/pages/ContasPagar.tsx`
+- `AUDITORIA-FINANCEIRO.md`
+
+### Validação
+
+- `npm run build`: aprovado.
+- `npm run lint`: aprovado sem erros; o projeto permanece com warnings preexistentes de tipagem, hooks e variáveis não usadas.
+- Consulta direta ao banco para contar o mes atual: não executada porque `DATABASE_URL`/`MYSQL_URL` não está configurado no ambiente local desta sessão.
+
+### Pontos restantes
+
+- Validar com uma sessão real e dados de produção/homologação se os totais mensais esperados batem com o banco.
+- Criar uma consulta agregada no backend para retornar valor e quantidade por mes, reduzindo processamento no frontend quando houver alto volume de contas.
+- Avaliar migração definitiva de campos financeiros de data para `DATE`/`DATETIME`, pois ainda há histórico de uso como texto em partes do projeto.

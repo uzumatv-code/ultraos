@@ -53,13 +53,25 @@ type FluxoMensal = { label: string; receitas: number; despesas: number };
 type CategoriaResumo = { nome: string; valor: number; cor: string };
 
 function toDateInput(date: Date) {
-  return date.toISOString().slice(0, 10);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function formatDateBR(value?: string) {
+  if (!value) return 'Sem data';
+  const [datePart] = value.split('T');
+  const [year, month, day] = datePart.split('-');
+  if (!year || !month || !day) return new Date(value).toLocaleDateString('pt-BR');
+  return `${day}/${month}/${year}`;
 }
 
 function getMonthRange(date: Date) {
   const start = new Date(date.getFullYear(), date.getMonth(), 1);
   const end = new Date(date.getFullYear(), date.getMonth() + 1, 0);
-  return { start: toDateInput(start), end: toDateInput(end) };
+  const nextStart = new Date(date.getFullYear(), date.getMonth() + 1, 1);
+  return { start: toDateInput(start), end: toDateInput(end), nextStart: toDateInput(nextStart) };
 }
 
 function getLastSixMonthRange() {
@@ -67,7 +79,8 @@ function getLastSixMonthRange() {
   start.setMonth(start.getMonth() - 5);
   start.setDate(1);
   const end = new Date();
-  return { start: toDateInput(start), end: toDateInput(end) };
+  const nextEnd = new Date(end.getFullYear(), end.getMonth(), end.getDate() + 1);
+  return { start: toDateInput(start), end: toDateInput(end), nextEnd: toDateInput(nextEnd) };
 }
 
 function parseDate(value?: string) {
@@ -157,6 +170,7 @@ export function Financeiro() {
   const [transacoesGrafico, setTransacoesGrafico] = useState<TransacaoFinanceira[]>([]);
   const [categorias, setCategorias] = useState<CategoriaFinanceira[]>([]);
   const [contasPendentes, setContasPendentes] = useState<ContaPagar[]>([]);
+  const [contasAtrasadas, setContasAtrasadas] = useState<ContaPagar[]>([]);
   const [contasReceber, setContasReceber] = useState<ContaReceber[]>([]);
   const [ordensConcluidas, setOrdensConcluidas] = useState<OrdemServico[]>([]);
   const [loading, setLoading] = useState(true);
@@ -169,7 +183,7 @@ export function Financeiro() {
   const [tipoFiltro, setTipoFiltro] = useState<TipoFiltro>('todos');
   const [categoriaFiltro, setCategoriaFiltro] = useState('');
 
-  const { start: monthStart, end: monthEnd } = useMemo(() => getMonthRange(currentDate), [currentDate]);
+  const { start: monthStart, nextStart: nextMonthStart } = useMemo(() => getMonthRange(currentDate), [currentDate]);
   const periodoLabel = currentDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
 
   const buscarDados = useCallback(async () => {
@@ -194,7 +208,7 @@ export function Financeiro() {
         .select('*, categoria:categorias_financeiras(*)')
         .eq('user_id', user.id)
         .gte('data', monthStart)
-        .lte('data', monthEnd)
+        .lt('data', nextMonthStart)
         .order('data', { ascending: false });
 
       if (busca.trim()) transacoesQuery = transacoesQuery.ilike('descricao', `%${busca.trim()}%`);
@@ -206,7 +220,7 @@ export function Financeiro() {
         .select('*, categoria:categorias_financeiras(*)')
         .eq('user_id', user.id)
         .gte('data', chartRange.start)
-        .lte('data', chartRange.end)
+        .lt('data', chartRange.nextEnd)
         .order('data', { ascending: true });
 
       const contasQuery = supabase
@@ -214,6 +228,16 @@ export function Financeiro() {
         .select('*, categoria:categorias_financeiras(*)')
         .eq('user_id', user.id)
         .in('status', ['pendente', 'atrasado'])
+        .gte('data_vencimento', monthStart)
+        .lt('data_vencimento', nextMonthStart)
+        .order('data_vencimento', { ascending: true });
+
+      const contasAtrasadasQuery = supabase
+        .from('contas_pagar')
+        .select('*, categoria:categorias_financeiras(*)')
+        .eq('user_id', user.id)
+        .in('status', ['pendente', 'atrasado'])
+        .lt('data_vencimento', toDateInput(new Date()))
         .order('data_vencimento', { ascending: true });
 
       const contasReceberQuery = supabase
@@ -221,6 +245,8 @@ export function Financeiro() {
         .select('*, cliente:clientes(*), ordem_servico:ordens_servico(*)')
         .eq('user_id', user.id)
         .in('status', ['pendente', 'parcial', 'atrasado'])
+        .gte('data_vencimento', monthStart)
+        .lt('data_vencimento', nextMonthStart)
         .order('data_vencimento', { ascending: true });
 
       const ordensQuery = supabase
@@ -229,7 +255,7 @@ export function Financeiro() {
         .eq('user_id', user.id)
         .eq('status', 'concluido')
         .gte('data_entrega', monthStart)
-        .lte('data_entrega', monthEnd)
+        .lt('data_entrega', nextMonthStart)
         .order('data_entrega', { ascending: false });
 
       const [
@@ -237,14 +263,16 @@ export function Financeiro() {
         { data: transacoesData, error: transacoesError },
         { data: graficoData, error: graficoError },
         { data: contasData, error: contasError },
+        { data: contasAtrasadasData, error: contasAtrasadasError },
         { data: contasReceberData, error: contasReceberError },
         { data: ordensData, error: ordensError },
-      ] = await Promise.all([categoriasQuery, transacoesQuery, transacoesGraficoQuery, contasQuery, contasReceberQuery, ordensQuery]);
+      ] = await Promise.all([categoriasQuery, transacoesQuery, transacoesGraficoQuery, contasQuery, contasAtrasadasQuery, contasReceberQuery, ordensQuery]);
 
       if (categoriasError) throw categoriasError;
       if (transacoesError) throw transacoesError;
       if (graficoError) throw graficoError;
       if (contasError) throw contasError;
+      if (contasAtrasadasError) throw contasAtrasadasError;
       if (contasReceberError) throw contasReceberError;
       if (ordensError) throw ordensError;
 
@@ -252,6 +280,7 @@ export function Financeiro() {
       setTransacoes(transacoesData || []);
       setTransacoesGrafico(graficoData || []);
       setContasPendentes(contasData || []);
+      setContasAtrasadas(contasAtrasadasData || []);
       setContasReceber(contasReceberData || []);
       setOrdensConcluidas(ordensData || []);
     } catch (error) {
@@ -260,7 +289,7 @@ export function Financeiro() {
     } finally {
       setLoading(false);
     }
-  }, [busca, categoriaFiltro, monthEnd, monthStart, navigate, tipoFiltro]);
+  }, [busca, categoriaFiltro, monthStart, navigate, nextMonthStart, tipoFiltro]);
 
   useEffect(() => {
     buscarDados();
@@ -294,11 +323,6 @@ export function Financeiro() {
   );
 
   const lucroLiquido = saldoMes;
-
-  const contasAtrasadas = useMemo(
-    () => contasPendentes.filter((conta) => conta.status === 'atrasado' || (conta.status === 'pendente' && conta.data_vencimento < toDateInput(new Date()))),
-    [contasPendentes],
-  );
 
   const fluxoMensal = useMemo(() => buildFluxoMensal(transacoesGrafico), [transacoesGrafico]);
   const receitasPorCategoria = useMemo(() => summarizeByCategory(transacoes, 'receita'), [transacoes]);
@@ -438,11 +462,12 @@ export function Financeiro() {
           </div>
         </div>
 
-        <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
           <StatCard title="Receitas do mes" value={formatCurrency(receitasMes)} description="Lancamentos filtrados no periodo" tone="green" icon={<ArrowUpRight className="h-5 w-5" />} />
           <StatCard title="Despesas do mes" value={formatCurrency(despesasMes)} description="Saidas registradas no periodo" tone="red" icon={<ArrowDownRight className="h-5 w-5" />} />
           <StatCard title="Lucro liquido" value={formatCurrency(lucroLiquido)} description="Recebido menos despesas" tone={saldoMes >= 0 ? 'blue' : 'amber'} icon={<Wallet className="h-5 w-5" />} />
-          <StatCard title="A receber" value={formatCurrency(totalReceberPendente)} description={`${contasReceber.length} recebivel(is) em aberto`} tone="amber" icon={<Receipt className="h-5 w-5" />} />
+          <StatCard title="Contas a pagar" value={formatCurrency(totalContasPendentes)} description={`${contasPendentes.length} conta(s) no mes`} tone="red" icon={<ArrowDownRight className="h-5 w-5" />} />
+          <StatCard title="A receber" value={formatCurrency(totalReceberPendente)} description={`${contasReceber.length} recebivel(is) no mes`} tone="amber" icon={<Receipt className="h-5 w-5" />} />
         </div>
 
         <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -463,12 +488,14 @@ export function Financeiro() {
             <h2 className="text-lg font-semibold text-gray-950 dark:text-white">Saude do caixa</h2>
             <div className="mt-4 space-y-4">
               <div className="rounded-lg bg-gray-50 p-4 dark:bg-gray-950">
-                <p className="text-sm text-gray-500">Contas pendentes</p>
+                <p className="text-sm text-gray-500">Contas a pagar no mes</p>
                 <p className="mt-1 text-xl font-semibold text-gray-950 dark:text-white">{formatCurrency(totalContasPendentes)}</p>
+                <p className="mt-1 text-xs text-gray-500">{contasPendentes.length} conta(s) pendente(s)</p>
               </div>
               <div className="rounded-lg bg-gray-50 p-4 dark:bg-gray-950">
-                <p className="text-sm text-gray-500">Recebiveis pendentes</p>
+                <p className="text-sm text-gray-500">Recebiveis do mes</p>
                 <p className="mt-1 text-xl font-semibold text-amber-600">{formatCurrency(totalReceberPendente)}</p>
+                <p className="mt-1 text-xs text-gray-500">{contasReceber.length} recebivel(is)</p>
               </div>
               <div className="rounded-lg bg-gray-50 p-4 dark:bg-gray-950">
                 <p className="text-sm text-gray-500">Contas atrasadas</p>
@@ -526,7 +553,7 @@ export function Financeiro() {
             <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4 dark:border-gray-800">
               <div>
                 <h2 className="text-lg font-semibold text-gray-950 dark:text-white">Contas a receber</h2>
-                <p className="text-sm text-gray-500 dark:text-gray-400">{formatCurrency(totalReceberPendente)} em aberto</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400">{formatCurrency(totalReceberPendente)} no mes</p>
               </div>
               <Receipt className="h-5 w-5 text-amber-500" />
             </div>
@@ -540,7 +567,7 @@ export function Financeiro() {
                     <div>
                       <p className="text-sm font-medium text-gray-950 dark:text-white">{conta.descricao}</p>
                       <p className="text-xs text-gray-500">
-                        {conta.data_vencimento ? new Date(conta.data_vencimento).toLocaleDateString('pt-BR') : 'Sem vencimento'} - {conta.status}
+                        {formatDateBR(conta.data_vencimento)} - {conta.status}
                       </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-3">
@@ -560,7 +587,7 @@ export function Financeiro() {
             <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4 dark:border-gray-800">
               <div>
                 <h2 className="text-lg font-semibold text-gray-950 dark:text-white">Contas a pagar</h2>
-                <p className="text-sm text-gray-500 dark:text-gray-400">{formatCurrency(totalContasPendentes)} pendente</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400">{formatCurrency(totalContasPendentes)} no mes - {contasPendentes.length} conta(s)</p>
               </div>
               <ArrowDownRight className="h-5 w-5 text-rose-500" />
             </div>
@@ -571,7 +598,7 @@ export function Financeiro() {
                 <div key={conta.id} className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <p className="text-sm font-medium text-gray-950 dark:text-white">{conta.descricao}</p>
-                    <p className="text-xs text-gray-500">{new Date(conta.data_vencimento).toLocaleDateString('pt-BR')} - {conta.categoria?.nome || 'Sem categoria'}</p>
+                    <p className="text-xs text-gray-500">{formatDateBR(conta.data_vencimento)} - {conta.categoria?.nome || 'Sem categoria'}</p>
                   </div>
                     <div className="flex flex-wrap items-center gap-3">
                     <p className="text-sm font-semibold text-rose-600">{formatCurrency(conta.valor)}</p>
@@ -615,7 +642,7 @@ export function Financeiro() {
                     </tr>
                   ) : ultimasTransacoes.map((transacao) => (
                     <tr key={transacao.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/60">
-                      <td className="px-5 py-4 text-sm text-gray-600 dark:text-gray-300">{new Date(transacao.data).toLocaleDateString('pt-BR')}</td>
+                      <td className="px-5 py-4 text-sm text-gray-600 dark:text-gray-300">{formatDateBR(transacao.data)}</td>
                       <td className="px-5 py-4">
                         <button
                           onClick={() => {
@@ -671,7 +698,7 @@ export function Financeiro() {
                   <div key={conta.id} className="flex items-center justify-between gap-3 px-5 py-4">
                     <div>
                       <p className="text-sm font-medium text-gray-950 dark:text-white">{conta.descricao}</p>
-                      <p className="text-xs text-gray-500">{new Date(conta.data_vencimento).toLocaleDateString('pt-BR')} - {conta.categoria?.nome || 'Sem categoria'}</p>
+                      <p className="text-xs text-gray-500">{formatDateBR(conta.data_vencimento)} - {conta.categoria?.nome || 'Sem categoria'}</p>
                     </div>
                     <p className={`text-sm font-semibold ${conta.status === 'atrasado' ? 'text-rose-600' : 'text-gray-900 dark:text-white'}`}>{formatCurrency(conta.valor)}</p>
                   </div>
