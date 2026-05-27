@@ -291,8 +291,8 @@ export function NotasFiscais() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-100 dark:from-gray-900 dark:via-blue-900/20 dark:to-purple-900/20">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+    <div className="min-h-screen overflow-x-hidden bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-100 dark:from-gray-900 dark:via-blue-900/20 dark:to-purple-900/20">
+      <div className="responsive-page">
         {/* Header Animado */}
         <motion.div
           initial={{ opacity: 0, y: -20 }}
@@ -301,12 +301,12 @@ export function NotasFiscais() {
           className="mb-8"
         >
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
-            <div className="flex items-center gap-4">
-              <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 dark:from-blue-600 dark:to-purple-700 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-500/30 dark:shadow-blue-500/20">
+            <div className="flex min-w-0 items-center gap-3 sm:gap-4">
+              <div className="h-12 w-12 sm:h-16 sm:w-16 shrink-0 bg-gradient-to-br from-blue-500 to-purple-600 dark:from-blue-600 dark:to-purple-700 rounded-xl sm:rounded-2xl flex items-center justify-center shadow-lg shadow-blue-500/30 dark:shadow-blue-500/20">
                 <FileText className="w-8 h-8 text-white" />
               </div>
-              <div>
-                <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 dark:from-blue-400 dark:via-indigo-400 dark:to-purple-400 bg-clip-text text-transparent">
+              <div className="min-w-0">
+                <h1 className="responsive-heading bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 dark:from-blue-400 dark:via-indigo-400 dark:to-purple-400 bg-clip-text text-transparent">
                   Notas Fiscais (NFS-e)
                 </h1>
                 <p className="text-gray-600 dark:text-gray-400 mt-1">
@@ -320,7 +320,7 @@ export function NotasFiscais() {
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
               onClick={() => setShowConfigFiscalModal(true)}
-              className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 dark:from-blue-500 dark:to-purple-500 text-white rounded-xl transition-all shadow-lg shadow-blue-500/30 dark:shadow-blue-500/20 font-medium"
+              className="flex w-full items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 dark:from-blue-500 dark:to-purple-500 text-white rounded-xl transition-all shadow-lg shadow-blue-500/30 dark:shadow-blue-500/20 font-medium sm:w-auto"
               title="Configurar Dados Fiscais"
             >
               <Building2 className="w-5 h-5" />
@@ -330,48 +330,48 @@ export function NotasFiscais() {
           </div>
 
           {/* Estatísticas */}
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3 sm:gap-4 mb-6">
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.1 }}
-              className="bg-white/80 dark:bg-gray-800/80 backdrop-blur-xl rounded-2xl p-4 border border-gray-100 dark:border-gray-700 hover:shadow-xl transition-all group"
+              className="bg-white/80 dark:bg-gray-800/80 backdrop-blur-xl rounded-xl sm:rounded-2xl p-4 border border-gray-100 dark:border-gray-700 hover:shadow-xl transition-all group"
             >
               <p className="text-sm font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide">📊 Total</p>
-              <p className="text-3xl font-bold bg-gradient-to-r from-gray-700 to-gray-900 dark:from-gray-200 dark:to-gray-100 bg-clip-text text-transparent">{stats.total}</p>
+              <p className="text-2xl sm:text-3xl font-bold bg-gradient-to-r from-gray-700 to-gray-900 dark:from-gray-200 dark:to-gray-100 bg-clip-text text-transparent">{stats.total}</p>
             </motion.div>
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.15 }}
-              className="bg-green-50/80 dark:bg-green-900/20 backdrop-blur-xl rounded-2xl p-4 border border-green-100 dark:border-green-700/30 hover:shadow-xl transition-all group"
+              className="bg-green-50/80 dark:bg-green-900/20 backdrop-blur-xl rounded-xl sm:rounded-2xl p-4 border border-green-100 dark:border-green-700/30 hover:shadow-xl transition-all group"
             >
               <p className="text-sm font-semibold text-green-600 dark:text-green-400 uppercase tracking-wide">✅ Autorizadas</p>
-              <p className="text-3xl font-bold bg-gradient-to-r from-green-600 to-emerald-600 dark:from-green-400 dark:to-emerald-400 bg-clip-text text-transparent">{stats.autorizadas}</p>
+              <p className="text-2xl sm:text-3xl font-bold bg-gradient-to-r from-green-600 to-emerald-600 dark:from-green-400 dark:to-emerald-400 bg-clip-text text-transparent">{stats.autorizadas}</p>
             </motion.div>
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.2 }}
-              className="bg-gray-50/80 dark:bg-gray-800/50 backdrop-blur-xl rounded-2xl p-4 border border-gray-100 dark:border-gray-700 hover:shadow-xl transition-all group"
+              className="bg-gray-50/80 dark:bg-gray-800/50 backdrop-blur-xl rounded-xl sm:rounded-2xl p-4 border border-gray-100 dark:border-gray-700 hover:shadow-xl transition-all group"
             >
               <p className="text-sm font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide">📝 Rascunho</p>
-              <p className="text-3xl font-bold bg-gradient-to-r from-gray-600 to-gray-800 dark:from-gray-300 dark:to-gray-100 bg-clip-text text-transparent">{stats.rascunho}</p>
+              <p className="text-2xl sm:text-3xl font-bold bg-gradient-to-r from-gray-600 to-gray-800 dark:from-gray-300 dark:to-gray-100 bg-clip-text text-transparent">{stats.rascunho}</p>
             </motion.div>
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.25 }}
-              className="bg-red-50/80 dark:bg-red-900/20 backdrop-blur-xl rounded-2xl p-4 border border-red-100 dark:border-red-700/30 hover:shadow-xl transition-all group"
+              className="bg-red-50/80 dark:bg-red-900/20 backdrop-blur-xl rounded-xl sm:rounded-2xl p-4 border border-red-100 dark:border-red-700/30 hover:shadow-xl transition-all group"
             >
               <p className="text-sm font-semibold text-red-600 dark:text-red-400 uppercase tracking-wide">❌ Rejeitadas</p>
-              <p className="text-3xl font-bold bg-gradient-to-r from-red-600 to-rose-600 dark:from-red-400 dark:to-rose-400 bg-clip-text text-transparent">{stats.rejeitadas}</p>
+              <p className="text-2xl sm:text-3xl font-bold bg-gradient-to-r from-red-600 to-rose-600 dark:from-red-400 dark:to-rose-400 bg-clip-text text-transparent">{stats.rejeitadas}</p>
             </motion.div>
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.3 }}
-              className="bg-blue-50/80 dark:bg-blue-900/20 backdrop-blur-xl rounded-2xl p-4 border border-blue-100 dark:border-blue-700/30 hover:shadow-xl transition-all group"
+              className="bg-blue-50/80 dark:bg-blue-900/20 backdrop-blur-xl rounded-xl sm:rounded-2xl p-4 border border-blue-100 dark:border-blue-700/30 hover:shadow-xl transition-all group"
             >
               <p className="text-sm font-semibold text-blue-600 dark:text-blue-400 uppercase tracking-wide">💰 Valor</p>
               <p className="text-xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 dark:from-blue-400 dark:to-indigo-400 bg-clip-text text-transparent">{formatCurrency(stats.valorTotal)}</p>
@@ -444,7 +444,7 @@ export function NotasFiscais() {
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: index * 0.05 }}
-                  className="bg-white/80 dark:bg-gray-800/80 backdrop-blur-xl rounded-2xl shadow-lg p-6 border border-gray-100 dark:border-gray-700 hover:shadow-2xl dark:hover:shadow-blue-500/10 transition-all group"
+                  className="bg-white/80 dark:bg-gray-800/80 backdrop-blur-xl rounded-xl sm:rounded-2xl shadow-lg p-4 sm:p-6 border border-gray-100 dark:border-gray-700 hover:shadow-2xl dark:hover:shadow-blue-500/10 transition-all group"
                 >
                   <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                     <div className="flex-1">
@@ -509,7 +509,7 @@ export function NotasFiscais() {
                       )}
                     </div>
 
-                    <div className="flex flex-wrap md:flex-col gap-2">
+                    <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap md:flex-col">
                       {/* Enviar - apenas rascunhos */}
                       {nota.status === 'rascunho' && (
                         <motion.button
@@ -650,9 +650,9 @@ export function NotasFiscais() {
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="fixed inset-4 md:inset-10 z-50 flex items-center justify-center"
+              className="fixed inset-2 md:inset-10 z-50 flex items-center justify-center"
             >
-              <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+              <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[calc(100dvh-1rem)] flex flex-col">
                 <div className="flex items-center justify-between p-6 border-b">
                   <h2 className="text-xl font-bold text-gray-900">
                     XML - RPS {selectedNota.numero_rps}
@@ -669,7 +669,7 @@ export function NotasFiscais() {
                     <code>{selectedNota.xml_envio}</code>
                   </pre>
                 </div>
-                <div className="p-6 border-t flex justify-end gap-3">
+                <div className="p-4 sm:p-6 border-t flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
                   <button
                     onClick={() => handleDownloadXML(selectedNota)}
                     className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors flex items-center gap-2"
@@ -729,9 +729,9 @@ export function NotasFiscais() {
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="fixed inset-0 z-50 flex items-center justify-center p-4"
+              className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4"
             >
-              <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+              <div className="bg-white dark:bg-gray-800 rounded-xl sm:rounded-2xl shadow-2xl max-w-4xl w-full max-h-[calc(100dvh-1rem)] overflow-y-auto">
                 <div className="p-6 border-b border-gray-200 dark:border-gray-700">
                   <div className="flex items-center justify-between">
                     <div>
@@ -751,7 +751,7 @@ export function NotasFiscais() {
                   </div>
                 </div>
 
-                <div className="p-6 grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="p-4 sm:p-6 grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
                   {/* Modelo Clássico */}
                   <motion.button
                     whileHover={{ scale: 1.03, y: -5 }}

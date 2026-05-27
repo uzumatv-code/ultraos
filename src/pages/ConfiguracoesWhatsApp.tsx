@@ -176,10 +176,10 @@ export function ConfiguracoesWhatsApp() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-50 via-blue-50 to-indigo-100">
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        <div className="mb-6 flex items-center space-x-3">
-          <div className="w-12 h-12 bg-gradient-to-br from-green-600 to-blue-600 rounded-xl flex items-center justify-center">
+    <div className="min-h-screen overflow-x-hidden bg-gradient-to-br from-purple-50 via-blue-50 to-indigo-100">
+      <div className="mx-auto w-full max-w-4xl px-3 py-4 sm:px-6 lg:px-8 sm:py-6">
+        <div className="mb-6 flex items-center gap-3">
+          <div className="h-11 w-11 sm:h-12 sm:w-12 shrink-0 bg-gradient-to-br from-green-600 to-blue-600 rounded-xl flex items-center justify-center">
             <Webhook className="w-6 h-6 text-white" />
           </div>
           <h1 className="text-2xl font-bold bg-gradient-to-r from-green-600 to-blue-600 bg-clip-text text-transparent">
@@ -190,7 +190,7 @@ export function ConfiguracoesWhatsApp() {
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-white/80 backdrop-blur-lg rounded-2xl shadow-xl p-6"
+          className="bg-white/80 backdrop-blur-lg rounded-xl sm:rounded-2xl shadow-xl p-4 sm:p-6"
         >
           {/* Explicação do Sistema */}
           <div className="mb-6 p-4 bg-blue-50 rounded-lg border-l-4 border-blue-400">
@@ -374,13 +374,13 @@ export function ConfiguracoesWhatsApp() {
             )}
 
             {/* Botões de Ação */}
-            <div className="flex justify-end space-x-4 pt-4 border-t">
+            <div className="flex flex-col-reverse gap-3 pt-4 border-t sm:flex-row sm:justify-end">
               <motion.button
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
                 onClick={saveConfig}
                 disabled={loading}
-                className="flex items-center space-x-2 px-6 py-2 bg-gradient-to-r from-green-600 to-blue-600 text-white rounded-lg hover:from-green-700 hover:to-blue-700 disabled:opacity-50"
+                className="flex w-full items-center justify-center gap-2 px-6 py-2 bg-gradient-to-r from-green-600 to-blue-600 text-white rounded-lg hover:from-green-700 hover:to-blue-700 disabled:opacity-50 sm:w-auto"
               >
                 <Save className="w-4 h-4" />
                 <span>{loading ? 'Salvando...' : 'Salvar Configurações'}</span>

@@ -309,8 +309,8 @@ export function TemplatesModal({ isOpen, onClose }: TemplatesModalProps) {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl h-[90vh] flex flex-col overflow-hidden">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-2 sm:p-4">
+      <div className="bg-white rounded-xl sm:rounded-2xl shadow-2xl w-full max-w-6xl h-[calc(100dvh-1rem)] sm:h-[90vh] flex flex-col overflow-hidden">
         {/* Header */}
         <div className="p-6 border-b border-gray-200 bg-gradient-to-r from-purple-600 to-blue-600 flex-shrink-0">
           <div className="flex items-center justify-between text-white">
@@ -331,9 +331,9 @@ export function TemplatesModal({ isOpen, onClose }: TemplatesModalProps) {
         </div>
 
         {/* Content Area */}
-        <div className="flex flex-1 min-h-0">
+        <div className="flex flex-1 min-h-0 flex-col lg:flex-row">
           {/* Sidebar - Lista de Templates */}
-          <div className="w-80 border-r border-gray-200 flex flex-col flex-shrink-0">
+          <div className="w-full lg:w-80 border-b lg:border-b-0 lg:border-r border-gray-200 flex flex-col flex-shrink-0 max-h-48 lg:max-h-none">
             <div className="p-4 flex-1 overflow-y-auto">
               <h3 className="font-semibold text-gray-900 mb-4">Tipos de Templates</h3>
               <div className="space-y-2">
@@ -389,7 +389,7 @@ export function TemplatesModal({ isOpen, onClose }: TemplatesModalProps) {
             )}
 
             {/* Editor and Variables Area */}
-            <div className="flex flex-1 min-h-0">
+            <div className="flex flex-1 min-h-0 flex-col xl:flex-row">
               {/* Editor */}
               <div className="flex-1 flex flex-col min-w-0">
                 {/* Form Content */}
@@ -452,7 +452,7 @@ export function TemplatesModal({ isOpen, onClose }: TemplatesModalProps) {
               </div>
 
               {/* Variables Panel */}
-              <div className="w-80 border-l border-gray-200 flex flex-col flex-shrink-0">
+              <div className="w-full xl:w-80 border-t xl:border-t-0 xl:border-l border-gray-200 flex flex-col flex-shrink-0 max-h-56 xl:max-h-none">
                 <div className="p-4 flex-1 overflow-y-auto">
                   <h4 className="font-semibold text-gray-900 mb-4">Variáveis Disponíveis</h4>
                   <div className="space-y-2 mb-6">

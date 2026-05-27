@@ -73,21 +73,21 @@ export function Instrumentos() {
 
   return (
     <>
-      <div className="min-h-screen bg-gradient-to-br from-purple-50/50 via-blue-50/30 to-indigo-50/50 dark:from-transparent dark:via-transparent dark:to-transparent">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-4 sm:space-y-0">
+      <div className="min-h-screen overflow-x-hidden bg-gradient-to-br from-purple-50/50 via-blue-50/30 to-indigo-50/50 dark:from-transparent dark:via-transparent dark:to-transparent">
+        <div className="responsive-page">
+          <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <motion.div 
               initial={{ opacity: 0, x: -20 }}
               animate={{ opacity: 1, x: 0 }}
-              className="flex items-center space-x-3"
+              className="flex items-center gap-3"
             >
               <motion.div 
                 whileHover={{ scale: 1.1, rotate: 5 }}
-                className="w-12 h-12 bg-gradient-to-br from-cyan-500 to-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-cyan-500/30"
+                className="h-11 w-11 sm:h-12 sm:w-12 shrink-0 bg-gradient-to-br from-cyan-500 to-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-cyan-500/30"
               >
                 <Music2 className="w-6 h-6 text-white" />
               </motion.div>
-              <h1 className="text-3xl font-bold bg-gradient-to-r from-cyan-600 to-blue-600 dark:from-cyan-400 dark:to-blue-400 bg-clip-text text-transparent">
+              <h1 className="responsive-heading bg-gradient-to-r from-cyan-600 to-blue-600 dark:from-cyan-400 dark:to-blue-400 bg-clip-text text-transparent">
                 Instrumentos
               </h1>
             </motion.div>
@@ -95,9 +95,9 @@ export function Instrumentos() {
             <motion.div 
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
-              className="flex space-x-4"
+              className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row"
             >
-              <div className="relative">
+              <div className="relative w-full sm:w-72">
                 <Search className="w-5 h-5 text-gray-400 dark:text-gray-500 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
@@ -115,7 +115,7 @@ export function Instrumentos() {
                   setInstrumentoParaEditar(undefined);
                   setModalAberto(true);
                 }}
-                className="px-4 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-white font-medium rounded-lg transition-all duration-300 flex items-center space-x-2 shadow-lg shadow-cyan-500/30 dark:shadow-cyan-500/20"
+                className="w-full sm:w-auto px-4 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-white font-medium rounded-lg transition-all duration-300 flex items-center justify-center gap-2 shadow-lg shadow-cyan-500/30 dark:shadow-cyan-500/20"
               >
                 <Plus className="w-5 h-5" />
                 <span>Novo Instrumento</span>
@@ -128,7 +128,7 @@ export function Instrumentos() {
             animate={{ opacity: 1, y: 0 }}
             className="glass dark:glass-dark rounded-2xl shadow-lg dark:shadow-2xl overflow-hidden border border-gray-100 dark:border-purple-500/10"
           >
-            <div className="overflow-x-auto">
+            <div className="responsive-table-wrap">
               <table className="w-full">
                 <thead>
                   <tr className="border-b border-gray-100 dark:border-gray-800 bg-gradient-to-r from-cyan-50/50 to-blue-50/50 dark:from-cyan-900/10 dark:to-blue-900/10">

@@ -383,15 +383,15 @@ ${servicosText || 'Nenhum serviço registrado.'}`;
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-violet-50 via-purple-50 to-fuchsia-100 dark:from-gray-900 dark:via-purple-900/20 dark:to-fuchsia-900/20">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+    <div className="min-h-screen overflow-x-hidden bg-gradient-to-br from-violet-50 via-purple-50 to-fuchsia-100 dark:from-gray-900 dark:via-purple-900/20 dark:to-fuchsia-900/20">
+      <div className="responsive-page">
         {/* Header com animação */}
         <motion.div
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
           className="mb-6"
         >
-          <div className="flex items-center gap-4 mb-4">
+          <div className="flex flex-col gap-4 mb-4 sm:flex-row sm:items-center">
             <motion.button
               whileHover={{ scale: 1.1, x: -5 }}
               whileTap={{ scale: 0.9 }}
@@ -401,12 +401,12 @@ ${servicosText || 'Nenhum serviço registrado.'}`;
               <ArrowLeft className="w-5 h-5 text-purple-600 dark:text-purple-400" />
             </motion.button>
             
-            <div className="flex items-center gap-4">
-              <div className="w-16 h-16 bg-gradient-to-br from-purple-500 via-violet-500 to-fuchsia-500 rounded-2xl flex items-center justify-center shadow-lg shadow-purple-500/30">
+            <div className="flex min-w-0 items-center gap-3 sm:gap-4">
+              <div className="h-12 w-12 sm:h-16 sm:w-16 shrink-0 bg-gradient-to-br from-purple-500 via-violet-500 to-fuchsia-500 rounded-xl sm:rounded-2xl flex items-center justify-center shadow-lg shadow-purple-500/30">
                 <FileText className="w-8 h-8 text-white" />
               </div>
-              <div>
-                <h1 className="text-4xl font-bold bg-gradient-to-r from-purple-600 via-violet-600 to-fuchsia-600 dark:from-purple-400 dark:via-violet-400 dark:to-fuchsia-400 bg-clip-text text-transparent">
+              <div className="min-w-0">
+                <h1 className="responsive-heading bg-gradient-to-r from-purple-600 via-violet-600 to-fuchsia-600 dark:from-purple-400 dark:via-violet-400 dark:to-fuchsia-400 bg-clip-text text-transparent">
                   {id ? '✏️ Editar Ordem' : '📝 Nova Ordem'}
                 </h1>
                 <p className="text-gray-600 dark:text-gray-400 mt-1">
@@ -421,17 +421,17 @@ ${servicosText || 'Nenhum serviço registrado.'}`;
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.1 }}
-          className="bg-white/80 dark:bg-gray-800/80 backdrop-blur-xl rounded-2xl shadow-xl border border-gray-200 dark:border-gray-700"
+          className="bg-white/80 dark:bg-gray-800/80 backdrop-blur-xl rounded-xl sm:rounded-2xl shadow-xl border border-gray-200 dark:border-gray-700"
         >
           {/* Form */}
-          <div className="p-6 md:p-8">
+          <div className="p-4 sm:p-6 md:p-8">
           <form onSubmit={handleSubmit} className="space-y-6">
             {/* Seção: Informações do Cliente - MELHORADO */}
             <motion.div
               initial={{ opacity: 0, x: -20 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: 0.2 }}
-              className="bg-gradient-to-br from-blue-50 to-cyan-50 dark:from-blue-900/20 dark:to-cyan-900/20 rounded-xl p-6 space-y-4 border border-blue-100 dark:border-blue-800/30"
+              className="bg-gradient-to-br from-blue-50 to-cyan-50 dark:from-blue-900/20 dark:to-cyan-900/20 rounded-xl p-4 sm:p-6 space-y-4 border border-blue-100 dark:border-blue-800/30"
             >
               <h3 className="text-lg font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
                 <Users className="w-5 h-5 text-blue-600 dark:text-blue-400" />
@@ -445,8 +445,8 @@ ${servicosText || 'Nenhum serviço registrado.'}`;
                   animate={{ opacity: 1, y: 0 }}
                   className="bg-gradient-to-r from-blue-500 to-cyan-500 rounded-xl p-4 shadow-lg"
                 >
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="flex items-center gap-3 flex-1">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex min-w-0 flex-1 items-center gap-3">
                       <div className="w-12 h-12 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center">
                         <Star className="w-6 h-6 text-white" />
                       </div>
@@ -461,7 +461,7 @@ ${servicosText || 'Nenhum serviço registrado.'}`;
                       whileTap={{ scale: 0.95 }}
                       type="button"
                       onClick={() => setClienteId(clientes[0].id)}
-                      className="px-6 py-3 bg-white text-blue-600 font-bold rounded-xl shadow-lg hover:shadow-xl transition-all flex items-center gap-2"
+                      className="w-full sm:w-auto px-6 py-3 bg-white text-blue-600 font-bold rounded-xl shadow-lg hover:shadow-xl transition-all flex items-center justify-center gap-2"
                     >
                       <Check className="w-5 h-5" />
                       Selecionar
@@ -965,7 +965,7 @@ ${servicosText || 'Nenhum serviço registrado.'}`;
                       whileHover={{ scale: 1.02 }}
                       className="p-5 bg-gradient-to-r from-green-500 to-emerald-500 rounded-xl font-bold shadow-lg"
                     >
-                      <div className="flex items-center justify-between">
+                      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
                         <span className="text-white text-lg">💰 Total a Pagar</span>
                         <span className="text-white text-2xl">{formatCurrency(valorServicos - desconto)}</span>
                       </div>
@@ -1132,7 +1132,7 @@ ${servicosText || 'Nenhum serviço registrado.'}`;
               transition={{ delay: 0.7 }}
               className="bg-gradient-to-br from-slate-50 to-gray-50 dark:from-slate-900/20 dark:to-gray-900/20 rounded-xl p-6 space-y-4 border border-slate-100 dark:border-slate-800/30"
             >
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <h3 className="text-lg font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
                   <FileText className="w-5 h-5 text-slate-600 dark:text-slate-400" />
                   📋 Mensagem para o Cliente
@@ -1208,14 +1208,14 @@ https://www.instagram.com/luthieriabrasilia/`;
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.8 }}
-              className="flex justify-end gap-3 pt-6 border-t border-gray-200 dark:border-gray-700"
+              className="flex flex-col-reverse gap-3 pt-6 border-t border-gray-200 dark:border-gray-700 sm:flex-row sm:justify-end"
             >
               <motion.button
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
                 type="button"
                 onClick={() => navigate('/ordens')}
-                className="px-6 py-3 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-xl transition-all"
+                className="w-full sm:w-auto px-6 py-3 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-xl transition-all"
               >
                 ❌ Cancelar
               </motion.button>
@@ -1224,7 +1224,7 @@ https://www.instagram.com/luthieriabrasilia/`;
                 whileTap={{ scale: 0.95 }}
                 type="submit"
                 disabled={loading}
-                className="px-6 py-3 bg-gradient-to-r from-purple-600 via-violet-600 to-fuchsia-600 text-white font-bold rounded-xl hover:from-purple-700 hover:via-violet-700 hover:to-fuchsia-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-lg shadow-purple-500/30"
+                className="w-full sm:w-auto px-6 py-3 bg-gradient-to-r from-purple-600 via-violet-600 to-fuchsia-600 text-white font-bold rounded-xl hover:from-purple-700 hover:via-violet-700 hover:to-fuchsia-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg shadow-purple-500/30"
               >
                 <span>{loading ? '⏳ Salvando...' : (id ? '✅ Atualizar Ordem' : '📝 Criar Ordem')}</span>
                 <Send className="w-5 h-5" />
@@ -1282,9 +1282,9 @@ https://www.instagram.com/luthieriabrasilia/`;
 
         {/* Modal do Calendário */}
         {showCalendar && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
-            <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-3xl">
-              <div className="flex justify-between items-center mb-4">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/50">
+            <div className="bg-white rounded-xl shadow-xl p-4 sm:p-6 w-full max-w-3xl max-h-[calc(100dvh-1rem)] overflow-y-auto">
+              <div className="flex items-start justify-between gap-3 mb-4">
                 <h3 className="text-lg font-semibold text-gray-800">Selecione a Data de Previsão</h3>
                 <button
                   type="button"
@@ -1303,7 +1303,7 @@ https://www.instagram.com/luthieriabrasilia/`;
                   center: 'title',
                   right: 'dayGridMonth,timeGridWeek'
                 }}
-                height={500}
+                height="auto"
                 selectable={true}
                 select={(info) => {
                   const date = new Date(info.start);

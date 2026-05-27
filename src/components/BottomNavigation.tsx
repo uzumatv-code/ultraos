@@ -14,8 +14,8 @@ export function BottomNavigation() {
   ];
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-50 glass dark:glass-dark border-t border-gray-200/50 dark:border-gray-700/50 shadow-glass-lg lg:hidden">
-      <div className="flex items-center justify-around h-16 max-w-lg mx-auto px-2">
+    <nav className="fixed bottom-0 left-0 right-0 z-50 glass dark:glass-dark border-t border-gray-200/50 dark:border-gray-700/50 shadow-glass-lg lg:hidden pb-[env(safe-area-inset-bottom)]">
+      <div className="flex items-center justify-around h-16 max-w-lg mx-auto px-1.5">
         {navItems.map((item) => {
           const Icon = item.icon;
           const isActive = location.pathname === item.path;
@@ -24,7 +24,7 @@ export function BottomNavigation() {
             <Link
               key={item.path}
               to={item.path}
-              className="relative flex flex-col items-center justify-center flex-1 h-full group"
+              className="relative flex min-w-0 flex-1 flex-col items-center justify-center h-full group px-1"
             >
               {/* Indicador ativo com animação melhorada */}
               {isActive && (
@@ -45,11 +45,11 @@ export function BottomNavigation() {
                 animate={isActive ? { scale: [1, 1.1, 1] } : {}}
                 transition={{ duration: 0.3 }}
               >
-                <Icon className={`w-6 h-6 ${isActive ? 'drop-shadow-md' : ''}`} />
+                <Icon className={`w-5 h-5 sm:w-6 sm:h-6 ${isActive ? 'drop-shadow-md' : ''}`} />
               </motion.div>
               
               {/* Label com gradiente quando ativo */}
-              <span className={`relative z-10 text-xs mt-1 font-medium transition-all duration-300 ${
+              <span className={`relative z-10 mt-1 max-w-full truncate text-[10px] sm:text-xs font-medium transition-all duration-300 ${
                 isActive 
                   ? 'text-gradient font-semibold' 
                   : 'text-gray-500 dark:text-gray-400 group-hover:text-gray-700 dark:group-hover:text-gray-300'

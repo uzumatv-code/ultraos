@@ -153,19 +153,19 @@ export function Dashboard() {
   };
 
   return (
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="responsive-page overflow-x-hidden">
         {/* Cards de Estatísticas com design aprimorado */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 lg:gap-6 mb-6 sm:mb-8">
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.1 }}
-            className="glass dark:glass-dark rounded-2xl p-6 shadow-glass card-hover group"
+            className="glass dark:glass-dark rounded-xl sm:rounded-2xl p-4 sm:p-6 shadow-glass card-hover group"
           >
-            <div className="flex items-center justify-between">
-              <div>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
                 <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Clientes</p>
-                <p className="text-3xl font-bold text-gray-800 dark:text-white mt-1">
+                <p className="text-2xl sm:text-3xl font-bold text-gray-800 dark:text-white mt-1 break-words">
                   {loading ? (
                     <span className="animate-pulse">...</span>
                   ) : (
@@ -180,7 +180,7 @@ export function Dashboard() {
                 </p>
               </div>
               <motion.div 
-                className="w-14 h-14 bg-gradient-to-br from-purple-100 to-purple-200 dark:from-purple-900/40 dark:to-purple-800/40 rounded-2xl flex items-center justify-center shadow-lg group-hover:shadow-neon transition-all"
+                className="w-12 h-12 sm:w-14 sm:h-14 shrink-0 bg-gradient-to-br from-purple-100 to-purple-200 dark:from-purple-900/40 dark:to-purple-800/40 rounded-xl sm:rounded-2xl flex items-center justify-center shadow-lg group-hover:shadow-neon transition-all"
                 whileHover={{ rotate: 360, scale: 1.1 }}
                 transition={{ duration: 0.5 }}
               >
@@ -193,12 +193,12 @@ export function Dashboard() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.2 }}
-            className="glass dark:glass-dark rounded-2xl p-6 shadow-glass card-hover group"
+            className="glass dark:glass-dark rounded-xl sm:rounded-2xl p-4 sm:p-6 shadow-glass card-hover group"
           >
-            <div className="flex items-center justify-between">
-              <div>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
                 <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Ordens Abertas</p>
-                <p className="text-3xl font-bold text-gray-800 dark:text-white mt-1">
+                <p className="text-2xl sm:text-3xl font-bold text-gray-800 dark:text-white mt-1 break-words">
                   {loading ? (
                     <span className="animate-pulse">...</span>
                   ) : (
@@ -213,7 +213,7 @@ export function Dashboard() {
                 </p>
               </div>
               <motion.div 
-                className="w-14 h-14 bg-gradient-to-br from-blue-100 to-blue-200 dark:from-blue-900/40 dark:to-blue-800/40 rounded-2xl flex items-center justify-center shadow-lg group-hover:shadow-neon transition-all"
+                className="w-12 h-12 sm:w-14 sm:h-14 shrink-0 bg-gradient-to-br from-blue-100 to-blue-200 dark:from-blue-900/40 dark:to-blue-800/40 rounded-xl sm:rounded-2xl flex items-center justify-center shadow-lg group-hover:shadow-neon transition-all"
                 whileHover={{ rotate: 360, scale: 1.1 }}
                 transition={{ duration: 0.5 }}
               >
@@ -226,12 +226,12 @@ export function Dashboard() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.3 }}
-            className="glass dark:glass-dark rounded-2xl p-6 shadow-glass card-hover group"
+            className="glass dark:glass-dark rounded-xl sm:rounded-2xl p-4 sm:p-6 shadow-glass card-hover group"
           >
-            <div className="flex items-center justify-between">
-              <div>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
                 <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Concluídas</p>
-                <p className="text-3xl font-bold text-gray-800 dark:text-white mt-1">
+                <p className="text-2xl sm:text-3xl font-bold text-gray-800 dark:text-white mt-1 break-words">
                   {loading ? (
                     <span className="animate-pulse">...</span>
                   ) : (
@@ -246,7 +246,7 @@ export function Dashboard() {
                 </p>
               </div>
               <motion.div 
-                className="w-14 h-14 bg-gradient-to-br from-green-100 to-green-200 dark:from-green-900/40 dark:to-green-800/40 rounded-2xl flex items-center justify-center shadow-lg group-hover:shadow-neon transition-all"
+                className="w-12 h-12 sm:w-14 sm:h-14 shrink-0 bg-gradient-to-br from-green-100 to-green-200 dark:from-green-900/40 dark:to-green-800/40 rounded-xl sm:rounded-2xl flex items-center justify-center shadow-lg group-hover:shadow-neon transition-all"
                 whileHover={{ rotate: 360, scale: 1.1 }}
                 transition={{ duration: 0.5 }}
               >
@@ -259,13 +259,13 @@ export function Dashboard() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.4 }}
-            className="glass dark:glass-dark rounded-2xl p-6 shadow-glass card-hover group cursor-pointer"
+            className="glass dark:glass-dark rounded-xl sm:rounded-2xl p-4 sm:p-6 shadow-glass card-hover group cursor-pointer"
             onClick={() => setShowRevenue(!showRevenue)}
           >
-            <div className="flex items-center justify-between">
-              <div>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
                 <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Faturamento</p>
-                <p className="text-3xl font-bold text-gray-800 dark:text-white mt-1">
+                <p className="text-2xl sm:text-3xl font-bold text-gray-800 dark:text-white mt-1 break-words">
                   {loading ? (
                     <span className="animate-pulse">...</span>
                   ) : showRevenue ? (
@@ -282,7 +282,7 @@ export function Dashboard() {
                 </p>
               </div>
               <motion.button
-                className="w-14 h-14 bg-gradient-to-br from-yellow-100 to-yellow-200 dark:from-yellow-900/40 dark:to-yellow-800/40 rounded-2xl flex items-center justify-center shadow-lg hover:shadow-neon transition-all"
+                className="w-12 h-12 sm:w-14 sm:h-14 shrink-0 bg-gradient-to-br from-yellow-100 to-yellow-200 dark:from-yellow-900/40 dark:to-yellow-800/40 rounded-xl sm:rounded-2xl flex items-center justify-center shadow-lg hover:shadow-neon transition-all"
                 whileHover={{ rotate: 360, scale: 1.1 }}
                 whileTap={{ scale: 0.95 }}
                 transition={{ duration: 0.5 }}
@@ -303,23 +303,23 @@ export function Dashboard() {
           transition={{ delay: 0.5 }}
           className="mt-8"
         >
-          <div className="glass dark:glass-dark rounded-3xl p-6 shadow-glass">
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mb-6">
-              <div className="flex items-center space-x-3">
+          <div className="glass dark:glass-dark rounded-xl sm:rounded-3xl p-4 sm:p-6 shadow-glass">
+            <div className="flex flex-col items-stretch justify-between gap-4 mb-6 sm:flex-row sm:items-center">
+              <div className="flex min-w-0 items-center gap-3">
                 <div className="w-12 h-12 rounded-xl gradient-primary flex items-center justify-center shadow-md">
                   <Calendar className="w-6 h-6 text-white" />
                 </div>
                 <div>
-                  <h2 className="text-2xl font-bold text-gray-800 dark:text-white">Agenda de Ordens</h2>
+                  <h2 className="text-xl sm:text-2xl font-bold text-gray-800 dark:text-white">Agenda de Ordens</h2>
                   <p className="text-sm text-gray-500 dark:text-gray-400">
                     {ordensAgendadas.length} ordem(ns) agendada(s)
                   </p>
                 </div>
               </div>
               
-              <div className="flex items-center gap-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
                 {/* Toggle de tipo de calendário */}
-                <div className="flex gap-2 p-1 bg-gray-100 dark:bg-gray-800 rounded-lg">
+                <div className="grid grid-cols-2 gap-2 p-1 bg-gray-100 dark:bg-gray-800 rounded-lg">
                   <button
                     onClick={() => setCalendarType('custom')}
                     className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
@@ -344,7 +344,7 @@ export function Dashboard() {
 
                 <motion.button
                   onClick={() => setShowCalendar(!showCalendar)}
-                  className="text-sm gradient-primary text-white px-5 py-2.5 rounded-xl font-semibold shadow-md hover:shadow-lg transition-all"
+                  className="w-full sm:w-auto text-sm gradient-primary text-white px-5 py-2.5 rounded-xl font-semibold shadow-md hover:shadow-lg transition-all"
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
                 >

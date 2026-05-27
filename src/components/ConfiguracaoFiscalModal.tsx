@@ -188,12 +188,12 @@ export default function ConfiguracaoFiscalModal({
             onClick={onClose}
             className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[100]"
           />
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-2 sm:p-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="bg-white/95 backdrop-blur-lg dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-4xl max-h-[85vh] flex flex-col"
+              className="bg-white/95 backdrop-blur-lg dark:bg-gray-800 rounded-xl sm:rounded-2xl shadow-2xl w-full max-w-4xl max-h-[calc(100dvh-1rem)] flex flex-col"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
@@ -641,7 +641,7 @@ export default function ConfiguracaoFiscalModal({
               </div>
 
               {/* Footer fixo com botões */}
-              <div className="flex justify-end gap-3 p-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 rounded-b-2xl flex-shrink-0">
+              <div className="flex flex-col-reverse gap-3 p-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 rounded-b-xl sm:rounded-b-2xl flex-shrink-0 sm:flex-row sm:justify-end">
                 <button
                   type="button"
                   onClick={onClose}

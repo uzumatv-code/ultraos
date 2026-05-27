@@ -14,16 +14,16 @@ export function ConfiguracoesCompletas() {
   const [showTemplatesModal, setShowTemplatesModal] = useState(false);
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      <div className="max-w-4xl mx-auto p-6">
+    <div className="min-h-screen overflow-x-hidden bg-gray-50 dark:bg-gray-900">
+      <div className="mx-auto w-full max-w-4xl p-3 sm:p-6">
         {/* Header */}
         <motion.div
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-6 mb-6"
+          className="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-4 sm:p-6 mb-6"
         >
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-4">
+          <div className="flex items-start justify-between">
+            <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
               <button
                 onClick={() => navigate('/')}
                 className="flex items-center px-3 py-2 text-gray-600 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
@@ -31,7 +31,7 @@ export function ConfiguracoesCompletas() {
                 <ArrowLeft className="w-4 h-4 mr-2" />
                 Voltar
               </button>
-              <div>
+              <div className="min-w-0">
                 <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
                   ⚙️ Configurações
                 </h1>
@@ -50,7 +50,7 @@ export function ConfiguracoesCompletas() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.1 }}
-            className="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-6 border border-gray-200 dark:border-gray-700"
+            className="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-4 sm:p-6 border border-gray-200 dark:border-gray-700"
           >
             <div className="flex items-center space-x-3 mb-4">
               <div className="bg-blue-100 dark:bg-blue-900 p-2 rounded-lg">
@@ -105,7 +105,7 @@ export function ConfiguracoesCompletas() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.2 }}
-            className="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-6 border border-gray-200 dark:border-gray-700"
+            className="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-4 sm:p-6 border border-gray-200 dark:border-gray-700"
           >
             <div className="flex items-center space-x-3 mb-4">
               <div className="bg-green-100 dark:bg-green-900 p-2 rounded-lg">
@@ -163,7 +163,7 @@ export function ConfiguracoesCompletas() {
           transition={{ delay: 0.3 }}
           className="mt-6 bg-blue-50 dark:bg-blue-900/20 rounded-lg p-4 border border-blue-200 dark:border-blue-800"
         >
-          <div className="flex items-start space-x-3">
+          <div className="flex items-start gap-3">
             <div className="bg-blue-100 dark:bg-blue-900 p-1 rounded">
               <Settings className="h-4 w-4 text-blue-600 dark:text-blue-400" />
             </div>

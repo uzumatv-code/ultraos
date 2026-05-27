@@ -137,12 +137,12 @@ export function FinanceiroIA() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-950">
-      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+    <div className="min-h-screen overflow-x-hidden bg-gray-50 dark:bg-gray-950">
+      <div className="responsive-page">
         <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Automacao financeira</p>
-            <h1 className="mt-1 text-3xl font-semibold text-gray-950 dark:text-white">IA Financeira via WhatsApp</h1>
+            <h1 className="mt-1 text-2xl sm:text-3xl font-semibold text-gray-950 dark:text-white">IA Financeira via WhatsApp</h1>
           </div>
           <div className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm text-gray-700 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-200">
             <Shield className="h-4 w-4" />
@@ -150,7 +150,7 @@ export function FinanceiroIA() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[420px_1fr]">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(320px,420px)_1fr]">
           <form onSubmit={saveNumber} className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-lg font-semibold text-gray-950 dark:text-white">{editingId ? 'Editar numero' : 'Novo numero'}</h2>
@@ -170,7 +170,7 @@ export function FinanceiroIA() {
                 <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Telefone</span>
                 <input value={form.telefone} onChange={(e) => setForm({ ...form, telefone: e.target.value })} required placeholder="61999999999" className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-950 dark:text-white" />
               </label>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <label className="block">
                   <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Permissao</span>
                   <select value={form.permissao} onChange={(e) => setForm({ ...form, permissao: e.target.value as any })} className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-950 dark:text-white">
@@ -213,14 +213,14 @@ export function FinanceiroIA() {
                 <p className="p-5 text-sm text-gray-500">Nenhum numero autorizado.</p>
               ) : authorized.map((item) => (
                 <div key={item.id} className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
+                  <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <p className="font-medium text-gray-950 dark:text-white">{item.nome}</p>
                       {item.ativo ? <CheckCircle className="h-4 w-4 text-emerald-600" /> : <XCircle className="h-4 w-4 text-gray-400" />}
                     </div>
                     <p className="text-sm text-gray-500">{item.telefone} - {item.permissao} - {item.nivel_acesso}</p>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2">
                     <button onClick={() => startEdit(item)} className="rounded-lg border border-gray-200 px-3 py-2 text-sm hover:bg-gray-50 dark:border-gray-800 dark:hover:bg-gray-800">Editar</button>
                     <button onClick={() => removeNumber(item)} className="rounded-lg border border-rose-200 px-3 py-2 text-sm text-rose-600 hover:bg-rose-50 dark:border-rose-900/50 dark:hover:bg-rose-950">
                       <Trash2 className="h-4 w-4" />
@@ -239,7 +239,7 @@ export function FinanceiroIA() {
               Historico de acoes
             </h2>
           </div>
-          <div className="overflow-x-auto">
+          <div className="responsive-table-wrap">
             <table className="w-full min-w-[820px]">
               <thead className="bg-gray-50 text-left text-xs font-semibold uppercase text-gray-500 dark:bg-gray-950">
                 <tr>

@@ -60,16 +60,16 @@ export function Perfil() {
   }
 
   return (
-    <div className="min-h-screen dark:bg-gray-900">
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="mb-8 flex items-center space-x-4">
+    <div className="min-h-screen overflow-x-hidden dark:bg-gray-900">
+      <div className="mx-auto w-full max-w-4xl px-3 py-6 sm:px-6 lg:px-8 sm:py-8">
+        <div className="mb-8 flex items-center gap-3 sm:gap-4">
           <button
             onClick={() => navigate(-1)}
             className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
           >
             <ArrowLeft className="w-6 h-6 text-gray-600 dark:text-gray-400" />
           </button>
-          <h1 className="text-2xl font-bold bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent">
+          <h1 className="text-xl sm:text-2xl font-bold bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent">
             Perfil e Configurações
           </h1>
         </div>
@@ -79,7 +79,7 @@ export function Perfil() {
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6"
+            className="bg-white dark:bg-gray-800 rounded-xl sm:rounded-2xl shadow-lg p-4 sm:p-6"
           >
             <div className="flex items-center space-x-2 mb-6">
               <User className="w-5 h-5 text-purple-600" />
@@ -93,8 +93,8 @@ export function Perfil() {
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   Email
                 </label>
-                <div className="w-full px-3 py-2 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-800 dark:text-gray-200 flex items-center justify-between">
-                  <span>{email}</span>
+                <div className="w-full px-3 py-2 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-800 dark:text-gray-200 flex items-center justify-between gap-2">
+                  <span className="min-w-0 truncate">{email}</span>
                   <button
                     type="button"
                     onClick={() => setShowEditarPerfilModal(true)}
@@ -138,7 +138,7 @@ export function Perfil() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.1 }}
-            className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6"
+            className="bg-white dark:bg-gray-800 rounded-xl sm:rounded-2xl shadow-lg p-4 sm:p-6"
           >
             <form onSubmit={handleSubmit} className="space-y-6">
               <div>

@@ -343,23 +343,23 @@ export function ContasPagar() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-50 via-white to-blue-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+    <div className="min-h-screen overflow-x-hidden bg-gradient-to-br from-purple-50 via-white to-blue-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
+      <div className="responsive-page">
         {/* Header */}
         <motion.div 
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-4 sm:space-y-0"
+          className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"
         >
-          <div className="flex items-center space-x-4">
+          <div className="flex min-w-0 items-center gap-3 sm:gap-4">
             <motion.div 
               whileHover={{ scale: 1.05, rotate: 5 }}
-              className="w-14 h-14 bg-gradient-to-br from-red-500 to-pink-600 rounded-2xl flex items-center justify-center shadow-lg shadow-red-200 dark:shadow-red-900/30"
+              className="h-12 w-12 sm:h-14 sm:w-14 shrink-0 bg-gradient-to-br from-red-500 to-pink-600 rounded-xl sm:rounded-2xl flex items-center justify-center shadow-lg shadow-red-200 dark:shadow-red-900/30"
             >
               <DollarSign className="w-7 h-7 text-white" />
             </motion.div>
-            <div>
-              <h1 className="text-3xl font-bold text-gradient">
+            <div className="min-w-0">
+              <h1 className="responsive-heading text-gradient">
                 Contas a Pagar
               </h1>
               <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
@@ -374,7 +374,7 @@ export function ContasPagar() {
             }}
             variant="primary"
             size="lg"
-            className="shadow-lg shadow-primary-200 dark:shadow-primary-900/30"
+            className="w-full shadow-lg shadow-primary-200 dark:shadow-primary-900/30 sm:w-auto"
           >
             <Plus className="w-5 h-5" />
             <span>Nova Conta</span>
@@ -382,7 +382,7 @@ export function ContasPagar() {
         </motion.div>
         
         {/* Cards de Estatísticas */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3 lg:gap-6 mb-8">
           <Card variant="glass" hover className="border-l-4 border-red-500">
             <CardContent className="p-6">
               <motion.div
@@ -495,9 +495,9 @@ export function ContasPagar() {
           transition={{ delay: 0.5 }}
           className="mb-8"
         >
-          <div className="glass dark:glass-dark rounded-3xl p-6 shadow-glass">
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mb-6">
-              <div className="flex items-center space-x-3">
+          <div className="glass dark:glass-dark rounded-xl sm:rounded-3xl p-4 sm:p-6 shadow-glass">
+            <div className="flex flex-col items-stretch justify-between gap-4 mb-6 sm:flex-row sm:items-center">
+              <div className="flex min-w-0 items-center gap-3">
                 <div className="w-12 h-12 rounded-xl gradient-primary flex items-center justify-center shadow-md">
                   <Calendar className="w-6 h-6 text-white" />
                 </div>
@@ -509,9 +509,9 @@ export function ContasPagar() {
                 </div>
               </div>
               
-              <div className="flex items-center gap-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
                 {/* Toggle de tipo de calendário */}
-                <div className="flex gap-2 p-1 bg-gray-100 dark:bg-gray-800 rounded-lg">
+                <div className="grid grid-cols-2 gap-2 p-1 bg-gray-100 dark:bg-gray-800 rounded-lg">
                   <button
                     onClick={() => setCalendarType('custom')}
                     className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
@@ -536,7 +536,7 @@ export function ContasPagar() {
 
                 <motion.button
                   onClick={() => setShowCalendar(!showCalendar)}
-                  className="text-sm gradient-primary text-white px-5 py-2.5 rounded-xl font-semibold shadow-md hover:shadow-lg transition-all"
+                  className="w-full sm:w-auto text-sm gradient-primary text-white px-5 py-2.5 rounded-xl font-semibold shadow-md hover:shadow-lg transition-all"
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
                 >
@@ -600,7 +600,7 @@ export function ContasPagar() {
           </CardHeader>
           <CardContent>
             {/* Filtros */}
-            <div className="flex flex-col lg:flex-row gap-4 mb-6">
+            <div className="flex flex-col lg:flex-row gap-3 sm:gap-4 mb-6">
               <div className="relative flex-1">
                 <Search className="w-5 h-5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
@@ -615,7 +615,7 @@ export function ContasPagar() {
               <select
                 value={statusFiltro}
                 onChange={(e) => setStatusFiltro(e.target.value as any)}
-                className="px-4 py-2.5 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-primary-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 transition-all min-w-[180px]"
+                className="w-full px-4 py-2.5 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-primary-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 transition-all lg:w-auto lg:min-w-[180px]"
               >
                 <option value="todos">Todos os Status</option>
                 <option value="pendente">Pendente</option>
@@ -626,7 +626,7 @@ export function ContasPagar() {
               <select
                 value={buscaCategoria}
                 onChange={(e) => setBuscaCategoria(e.target.value)}
-                className="px-4 py-2.5 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-primary-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 transition-all min-w-[200px]"
+                className="w-full px-4 py-2.5 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-primary-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 transition-all lg:w-auto lg:min-w-[200px]"
               >
                 <option value="">Todas as Categorias</option>
                 {categorias
@@ -640,8 +640,8 @@ export function ContasPagar() {
             </div>
 
             {/* Tabela */}
-            <div className="overflow-x-auto rounded-xl border border-gray-200 dark:border-gray-700">
-              <table className="w-full">
+            <div className="responsive-table-wrap rounded-xl border border-gray-200 dark:border-gray-700">
+              <table className="w-full min-w-[760px]">
                 <thead className="bg-gradient-to-r from-gray-50 to-gray-100 dark:from-gray-800 dark:to-gray-700">
                   {table.getHeaderGroups().map(headerGroup => (
                     <tr key={headerGroup.id}>

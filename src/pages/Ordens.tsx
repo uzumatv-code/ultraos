@@ -414,31 +414,31 @@ export function Ordens() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-50/50 via-purple-50/30 to-violet-50/50 dark:from-transparent dark:via-transparent dark:to-transparent">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-4 sm:space-y-0">
+    <div className="min-h-screen overflow-x-hidden bg-gradient-to-br from-indigo-50/50 via-purple-50/30 to-violet-50/50 dark:from-transparent dark:via-transparent dark:to-transparent">
+      <div className="responsive-page">
+        <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <motion.div 
             initial={{ opacity: 0, x: -20 }}
             animate={{ opacity: 1, x: 0 }}
-            className="flex items-center space-x-3"
+            className="flex items-center gap-3"
           >
             <motion.div 
               whileHover={{ scale: 1.1, rotate: 5 }}
-              className="w-12 h-12 bg-gradient-to-br from-indigo-500 to-violet-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/30"
+              className="h-11 w-11 sm:h-12 sm:w-12 shrink-0 bg-gradient-to-br from-indigo-500 to-violet-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/30"
             >
               <Tool className="w-6 h-6 text-white" />
             </motion.div>
-            <h1 className="text-3xl font-bold bg-gradient-to-r from-indigo-600 to-violet-600 dark:from-indigo-400 dark:to-violet-400 bg-clip-text text-transparent">
+            <h1 className="responsive-heading bg-gradient-to-r from-indigo-600 to-violet-600 dark:from-indigo-400 dark:to-violet-400 bg-clip-text text-transparent">
               Ordens de Serviço
             </h1>
           </motion.div>
           <motion.div 
             initial={{ opacity: 0, x: 20 }}
             animate={{ opacity: 1, x: 0 }}
-            className="flex flex-col sm:flex-row space-y-4 sm:space-y-0 sm:space-x-4"
+            className="flex w-full flex-col gap-3 lg:w-auto lg:flex-row"
           >
-            <div className="flex flex-wrap gap-4">
-              <div className="relative flex-1 min-w-[250px]">
+            <div className="flex min-w-0 flex-1 flex-wrap gap-3">
+              <div className="relative min-w-0 flex-1 sm:min-w-64 lg:w-80">
                 <Search className="w-5 h-5 text-gray-400 dark:text-gray-500 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
@@ -449,12 +449,12 @@ export function Ordens() {
                 />
               </div>
             </div>
-            <div className="flex space-x-3">
+            <div className="flex flex-col gap-2 sm:flex-row">
               <motion.button
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={() => navigate('/ordens/nova')}
-                className="px-4 py-2 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 text-white font-medium rounded-lg transition-all duration-300 flex items-center space-x-2 shadow-lg shadow-indigo-500/30 dark:shadow-indigo-500/20"
+                className="w-full sm:w-auto px-4 py-2 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 text-white font-medium rounded-lg transition-all duration-300 flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/30 dark:shadow-indigo-500/20"
               >
                 <Plus className="w-5 h-5" />
                 <span>Nova Ordem</span>
@@ -498,8 +498,8 @@ export function Ordens() {
                 whileHover={{ scale: 1.02 }}
                 className="glass dark:glass-dark rounded-xl shadow-lg dark:shadow-2xl p-4 border border-gray-100 dark:border-purple-500/10"
               >
-                <div className="flex items-start justify-between mb-3">
-                  <div className="flex-1">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between mb-3">
+                  <div className="flex-1 min-w-0">
                     <h3 className="font-semibold text-gray-900 dark:text-gray-100">OS #{ordem.numero}</h3>
                     <p className="text-sm text-gray-600 dark:text-gray-400">{ordem.cliente?.nome}</p>
                   </div>
@@ -522,7 +522,7 @@ export function Ordens() {
                   <p><span className="font-medium text-gray-700 dark:text-gray-300">Valor:</span> <span className="text-gray-600 dark:text-gray-400">{formatCurrency(ordem.valor_servicos - (ordem.desconto || 0))}</span></p>
                 </div>
                 
-                <div className="flex items-center gap-2 pt-3 border-t border-gray-100 dark:border-gray-800">
+                <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 pt-3 border-t border-gray-100 dark:border-gray-800">
                   <motion.button
                     whileHover={{ scale: 1.05 }}
                     whileTap={{ scale: 0.95 }}
@@ -605,8 +605,8 @@ export function Ordens() {
           animate={{ opacity: 1, y: 0 }}
           className="hidden lg:block glass dark:glass-dark rounded-2xl shadow-lg dark:shadow-2xl overflow-hidden border border-gray-100 dark:border-purple-500/10"
         >
-          <div className="overflow-x-auto" style={{ maxWidth: '100vw' }}>
-            <table className="w-full table-fixed" style={{ minWidth: 700 }}>
+          <div className="responsive-table-wrap">
+            <table className="w-full table-fixed min-w-[700px]">
               <thead>
                 {table.getHeaderGroups().map(headerGroup => (
                   <tr key={headerGroup.id} className="border-b border-gray-100 dark:border-gray-800 bg-gradient-to-r from-indigo-50/50 to-violet-50/50 dark:from-indigo-900/10 dark:to-violet-900/10">
@@ -664,7 +664,7 @@ export function Ordens() {
           </div>
 
           {/* Paginação com TanStack Table */}
-          <div className="px-6 py-4 bg-gradient-to-r from-indigo-50/50 to-violet-50/50 dark:from-indigo-900/10 dark:to-violet-900/10 border-t border-gray-100 dark:border-gray-800 flex items-center justify-between">
+          <div className="px-4 sm:px-6 py-4 bg-gradient-to-r from-indigo-50/50 to-violet-50/50 dark:from-indigo-900/10 dark:to-violet-900/10 border-t border-gray-100 dark:border-gray-800 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-sm text-gray-700 dark:text-gray-300">
               Mostrando {paginatedOrdens.length} de {filteredOrdens.length} resultados
             </p>

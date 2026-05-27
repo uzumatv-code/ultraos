@@ -112,8 +112,8 @@ export function Transacoes() {
   const totalPaginas = Math.ceil(totalTransacoes / itensPorPagina);
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-50 via-violet-50 to-indigo-100 dark:from-gray-900 dark:via-purple-900/20 dark:to-indigo-900/20">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+    <div className="min-h-screen overflow-x-hidden bg-gradient-to-br from-purple-50 via-violet-50 to-indigo-100 dark:from-gray-900 dark:via-purple-900/20 dark:to-indigo-900/20">
+      <div className="responsive-page">
         {/* Cabeçalho Animado */}
         <motion.div
           initial={{ opacity: 0, y: -20 }}
@@ -121,12 +121,12 @@ export function Transacoes() {
           transition={{ duration: 0.5 }}
           className="mb-8"
         >
-          <div className="flex items-center gap-4 mb-6">
-            <div className="w-16 h-16 bg-gradient-to-br from-purple-500 to-indigo-600 dark:from-purple-600 dark:to-indigo-700 rounded-2xl flex items-center justify-center shadow-lg shadow-purple-500/30 dark:shadow-purple-500/20">
+          <div className="flex items-center gap-3 sm:gap-4 mb-6">
+            <div className="h-12 w-12 sm:h-16 sm:w-16 shrink-0 bg-gradient-to-br from-purple-500 to-indigo-600 dark:from-purple-600 dark:to-indigo-700 rounded-xl sm:rounded-2xl flex items-center justify-center shadow-lg shadow-purple-500/30 dark:shadow-purple-500/20">
               <DollarSign className="w-8 h-8 text-white" />
             </div>
-            <div>
-              <h1 className="text-4xl font-bold bg-gradient-to-r from-purple-600 via-violet-600 to-indigo-600 dark:from-purple-400 dark:via-violet-400 dark:to-indigo-400 bg-clip-text text-transparent">
+            <div className="min-w-0">
+              <h1 className="responsive-heading bg-gradient-to-r from-purple-600 via-violet-600 to-indigo-600 dark:from-purple-400 dark:via-violet-400 dark:to-indigo-400 bg-clip-text text-transparent">
                 Transações
               </h1>
               <p className="text-gray-600 dark:text-gray-400 mt-1">
@@ -143,8 +143,8 @@ export function Transacoes() {
           transition={{ delay: 0.1 }}
           className="mb-6"
         >
-          <div className="flex flex-col sm:flex-row space-y-4 sm:space-y-0 sm:space-x-4">
-            <div className="relative flex-1 max-w-md">
+          <div className="flex flex-col gap-3 lg:flex-row">
+            <div className="relative flex-1 lg:max-w-md">
               <Search className="w-5 h-5 text-gray-400 dark:text-gray-500 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
@@ -155,7 +155,7 @@ export function Transacoes() {
               />
             </div>
 
-            <div className="flex space-x-2 flex-wrap gap-2">
+            <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap">
               <select
                 value={tipoFiltro}
                 onChange={(e) => setTipoFiltro(e.target.value as any)}
@@ -171,16 +171,16 @@ export function Transacoes() {
                 onChange={(value) => setCategoriaFiltro(value)}
                 options={categorias.map(c => ({ id: c.id, nome: c.nome }))}
                 placeholder="Todas as Categorias"
-                className="w-48"
+                className="w-full sm:w-48"
               />
             </div>
 
-            <div className="flex space-x-2 flex-wrap gap-2">
+            <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap">
               <motion.button
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
                 onClick={() => setModalTransacaoAberto(true)}
-                className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 dark:from-purple-500 dark:to-indigo-500 text-white font-medium rounded-xl transition-all duration-300 flex items-center space-x-2 shadow-lg shadow-purple-500/30 dark:shadow-purple-500/20"
+                className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 dark:from-purple-500 dark:to-indigo-500 text-white font-medium rounded-xl transition-all duration-300 flex items-center justify-center gap-2 shadow-lg shadow-purple-500/30 dark:shadow-purple-500/20"
               >
                 <Plus className="w-5 h-5" />
                 <span>Nova</span>
@@ -190,7 +190,7 @@ export function Transacoes() {
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
                 onClick={() => setModalCategoriaAberto(true)}
-                className="px-4 py-2 bg-white/80 dark:bg-gray-800/80 text-gray-700 dark:text-gray-200 font-medium rounded-xl hover:bg-white dark:hover:bg-gray-800 transition-all duration-300 flex items-center space-x-2 border border-gray-200 dark:border-gray-700 shadow-sm backdrop-blur-lg"
+                className="px-4 py-2 bg-white/80 dark:bg-gray-800/80 text-gray-700 dark:text-gray-200 font-medium rounded-xl hover:bg-white dark:hover:bg-gray-800 transition-all duration-300 flex items-center justify-center gap-2 border border-gray-200 dark:border-gray-700 shadow-sm backdrop-blur-lg"
               >
                 <Filter className="w-5 h-5" />
                 <span>Categorias</span>
@@ -200,7 +200,7 @@ export function Transacoes() {
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
                 onClick={() => setModalImportarCSVAberto(true)}
-                className="px-4 py-2 bg-white/80 dark:bg-gray-800/80 text-gray-700 dark:text-gray-200 font-medium rounded-xl hover:bg-white dark:hover:bg-gray-800 transition-all duration-300 flex items-center space-x-2 border border-gray-200 dark:border-gray-700 shadow-sm backdrop-blur-lg"
+                className="px-4 py-2 bg-white/80 dark:bg-gray-800/80 text-gray-700 dark:text-gray-200 font-medium rounded-xl hover:bg-white dark:hover:bg-gray-800 transition-all duration-300 flex items-center justify-center gap-2 border border-gray-200 dark:border-gray-700 shadow-sm backdrop-blur-lg"
               >
                 <Upload className="w-5 h-5" />
                 <span>CSV</span>
@@ -216,8 +216,8 @@ export function Transacoes() {
           transition={{ delay: 0.2 }}
           className="bg-white/80 dark:bg-gray-800/80 backdrop-blur-xl rounded-2xl shadow-xl overflow-hidden border border-gray-100 dark:border-gray-700"
         >
-          <div className="overflow-x-auto">
-            <table className="w-full">
+          <div className="responsive-table-wrap">
+            <table className="w-full min-w-[760px]">
               <thead>
                 <tr className="border-b border-gray-200 dark:border-gray-700 bg-gradient-to-r from-purple-50 to-indigo-50 dark:from-purple-900/20 dark:to-indigo-900/20">
                   <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
@@ -298,7 +298,7 @@ export function Transacoes() {
                         </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                        <div className="flex items-center justify-end space-x-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                        <div className="flex items-center justify-end gap-2 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity duration-200">
                           <motion.button
                             whileHover={{ scale: 1.1 }}
                             whileTap={{ scale: 0.95 }}
@@ -330,7 +330,7 @@ export function Transacoes() {
           </div>
 
           {/* Paginação */}
-          <div className="px-6 py-4 bg-gradient-to-r from-purple-50 via-violet-50 to-indigo-50 dark:from-purple-900/20 dark:via-violet-900/20 dark:to-indigo-900/20 border-t border-gray-200 dark:border-gray-700 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="px-4 sm:px-6 py-4 bg-gradient-to-r from-purple-50 via-violet-50 to-indigo-50 dark:from-purple-900/20 dark:via-violet-900/20 dark:to-indigo-900/20 border-t border-gray-200 dark:border-gray-700 flex flex-col sm:flex-row items-center justify-between gap-4">
             <p className="text-sm text-gray-700 dark:text-gray-300 font-medium">
               Mostrando <span className="font-bold text-purple-600 dark:text-purple-400">{transacoes.length}</span> de <span className="font-bold text-purple-600 dark:text-purple-400">{totalTransacoes}</span> transações
             </p>

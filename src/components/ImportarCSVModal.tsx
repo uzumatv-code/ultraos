@@ -395,12 +395,12 @@ export function ImportarCSVModal({
   return (
     <AnimatePresence>
       {isOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-2 sm:p-4 bg-black/50">
           <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.95 }}
-            className="bg-white rounded-2xl shadow-xl w-full max-w-6xl relative overflow-hidden"
+            className="bg-white rounded-xl sm:rounded-2xl shadow-xl w-full max-w-6xl max-h-[calc(100dvh-1rem)] relative overflow-y-auto"
           >
             <div className="p-6">
               <div className="flex items-center justify-between mb-4">
@@ -469,7 +469,7 @@ export function ImportarCSVModal({
                     Transações Encontradas ({transacoes.length})
                   </h3>
 
-                  <div className="max-h-[400px] overflow-y-auto rounded-lg border border-gray-200">
+                  <div className="responsive-table-wrap max-h-[400px] rounded-lg border border-gray-200">
                     <table className="w-full">
                       <thead className="bg-gray-50 sticky top-0">
                         <tr className="border-b border-gray-200">
@@ -568,7 +568,7 @@ export function ImportarCSVModal({
                     </table>
                   </div>
 
-                  <div className="flex justify-end space-x-3 mt-6">
+                  <div className="flex flex-col-reverse gap-3 mt-6 sm:flex-row sm:justify-end">
                     <button
                       type="button"
                       onClick={onClose}

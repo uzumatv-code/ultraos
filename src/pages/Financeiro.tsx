@@ -138,11 +138,11 @@ function StatCard({
   };
 
   return (
-    <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-      <div className="flex items-start justify-between gap-4">
-        <div>
+    <div className="rounded-lg border border-gray-200 bg-white p-4 sm:p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+      <div className="flex items-start justify-between gap-3 sm:gap-4">
+        <div className="min-w-0">
           <p className="text-sm font-medium text-gray-500 dark:text-gray-400">{title}</p>
-          <p className="mt-2 text-2xl font-semibold text-gray-950 dark:text-white">{value}</p>
+          <p className="mt-2 break-words text-xl font-semibold text-gray-950 dark:text-white sm:text-2xl">{value}</p>
           <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{description}</p>
         </div>
         <div className={`rounded-lg border p-2 ${toneMap[tone]}`}>{icon}</div>
@@ -414,18 +414,18 @@ export function Financeiro() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-950">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+    <div className="min-h-screen overflow-x-hidden bg-gray-50 dark:bg-gray-950">
+      <div className="responsive-page">
         <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Gestao financeira</p>
-            <h1 className="mt-1 text-3xl font-semibold text-gray-950 dark:text-white">Financeiro</h1>
+            <h1 className="mt-1 text-2xl sm:text-3xl font-semibold text-gray-950 dark:text-white">Financeiro</h1>
             <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
               Caixa, recebimentos, despesas, vencimentos e categorias em uma visao operacional.
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap sm:items-center">
             <button onClick={() => changeMonth(-1)} className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-200">
               Mes anterior
             </button>
@@ -504,16 +504,16 @@ export function Financeiro() {
                 <option key={categoria.id} value={categoria.id}>{categoria.nome}</option>
               ))}
             </select>
-            <div className="flex flex-wrap gap-2">
-              <button onClick={() => setModalTransacaoAberto(true)} className="inline-flex items-center gap-2 rounded-lg bg-gray-950 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 dark:bg-white dark:text-gray-950">
+            <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap">
+              <button onClick={() => setModalTransacaoAberto(true)} className="inline-flex items-center justify-center gap-2 rounded-lg bg-gray-950 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 dark:bg-white dark:text-gray-950">
                 <Plus className="h-4 w-4" />
                 Lancar
               </button>
-              <button onClick={() => setModalCategoriaAberto(true)} className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-800 dark:text-gray-200 dark:hover:bg-gray-800">
+              <button onClick={() => setModalCategoriaAberto(true)} className="inline-flex items-center justify-center gap-2 rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-800 dark:text-gray-200 dark:hover:bg-gray-800">
                 <Tags className="h-4 w-4" />
                 Categorias
               </button>
-              <button onClick={() => setModalImportarCSVAberto(true)} className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-800 dark:text-gray-200 dark:hover:bg-gray-800">
+              <button onClick={() => setModalImportarCSVAberto(true)} className="inline-flex items-center justify-center gap-2 rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-800 dark:text-gray-200 dark:hover:bg-gray-800">
                 <Upload className="h-4 w-4" />
                 CSV
               </button>
@@ -543,7 +543,7 @@ export function Financeiro() {
                         {conta.data_vencimento ? new Date(conta.data_vencimento).toLocaleDateString('pt-BR') : 'Sem vencimento'} - {conta.status}
                       </p>
                     </div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-3">
                       <p className="text-sm font-semibold text-amber-600">{formatCurrency(saldo)}</p>
                       <button onClick={() => receberConta(conta)} className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-medium text-white hover:bg-emerald-700">
                         <CheckCircle className="h-4 w-4" />
@@ -573,7 +573,7 @@ export function Financeiro() {
                     <p className="text-sm font-medium text-gray-950 dark:text-white">{conta.descricao}</p>
                     <p className="text-xs text-gray-500">{new Date(conta.data_vencimento).toLocaleDateString('pt-BR')} - {conta.categoria?.nome || 'Sem categoria'}</p>
                   </div>
-                  <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-3">
                     <p className="text-sm font-semibold text-rose-600">{formatCurrency(conta.valor)}</p>
                     <button onClick={() => pagarConta(conta)} className="inline-flex items-center gap-1 rounded-lg bg-gray-950 px-3 py-2 text-xs font-medium text-white hover:bg-gray-800 dark:bg-white dark:text-gray-950">
                       <CheckCircle className="h-4 w-4" />
@@ -598,7 +598,7 @@ export function Financeiro() {
                 <ArrowRight className="h-4 w-4" />
               </button>
             </div>
-            <div className="overflow-x-auto">
+            <div className="responsive-table-wrap">
               <table className="w-full min-w-[720px]">
                 <thead className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:bg-gray-950 dark:text-gray-400">
                   <tr>

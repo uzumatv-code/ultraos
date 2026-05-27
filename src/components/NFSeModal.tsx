@@ -107,8 +107,8 @@ export function NFSeModal({ nota, onClose, onSuccess }: NFSeModalProps) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden shadow-2xl">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-2 sm:p-4">
+      <div className="bg-white rounded-xl sm:rounded-2xl w-full max-w-3xl max-h-[calc(100dvh-1rem)] overflow-hidden shadow-2xl">
         {/* Header */}
         <div className="bg-gradient-to-r from-purple-600 to-blue-600 px-6 py-4 flex items-center justify-between">
           <h2 className="text-xl font-bold text-white">
@@ -123,7 +123,7 @@ export function NFSeModal({ nota, onClose, onSuccess }: NFSeModalProps) {
         </div>
 
         {/* Content */}
-        <form onSubmit={handleSubmit} className="p-6 overflow-y-auto max-h-[calc(90vh-140px)]">
+        <form onSubmit={handleSubmit} className="p-4 sm:p-6 overflow-y-auto max-h-[calc(100dvh-9rem)]">
           <div className="space-y-4">
             {/* Discriminação */}
             <div>
@@ -273,7 +273,7 @@ export function NFSeModal({ nota, onClose, onSuccess }: NFSeModalProps) {
           </div>
 
           {/* Footer */}
-          <div className="flex justify-end gap-3 mt-6 pt-6 border-t">
+          <div className="flex flex-col-reverse gap-3 mt-6 pt-6 border-t sm:flex-row sm:justify-end">
             <button
               type="button"
               onClick={onClose}

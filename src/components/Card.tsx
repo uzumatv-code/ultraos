@@ -18,7 +18,7 @@ export function Card({
   className = '',
   ...props 
 }: CardProps) {
-  const baseClasses = 'rounded-2xl shadow-glass';
+  const baseClasses = 'rounded-xl sm:rounded-2xl shadow-glass min-w-0';
   const variantClasses = 
     variant === 'glass' ? 'glass dark:glass-dark' :
     variant === 'gradient' ? 'gradient-primary text-white' :
@@ -84,12 +84,12 @@ export function StatCard({
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay }}
-      className="glass dark:glass-dark rounded-2xl p-6 shadow-glass card-hover group"
+      className="glass dark:glass-dark rounded-xl sm:rounded-2xl p-4 sm:p-6 shadow-glass card-hover group min-w-0"
     >
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
           <p className="text-sm font-medium text-gray-600 dark:text-gray-400">{title}</p>
-          <p className="text-3xl font-bold text-gray-800 dark:text-white mt-1">
+          <p className="text-2xl sm:text-3xl font-bold text-gray-800 dark:text-white mt-1 break-words">
             {loading ? (
               <span className="animate-pulse">...</span>
             ) : (
@@ -104,7 +104,7 @@ export function StatCard({
           </p>
         </div>
         <motion.div 
-          className={`w-14 h-14 bg-gradient-to-br ${gradient} rounded-2xl flex items-center justify-center shadow-lg group-hover:shadow-neon transition-all`}
+          className={`w-12 h-12 sm:w-14 sm:h-14 shrink-0 bg-gradient-to-br ${gradient} rounded-xl sm:rounded-2xl flex items-center justify-center shadow-lg group-hover:shadow-neon transition-all`}
           whileHover={{ rotate: 360, scale: 1.1 }}
           transition={{ duration: 0.5 }}
         >
