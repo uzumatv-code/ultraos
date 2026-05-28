@@ -517,6 +517,9 @@ app.post('/api/query', requireAuth, async (req, res) => {
           `INSERT INTO \`${physicalTable}\` (${keys.map((key) => `\`${key}\``).join(',')}) VALUES (${keys.map(() => '?').join(',')})`,
           Object.values(data),
         );
+        if (physicalTable === 'ordens_servico') {
+          await syncReceivableForOrder(pool, data.user_id, data.id);
+        }
         inserted.push(normalizeRow(physicalTable, data));
       }
 
@@ -540,7 +543,13 @@ app.post('/api/query', requireAuth, async (req, res) => {
 
       const data = await filterDataToColumns(physicalTable, payload);
       if (cols.has('user_id')) delete data.user_id;
+      const affectedOrderIds = [];
       if (physicalTable === 'ordens_servico') {
+        const [ordersBeforeUpdate] = await pool.query(
+          `SELECT id FROM \`${physicalTable}\` WHERE ${where.join(' AND ')}`,
+          params,
+        );
+        affectedOrderIds.push(...ordersBeforeUpdate.map((row) => row.id));
         if (data.status === 'concluido' && !data.data_entrega) data.data_entrega = todayDate();
         if (data.valor_total === undefined && (data.valor_servicos !== undefined || data.desconto !== undefined)) {
           const [[current]] = await pool.query(
@@ -556,6 +565,9 @@ app.post('/api/query', requireAuth, async (req, res) => {
         `UPDATE \`${physicalTable}\` SET ${keys.map((key) => `\`${key}\` = ?`).join(', ')} WHERE ${where.join(' AND ')}`,
         [...Object.values(data), ...params],
       );
+      for (const ordemId of affectedOrderIds) {
+        await syncReceivableForOrder(pool, req.user.id, ordemId);
+      }
       return res.json({ data: null, error: null });
     }
 
@@ -959,32 +971,107 @@ async function syncOrderFinancialStatus(conn, userId, ordemId) {
       WHERE user_id = ? AND ordem_servico_id = ?`,
     [paid, status === 'pago' ? 'recebido' : status, status, totals.ultima_data, now(), userId, ordemId],
   );
+  await syncReceivableForOrder(conn, userId, ordemId);
   return { total, paid, status };
 }
 
-async function ensureReceivableForOrder(conn, userId, order) {
+async function syncReceivableForOrder(conn, userId, ordemId) {
+  const [[order]] = await conn.query(
+    `SELECT o.*, c.nome AS cliente_nome,
+            COALESCE(p.total_pago, 0) AS total_pago,
+            p.ultima_data
+       FROM ordens_servico o
+       LEFT JOIN clientes c ON c.id = o.cliente_id
+       LEFT JOIN (
+         SELECT user_id, ordem_servico_id, COALESCE(SUM(valor), 0) AS total_pago, MAX(data_pagamento) AS ultima_data
+           FROM os_pagamentos
+          WHERE status = 'confirmado'
+          GROUP BY user_id, ordem_servico_id
+       ) p ON p.user_id = o.user_id AND p.ordem_servico_id = o.id
+      WHERE o.user_id = ? AND o.id = ?
+      LIMIT 1`,
+    [userId, ordemId],
+  );
+  if (!order) return null;
+
+  const total = money(order.valor_total ?? (Number(order.valor_servicos || 0) - Number(order.desconto || 0)));
+  const paid = money(order.total_pago || 0);
+  const statusFinanceiro = order.status === 'cancelado' ? 'cancelado' : paid >= total && total > 0 ? 'pago' : paid > 0 ? 'parcial' : 'pendente';
+  const dataRecebimento = statusFinanceiro === 'pago' ? order.ultima_data || order.data_ultimo_pagamento || order.updated_at || now() : null;
+  const dueDate = order.data_previsao || order.data_entrega || todayDate();
+  const receivableStatus = statusFinanceiro === 'pago'
+    ? 'recebido'
+    : statusFinanceiro === 'pendente' && dueDate < todayDate()
+      ? 'atrasado'
+      : statusFinanceiro;
+
+  await conn.query(
+    `UPDATE ordens_servico
+        SET valor_pago = ?, status_financeiro = ?, data_ultimo_pagamento = ?, updated_at = ?
+      WHERE user_id = ? AND id = ?`,
+    [paid, statusFinanceiro, order.ultima_data || order.data_ultimo_pagamento || null, now(), userId, ordemId],
+  );
+
   const [existing] = await conn.query(
     'SELECT id FROM contas_receber WHERE user_id = ? AND ordem_servico_id = ? LIMIT 1',
-    [userId, order.id],
+    [userId, ordemId],
   );
-  if (existing[0]?.id) return existing[0].id;
+
+  if (total <= 0 || order.status === 'cancelado') {
+    if (existing[0]?.id) {
+      await conn.query(
+        `UPDATE contas_receber
+            SET valor = ?, valor_recebido = ?, status = ?, data_recebimento = ?, updated_at = ?
+          WHERE user_id = ? AND ordem_servico_id = ?`,
+        [total, paid, receivableStatus, dataRecebimento, now(), userId, ordemId],
+      );
+      return existing[0].id;
+    }
+    return null;
+  }
+
+  const description = `OS #${order.numero} - ${order.cliente_nome || 'Cliente'}`;
+  if (existing[0]?.id) {
+    await conn.query(
+      `UPDATE contas_receber
+          SET cliente_id = ?, descricao = ?, valor = ?, valor_recebido = ?, data_vencimento = ?,
+              data_recebimento = ?, status = ?, forma_pagamento = ?, parcelas = ?, updated_at = ?
+        WHERE user_id = ? AND ordem_servico_id = ?`,
+      [
+        order.cliente_id,
+        description,
+        total,
+        paid,
+        dueDate,
+        dataRecebimento,
+        receivableStatus,
+        order.forma_pagamento || null,
+        Number(order.parcelas || 1),
+        now(),
+        userId,
+        ordemId,
+      ],
+    );
+    return existing[0].id;
+  }
 
   const id = uuid();
-  const total = money(order.valor_total ?? (Number(order.valor_servicos || 0) - Number(order.desconto || 0)));
   await conn.query(
     `INSERT INTO contas_receber
      (id, user_id, ordem_servico_id, cliente_id, descricao, valor, valor_recebido, data_vencimento,
-      status, forma_pagamento, parcelas, parcela_atual, observacoes, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 1, ?, ?, ?)`,
+      data_recebimento, status, forma_pagamento, parcelas, parcela_atual, observacoes, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
     [
       id,
       userId,
-      order.id,
+      ordemId,
       order.cliente_id,
-      `OS #${order.numero} - ${order.cliente_nome || 'Cliente'}`,
+      description,
       total,
-      order.data_previsao || order.data_entrega || todayDate(),
-      order.status === 'cancelado' ? 'cancelado' : 'pendente',
+      paid,
+      dueDate,
+      dataRecebimento,
+      receivableStatus,
       order.forma_pagamento || null,
       Number(order.parcelas || 1),
       'Recebivel criado automaticamente a partir da OS',
@@ -993,6 +1080,10 @@ async function ensureReceivableForOrder(conn, userId, order) {
     ],
   );
   return id;
+}
+
+async function ensureReceivableForOrder(conn, userId, order) {
+  return syncReceivableForOrder(conn, userId, order.id);
 }
 
 async function registerOrderPayment({ userId, ordemNumero, ordemId, valor, formaPagamento, origem = 'manual', observacoes = null }) {
