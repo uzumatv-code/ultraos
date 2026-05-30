@@ -31,6 +31,31 @@ const EVALUATION_DEFAULTS = {
   googleReviewLink: 'https://g.page/r/Cd8CHsL7KDxCEBM/review',
   instagramHandle: '@luthieriabrasilia',
 };
+const SYSTEM_AI_MODEL = process.env.OPENAI_INTENT_MODEL || process.env.OPENAI_MODEL || 'gpt-5.5';
+const SYSTEM_AI_WRITE_INTENTS = new Set([
+  'registrar_despesa',
+  'registrar_pagamento_os',
+  'registrar_conta_pagar',
+  'cadastrar_cliente',
+  'editar_cliente',
+  'excluir_cliente',
+  'cadastrar_os',
+  'editar_os',
+  'cancelar_os',
+]);
+const SYSTEM_AI_ADMIN_INTENTS = new Set(['excluir_cliente']);
+const SYSTEM_AI_QUERY_INTENTS = new Set([
+  'contas_vencem_hoje',
+  'a_receber_mes',
+  'faturamento_mes',
+  'os_pendentes_pagamento',
+  'divida_cliente',
+  'os_do_dia',
+  'buscar_cliente',
+  'buscar_os',
+  'listar_clientes_recentes',
+]);
+const SERVICE_ORDER_STATUSES = new Set(['pendente', 'em_andamento', 'concluido', 'cancelado', 'atraso']);
 
 if (!DATABASE_URL) {
   throw new Error('DATABASE_URL ou MYSQL_URL precisa estar configurado no backend');
@@ -885,6 +910,79 @@ function extractPaymentMethod(text) {
   return null;
 }
 
+function addDaysToIsoDate(isoDate, days) {
+  const [year, month, day] = String(isoDate || todayDate()).split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day + Number(days || 0)));
+  return date.toISOString().slice(0, 10);
+}
+
+function normalizeIsoDate(value) {
+  if (!value) return null;
+  const raw = String(value).trim();
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const br = raw.match(/^(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?$/);
+  if (!br) return null;
+  const today = todayDate();
+  const year = br[3] ? Number(br[3].length === 2 ? `20${br[3]}` : br[3]) : Number(today.slice(0, 4));
+  return `${year}-${String(Number(br[2])).padStart(2, '0')}-${String(Number(br[1])).padStart(2, '0')}`;
+}
+
+function parseNaturalDate(text) {
+  const raw = String(text || '').trim();
+  const normalized = normalizeTextForAi(raw);
+  if (!raw) return null;
+  if (/\bdepois de amanha\b/.test(normalized)) return addDaysToIsoDate(todayDate(), 2);
+  if (/\bamanha\b/.test(normalized)) return addDaysToIsoDate(todayDate(), 1);
+  if (/\bontem\b/.test(normalized)) return addDaysToIsoDate(todayDate(), -1);
+  if (/\bhoje\b/.test(normalized)) return todayDate();
+
+  const numeric = raw.match(/\b(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\b/);
+  if (numeric) return normalizeIsoDate(numeric[0]);
+
+  const dayOnly = normalized.match(/\bdia\s+(\d{1,2})\b/);
+  if (dayOnly) {
+    const today = todayDate();
+    return `${today.slice(0, 8)}${String(Number(dayOnly[1])).padStart(2, '0')}`;
+  }
+
+  return null;
+}
+
+function extractPhoneFromText(text) {
+  const match = String(text || '').match(/(?:telefone|fone|celular|whats(?:app)?)\D*(\+?\d[\d\s().-]{8,})/i);
+  return match ? match[1].replace(/\D/g, '') : null;
+}
+
+function extractCpfCnpjFromText(text) {
+  const match = String(text || '').match(/(?:cpf|cnpj)\D*([\d./-]{11,18})/i);
+  return match ? match[1].replace(/\D/g, '') : null;
+}
+
+function extractEmailFromText(text) {
+  return String(text || '').match(/[^\s@]+@[^\s@]+\.[^\s@]+/)?.[0] || null;
+}
+
+function extractClientNameFromText(text) {
+  const raw = String(text || '').trim();
+  const match = raw.match(/(?:cliente|para|da|do|de)\s+(.+?)(?:\s+(?:telefone|fone|celular|whats|cpf|cnpj|email|endereco|endere[cç]o|os\b|ordem\b|previs[aã]o|entrega|valor|status|modelo|problema|servi[cç]o|dia\s+\d|em\s+\d|r\$)|$)/i);
+  return titleCaseDescription(match?.[1] || '');
+}
+
+function extractQuotedValue(text) {
+  return String(text || '').match(/["“”']([^"“”']+)["“”']/)?.[1]?.trim() || null;
+}
+
+function extractServiceOrderStatus(text) {
+  const normalized = normalizeTextForAi(text);
+  if (/\bcancelad/.test(normalized)) return 'cancelado';
+  if (/\bconcluid|\bfinalizad|\bpront/.test(normalized)) return 'concluido';
+  if (/\batras/.test(normalized)) return 'atraso';
+  if (/\bandamento|executando|servico/.test(normalized)) return 'em_andamento';
+  if (/\bpendent/.test(normalized)) return 'pendente';
+  return null;
+}
+
 function parseFinancialIntent(text) {
   const raw = String(text || '').trim();
   const lower = raw.toLowerCase();
@@ -896,6 +994,59 @@ function parseFinancialIntent(text) {
 
   if (/^confirmar(?:\s+[a-z0-9-]+)?$/i.test(raw)) {
     return { intent: 'confirmar_acao', token: raw.split(/\s+/)[1] || null };
+  }
+
+  if (/(cadastre|cadastrar|registre|registrar|crie|criar|novo|nova).*(cliente)/.test(normalized)) {
+    return {
+      intent: 'cadastrar_cliente',
+      nome: extractClientNameFromText(raw),
+      telefone: extractPhoneFromText(raw),
+      cpfCnpj: extractCpfCnpjFromText(raw),
+      email: extractEmailFromText(raw),
+    };
+  }
+
+  if (/(edite|editar|altere|alterar|atualize|atualizar).*(cliente)/.test(normalized)) {
+    return {
+      intent: 'editar_cliente',
+      cliente: extractClientNameFromText(raw),
+      nome: extractQuotedValue(raw),
+      telefone: extractPhoneFromText(raw),
+      cpfCnpj: extractCpfCnpjFromText(raw),
+      email: extractEmailFromText(raw),
+    };
+  }
+
+  if (/(exclua|excluir|remova|remover|apague|apagar).*(cliente)/.test(normalized)) {
+    return { intent: 'excluir_cliente', cliente: extractClientNameFromText(raw) };
+  }
+
+  if (/(cadastre|cadastrar|registre|registrar|crie|criar|abrir|abra|nova|novo).*(os|ordem)/.test(normalized) && !/(pagamento|paga|pago|recebi|recebido|quitad)/.test(normalized)) {
+    return {
+      intent: 'cadastrar_os',
+      cliente: extractClientNameFromText(raw),
+      dataPrevisao: parseNaturalDate(raw),
+      value,
+      formaPagamento,
+      modelo: extractQuotedValue(raw),
+      observacoes: raw,
+    };
+  }
+
+  if (osNumero && /(cancele|cancelar|cancelad)/.test(normalized)) {
+    return { intent: 'cancelar_os', osNumero };
+  }
+
+  if (osNumero && /(edite|editar|altere|alterar|atualize|atualizar|mude|mudar|troque|trocar|status|previs|entrega)/.test(normalized)) {
+    return {
+      intent: 'editar_os',
+      osNumero,
+      statusOs: extractServiceOrderStatus(raw),
+      dataPrevisao: parseNaturalDate(raw),
+      value,
+      formaPagamento,
+      observacoes: raw,
+    };
   }
 
   if (/(cadastre|registre|lanca|lancar|lance).*(conta|boleto|fatura)/.test(normalized)) {
@@ -925,6 +1076,19 @@ function parseFinancialIntent(text) {
   if (/quanto.*receber.*m[eê]s|a receber.*m[eê]s|receber este m[eê]s/.test(lower)) return { intent: 'a_receber_mes' };
   if (/faturamento.*m[eê]s|receita.*m[eê]s|quanto faturei/.test(lower)) return { intent: 'faturamento_mes' };
   if (/pendentes?.*pagamento|os.*pendentes?.*pagamento|ordens.*devem/.test(lower)) return { intent: 'os_pendentes_pagamento' };
+  if (/(os|ordens).*(hoje|dia)|quais.*(os|ordens).*(hoje|dia)|agenda.*(hoje|dia)/.test(normalized)) {
+    return { intent: 'os_do_dia', dataPrevisao: parseNaturalDate(raw) || todayDate() };
+  }
+  if (/clientes?.*(recentes|ultimos|cadastrados)/.test(normalized)) return { intent: 'listar_clientes_recentes' };
+  if (/(busque|buscar|procure|procurar|localize|listar|mostrar).*(cliente)/.test(normalized)) {
+    return {
+      intent: 'buscar_cliente',
+      cliente: extractClientNameFromText(raw) || raw.replace(/busque|buscar|procure|procurar|localize|listar|mostrar|cliente/gi, '').trim(),
+    };
+  }
+  if (osNumero && (/(busque|buscar|procure|procurar|localize|mostrar|ver).*(os|ordem)/.test(normalized) || /\bos\s*#?\s*\d+/.test(normalized))) {
+    return { intent: 'buscar_os', osNumero };
+  }
   if (/cliente\s+(.+).*(deve|devendo|d[eé]bito)/.test(lower)) {
     const cliente = lower.match(/cliente\s+(.+?)(?:\s+(?:deve|devendo|d[eé]bito)|$)/)?.[1]?.trim();
     return { intent: 'divida_cliente', cliente };
@@ -935,6 +1099,128 @@ function parseFinancialIntent(text) {
 
 function canWriteFinancial(permission) {
   return ['escrita', 'admin'].includes(String(permission || '').toLowerCase());
+}
+
+function canWriteSystem(permission) {
+  return canWriteFinancial(permission);
+}
+
+function canAdminSystem(permission) {
+  return String(permission || '').toLowerCase() === 'admin';
+}
+
+function extractResponsesText(json) {
+  if (typeof json?.output_text === 'string') return json.output_text;
+  for (const item of json?.output || []) {
+    for (const content of item.content || []) {
+      if (typeof content.text === 'string') return content.text;
+      if (typeof content.output_text === 'string') return content.output_text;
+    }
+  }
+  return '';
+}
+
+function normalizeAiIntent(rawIntent) {
+  if (!rawIntent || typeof rawIntent !== 'object') return null;
+  const intent = String(rawIntent.intent || '').trim();
+  const allowed = new Set([...SYSTEM_AI_WRITE_INTENTS, ...SYSTEM_AI_QUERY_INTENTS, 'confirmar_acao', 'desconhecida']);
+  if (!allowed.has(intent)) return null;
+  const normalized = { ...rawIntent, intent };
+  normalized.value = rawIntent.value === null || rawIntent.value === undefined || rawIntent.value === '' ? null : money(rawIntent.value);
+  normalized.osNumero = rawIntent.osNumero === null || rawIntent.osNumero === undefined || rawIntent.osNumero === '' ? null : Number(rawIntent.osNumero);
+  normalized.dataVencimento = normalizeIsoDate(rawIntent.dataVencimento) || null;
+  normalized.dataPrevisao = normalizeIsoDate(rawIntent.dataPrevisao) || null;
+  normalized.formaPagamento = rawIntent.formaPagamento || null;
+  normalized.statusOs = SERVICE_ORDER_STATUSES.has(rawIntent.statusOs) ? rawIntent.statusOs : null;
+  return normalized;
+}
+
+async function interpretSystemIntentWithOpenAI(message) {
+  if (!process.env.OPENAI_API_KEY) return null;
+  const schema = {
+    type: 'object',
+    additionalProperties: false,
+    required: [
+      'intent',
+      'confidence',
+      'value',
+      'description',
+      'dataVencimento',
+      'formaPagamento',
+      'osNumero',
+      'cliente',
+      'clienteId',
+      'nome',
+      'telefone',
+      'cpfCnpj',
+      'email',
+      'endereco',
+      'dataPrevisao',
+      'statusOs',
+      'modelo',
+      'observacoes',
+    ],
+    properties: {
+      intent: {
+        type: 'string',
+        enum: [...SYSTEM_AI_WRITE_INTENTS, ...SYSTEM_AI_QUERY_INTENTS, 'confirmar_acao', 'desconhecida'],
+      },
+      confidence: { type: 'number' },
+      value: { type: ['number', 'null'] },
+      description: { type: ['string', 'null'] },
+      dataVencimento: { type: ['string', 'null'] },
+      formaPagamento: { type: ['string', 'null'], enum: ['credito', 'debito', 'pix', 'dinheiro', 'boleto', null] },
+      osNumero: { type: ['number', 'null'] },
+      cliente: { type: ['string', 'null'] },
+      clienteId: { type: ['string', 'null'] },
+      nome: { type: ['string', 'null'] },
+      telefone: { type: ['string', 'null'] },
+      cpfCnpj: { type: ['string', 'null'] },
+      email: { type: ['string', 'null'] },
+      endereco: { type: ['string', 'null'] },
+      dataPrevisao: { type: ['string', 'null'] },
+      statusOs: { type: ['string', 'null'], enum: ['pendente', 'em_andamento', 'concluido', 'cancelado', 'atraso', null] },
+      modelo: { type: ['string', 'null'] },
+      observacoes: { type: ['string', 'null'] },
+    },
+  };
+  const response = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: SYSTEM_AI_MODEL,
+      input: [
+        {
+          role: 'system',
+          content:
+            `Voce interpreta mensagens de WhatsApp para um sistema de luthieria/OS. Hoje e ${todayDate()} em ${EVALUATION_TIMEZONE}. ` +
+            'Retorne apenas a intencao e entidades. Datas devem ser yyyy-mm-dd. Use confirmar_acao somente para mensagens de confirmacao. ' +
+            'Operacoes de escrita serao confirmadas pelo backend antes de executar.',
+        },
+        { role: 'user', content: String(message || '') },
+      ],
+      text: { format: { type: 'json_schema', name: 'system_ai_intent', strict: true, schema } },
+      max_output_tokens: 900,
+    }),
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(json.error?.message || `OpenAI intent HTTP ${response.status}`);
+  const text = extractResponsesText(json);
+  return normalizeAiIntent(JSON.parse(text || '{}'));
+}
+
+async function getSystemIntent(message) {
+  const heuristic = parseFinancialIntent(message);
+  try {
+    const aiIntent = await interpretSystemIntentWithOpenAI(message);
+    if (aiIntent && aiIntent.intent !== 'desconhecida') return aiIntent;
+  } catch (error) {
+    console.warn('[sistema-ia:intent] usando parser local:', error.message);
+  }
+  return heuristic;
 }
 
 async function ensureDefaultFinancialCategory(userId, tipo, nome, cor) {
@@ -1181,7 +1467,7 @@ async function createAccountPayable({ userId, descricao, valor, dataVencimento, 
       dataVencimento,
       formaPagamento || null,
       categoriaId,
-      `Cadastrada pela IA financeira via ${origem}`,
+      `Cadastrada pela IA do sistema via ${origem}`,
       now(),
       now(),
     ],
@@ -1229,6 +1515,303 @@ async function payAccountPayable({ userId, contaId, formaPagamento, origem = 'ma
   } finally {
     conn.release();
   }
+}
+
+function formatDateBr(value) {
+  const iso = normalizeIsoDate(value);
+  if (!iso) return '-';
+  return `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`;
+}
+
+function readableOrderStatus(status) {
+  const labels = {
+    pendente: 'pendente',
+    em_andamento: 'em andamento',
+    concluido: 'concluida',
+    cancelado: 'cancelada',
+    atraso: 'em atraso',
+  };
+  return labels[status] || status || '-';
+}
+
+function cleanNullableText(value) {
+  const text = String(value || '').trim();
+  return text || null;
+}
+
+async function searchSystemClients(userId, query, limit = 10) {
+  const term = cleanNullableText(query);
+  if (!term) {
+    const [rows] = await pool.query(
+      `SELECT * FROM clientes WHERE user_id = ? ORDER BY created_at DESC LIMIT ?`,
+      [userId, Number(limit)],
+    );
+    return rows;
+  }
+  const like = `%${term.toLowerCase()}%`;
+  const digits = term.replace(/\D/g, '');
+  const [rows] = await pool.query(
+    `SELECT * FROM clientes
+      WHERE user_id = ?
+        AND (LOWER(nome) LIKE ? OR REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(telefone, ''), '+', ''), '-', ''), ' ', ''), '.', '') LIKE ? OR REPLACE(REPLACE(REPLACE(COALESCE(cpf_cnpj, ''), '.', ''), '/', ''), '-', '') LIKE ?)
+      ORDER BY nome ASC LIMIT ?`,
+    [userId, like, `%${digits || term}%`, `%${digits || term}%`, Number(limit)],
+  );
+  return rows;
+}
+
+async function resolveClientForAi(userId, intent) {
+  if (intent.clienteId) {
+    const [rows] = await pool.query('SELECT * FROM clientes WHERE user_id = ? AND id = ? LIMIT 1', [userId, intent.clienteId]);
+    return { rows };
+  }
+  const query = intent.cliente || intent.nome || intent.telefone || intent.cpfCnpj;
+  const rows = await searchSystemClients(userId, query, 6);
+  return { rows, query };
+}
+
+async function findOrderForAi(userId, intent) {
+  if (!intent.osNumero) return null;
+  const [rows] = await pool.query(
+    `SELECT o.*, c.nome AS cliente_nome
+       FROM ordens_servico o
+       JOIN clientes c ON c.id = o.cliente_id
+      WHERE o.user_id = ? AND o.numero = ?
+      LIMIT 1`,
+    [userId, intent.osNumero],
+  );
+  return rows[0] || null;
+}
+
+async function createSystemClient({ userId, nome, telefone, cpfCnpj, email, endereco }) {
+  const id = uuid();
+  await pool.query(
+    `INSERT INTO clientes (id, user_id, nome, cpf_cnpj, telefone, email, endereco, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, userId, titleCaseDescription(nome), cpfCnpj || null, telefone || null, email || null, endereco || null, now(), now()],
+  );
+  return { id, nome: titleCaseDescription(nome) };
+}
+
+async function updateSystemClient({ userId, clienteId, nome, telefone, cpfCnpj, email, endereco }) {
+  const updates = {};
+  if (cleanNullableText(nome)) updates.nome = titleCaseDescription(nome);
+  if (telefone !== undefined && telefone !== null) updates.telefone = cleanNullableText(telefone);
+  if (cpfCnpj !== undefined && cpfCnpj !== null) updates.cpf_cnpj = cleanNullableText(cpfCnpj);
+  if (email !== undefined && email !== null) updates.email = cleanNullableText(email);
+  if (endereco !== undefined && endereco !== null) updates.endereco = cleanNullableText(endereco);
+  const keys = Object.keys(updates);
+  if (!keys.length) throw new Error('Nenhum dado de cliente informado para alterar');
+  await pool.query(
+    `UPDATE clientes SET ${keys.map((key) => `\`${key}\` = ?`).join(', ')}, updated_at = ? WHERE user_id = ? AND id = ?`,
+    [...keys.map((key) => updates[key]), now(), userId, clienteId],
+  );
+  const [rows] = await pool.query('SELECT * FROM clientes WHERE user_id = ? AND id = ? LIMIT 1', [userId, clienteId]);
+  return rows[0];
+}
+
+async function deleteSystemClient({ userId, clienteId }) {
+  const [[row]] = await pool.query('SELECT COUNT(*) AS total FROM ordens_servico WHERE user_id = ? AND cliente_id = ?', [userId, clienteId]);
+  if (Number(row?.total || 0) > 0) {
+    throw new Error('Cliente possui OS vinculada. Cancele/edite as OS antes de excluir o cliente.');
+  }
+  await pool.query('DELETE FROM clientes WHERE user_id = ? AND id = ?', [userId, clienteId]);
+  return true;
+}
+
+async function createBasicServiceOrder({ userId, clienteId, modelo, dataPrevisao, valor, formaPagamento, observacoes }) {
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [lastRows] = await conn.query(
+      'SELECT numero FROM ordens_servico WHERE user_id = ? ORDER BY numero DESC LIMIT 1 FOR UPDATE',
+      [userId],
+    );
+    const numero = Number(lastRows[0]?.numero || 0) + 1;
+    const id = uuid();
+    const total = money(valor || 0);
+    await conn.query(
+      `INSERT INTO ordens_servico
+       (id, user_id, numero, cliente_id, modelo, valor_servicos, desconto, valor_total, valor_pago, status_financeiro,
+        forma_pagamento, parcelas, observacoes, data_entrada, data_previsao, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0, 'pendente', ?, 1, ?, ?, ?, 'pendente', ?, ?)`,
+      [
+        id,
+        userId,
+        numero,
+        clienteId,
+        cleanNullableText(modelo),
+        total,
+        total,
+        formaPagamento || 'pix',
+        cleanNullableText(observacoes) || 'OS criada pela IA do sistema via WhatsApp',
+        todayDate(),
+        dataPrevisao || null,
+        now(),
+        now(),
+      ],
+    );
+    await syncReceivableForOrder(conn, userId, id);
+    await conn.commit();
+    return { id, numero, valor: total, dataPrevisao };
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
+}
+
+async function updateSystemServiceOrder({ userId, ordemId, statusOs, dataPrevisao, valor, formaPagamento, modelo, observacoes }) {
+  const updates = {};
+  if (statusOs && SERVICE_ORDER_STATUSES.has(statusOs)) {
+    updates.status = statusOs;
+    if (statusOs === 'concluido') updates.data_entrega = todayDate();
+  }
+  if (dataPrevisao !== undefined && dataPrevisao !== null) updates.data_previsao = dataPrevisao;
+  if (valor !== undefined && valor !== null) {
+    updates.valor_servicos = money(valor);
+    updates.valor_total = money(valor);
+  }
+  if (formaPagamento) updates.forma_pagamento = formaPagamento;
+  if (cleanNullableText(modelo)) updates.modelo = cleanNullableText(modelo);
+  if (cleanNullableText(observacoes)) updates.observacoes = cleanNullableText(observacoes);
+  const keys = Object.keys(updates);
+  if (!keys.length) throw new Error('Nenhuma alteracao de OS informada');
+  await pool.query(
+    `UPDATE ordens_servico SET ${keys.map((key) => `\`${key}\` = ?`).join(', ')}, updated_at = ? WHERE user_id = ? AND id = ?`,
+    [...keys.map((key) => updates[key]), now(), userId, ordemId],
+  );
+  await syncReceivableForOrder(pool, userId, ordemId);
+  const [rows] = await pool.query('SELECT * FROM ordens_servico WHERE user_id = ? AND id = ? LIMIT 1', [userId, ordemId]);
+  return rows[0];
+}
+
+async function cancelSystemServiceOrder({ userId, ordemId }) {
+  await pool.query('UPDATE ordens_servico SET status = ?, updated_at = ? WHERE user_id = ? AND id = ?', ['cancelado', now(), userId, ordemId]);
+  await syncReceivableForOrder(pool, userId, ordemId);
+}
+
+function describeClient(row) {
+  return `${row.nome}${row.telefone ? ` - ${row.telefone}` : ''}${row.cpf_cnpj ? ` - ${row.cpf_cnpj}` : ''}`;
+}
+
+function describeOrder(row) {
+  const remaining = Number(row.valor_total || 0) - Number(row.valor_pago || 0);
+  return `OS #${row.numero} - ${row.cliente_nome || 'Cliente'} - ${readableOrderStatus(row.status)} - previsao ${formatDateBr(row.data_previsao)} - saldo R$ ${remaining.toFixed(2)}`;
+}
+
+async function prepareSystemWriteIntent(userId, intent) {
+  if (intent.intent === 'registrar_despesa' && (!intent.value || intent.value <= 0)) {
+    return { ok: false, reply: 'Informe um valor valido para registrar a despesa.' };
+  }
+  if (intent.intent === 'registrar_conta_pagar') {
+    if (!intent.value || intent.value <= 0) return { ok: false, reply: 'Informe um valor valido para cadastrar a conta.' };
+    if (!intent.dataVencimento) return { ok: false, reply: 'Informe a data de vencimento da conta.' };
+  }
+  if (intent.intent === 'registrar_pagamento_os') {
+    if (!intent.osNumero) return { ok: false, reply: 'Informe o numero da OS para registrar o pagamento.' };
+    const order = await findOrderForAi(userId, intent);
+    if (!order) return { ok: false, reply: `Nao encontrei a OS #${intent.osNumero}.` };
+    return {
+      ok: true,
+      intent: { ...intent, ordemId: order.id },
+      actionText: `registrar pagamento da OS #${order.numero}${intent.value ? ` de R$ ${Number(intent.value).toFixed(2)}` : ' pelo saldo pendente'}`,
+    };
+  }
+  if (intent.intent === 'cadastrar_cliente') {
+    if (!cleanNullableText(intent.nome)) return { ok: false, reply: 'Informe o nome do cliente para cadastrar.' };
+    return { ok: true, intent, actionText: `cadastrar cliente ${titleCaseDescription(intent.nome)}` };
+  }
+  if (['editar_cliente', 'excluir_cliente'].includes(intent.intent)) {
+    const resolved = await resolveClientForAi(userId, intent);
+    if (!resolved.rows.length) return { ok: false, reply: `Nao encontrei o cliente ${resolved.query || ''}.` };
+    if (resolved.rows.length > 1) {
+      return { ok: false, reply: 'Encontrei mais de um cliente. Me envie o nome completo ou telefone:\n' + resolved.rows.map(describeClient).join('\n') };
+    }
+    const client = resolved.rows[0];
+    if (intent.intent === 'editar_cliente' && !cleanNullableText(intent.nome) && !intent.telefone && !intent.cpfCnpj && !intent.email && !intent.endereco) {
+      return { ok: false, reply: 'Informe o que devo alterar no cliente.' };
+    }
+    return {
+      ok: true,
+      intent: { ...intent, clienteId: client.id, clienteNome: client.nome },
+      actionText: intent.intent === 'excluir_cliente' ? `excluir cliente ${client.nome}` : `editar cliente ${client.nome}`,
+    };
+  }
+  if (intent.intent === 'cadastrar_os') {
+    if (!cleanNullableText(intent.cliente) && !intent.clienteId) return { ok: false, reply: 'Informe para qual cliente devo abrir a OS.' };
+    const resolved = await resolveClientForAi(userId, intent);
+    if (!resolved.rows.length) return { ok: false, reply: `Nao encontrei o cliente ${resolved.query || intent.cliente}. Cadastre o cliente primeiro.` };
+    if (resolved.rows.length > 1) {
+      return { ok: false, reply: 'Encontrei mais de um cliente. Me envie o nome completo ou telefone:\n' + resolved.rows.map(describeClient).join('\n') };
+    }
+    const client = resolved.rows[0];
+    return {
+      ok: true,
+      intent: { ...intent, clienteId: client.id, clienteNome: client.nome },
+      actionText: `abrir nova OS para ${client.nome}${intent.dataPrevisao ? ` com previsao ${formatDateBr(intent.dataPrevisao)}` : ''}`,
+    };
+  }
+  if (['editar_os', 'cancelar_os'].includes(intent.intent)) {
+    const order = await findOrderForAi(userId, intent);
+    if (!order) return { ok: false, reply: `Nao encontrei a OS #${intent.osNumero || ''}.` };
+    if (intent.intent === 'editar_os' && !intent.statusOs && !intent.dataPrevisao && intent.value === null && !intent.formaPagamento && !intent.modelo && !intent.observacoes) {
+      return { ok: false, reply: 'Informe o que devo alterar na OS.' };
+    }
+    return {
+      ok: true,
+      intent: { ...intent, ordemId: order.id, clienteNome: order.cliente_nome },
+      actionText: intent.intent === 'cancelar_os' ? `cancelar OS #${order.numero}` : `editar OS #${order.numero}`,
+    };
+  }
+
+  const actionText = intent.intent === 'registrar_despesa'
+    ? `registrar despesa "${intent.description}" de R$ ${Number(intent.value).toFixed(2)}`
+    : intent.intent === 'registrar_conta_pagar'
+      ? `cadastrar conta "${intent.description}" de R$ ${Number(intent.value).toFixed(2)} com vencimento em ${formatDateBr(intent.dataVencimento)}`
+      : 'executar acao';
+  return { ok: true, intent, actionText };
+}
+
+async function executeSystemWriteIntent(userId, intent) {
+  if (intent.intent === 'registrar_despesa') {
+    await createExpense({ userId, descricao: intent.description, valor: intent.value, formaPagamento: intent.formaPagamento, origem: 'whatsapp_ia' });
+    return `Despesa registrada: ${intent.description} - R$ ${Number(intent.value).toFixed(2)}.`;
+  }
+  if (intent.intent === 'registrar_pagamento_os') {
+    const payment = await registerOrderPayment({ userId, ordemId: intent.ordemId || null, ordemNumero: intent.osNumero, valor: intent.value, formaPagamento: intent.formaPagamento, origem: 'whatsapp_ia' });
+    return `Pagamento registrado na OS #${payment.order.numero}: R$ ${Number(payment.amount).toFixed(2)}.`;
+  }
+  if (intent.intent === 'registrar_conta_pagar') {
+    const conta = await createAccountPayable({ userId, descricao: intent.description, valor: intent.value, dataVencimento: intent.dataVencimento, formaPagamento: intent.formaPagamento, origem: 'whatsapp_ia' });
+    return `Conta cadastrada: ${conta.descricao} - R$ ${Number(conta.valor).toFixed(2)}. Vencimento: ${formatDateBr(conta.dataVencimento)}.`;
+  }
+  if (intent.intent === 'cadastrar_cliente') {
+    const client = await createSystemClient({ userId, nome: intent.nome, telefone: intent.telefone, cpfCnpj: intent.cpfCnpj, email: intent.email, endereco: intent.endereco });
+    return `Cliente cadastrado: ${client.nome}.`;
+  }
+  if (intent.intent === 'editar_cliente') {
+    const client = await updateSystemClient({ userId, clienteId: intent.clienteId, nome: intent.nome, telefone: intent.telefone, cpfCnpj: intent.cpfCnpj, email: intent.email, endereco: intent.endereco });
+    return `Cliente atualizado: ${describeClient(client)}.`;
+  }
+  if (intent.intent === 'excluir_cliente') {
+    await deleteSystemClient({ userId, clienteId: intent.clienteId });
+    return `Cliente excluido: ${intent.clienteNome || intent.cliente}.`;
+  }
+  if (intent.intent === 'cadastrar_os') {
+    const order = await createBasicServiceOrder({ userId, clienteId: intent.clienteId, modelo: intent.modelo, dataPrevisao: intent.dataPrevisao, valor: intent.value, formaPagamento: intent.formaPagamento, observacoes: intent.observacoes });
+    return `OS #${order.numero} cadastrada para ${intent.clienteNome}. Previsao: ${formatDateBr(order.dataPrevisao)}.`;
+  }
+  if (intent.intent === 'editar_os') {
+    const order = await updateSystemServiceOrder({ userId, ordemId: intent.ordemId, statusOs: intent.statusOs, dataPrevisao: intent.dataPrevisao, valor: intent.value, formaPagamento: intent.formaPagamento, modelo: intent.modelo, observacoes: intent.observacoes });
+    return `OS #${order.numero} atualizada: ${readableOrderStatus(order.status)}.`;
+  }
+  if (intent.intent === 'cancelar_os') {
+    await cancelSystemServiceOrder({ userId, ordemId: intent.ordemId });
+    return `OS #${intent.osNumero} cancelada.`;
+  }
+  return 'Acao executada.';
 }
 
 async function transcribeAudioFromUrl(audioUrl) {
@@ -1401,7 +1984,7 @@ async function logFinancialAi(data) {
   return id;
 }
 
-async function answerFinancialQuery(userId, intent) {
+async function answerSystemQuery(userId, intent) {
   const today = todayDate();
   const monthStart = today.slice(0, 8) + '01';
   const monthEnd = today.slice(0, 8) + '31';
@@ -1461,7 +2044,56 @@ async function answerFinancialQuery(userId, intent) {
     return `${rows[0].nome} deve R$ ${total.toFixed(2)}.\n` + rows.map((row) => `OS #${row.numero}: R$ ${(Number(row.valor_total || 0) - Number(row.valor_pago || 0)).toFixed(2)}`).join('\n');
   }
 
-  return 'Nao entendi o pedido financeiro. Tente, por exemplo: "quais contas vencem hoje?" ou "registre que a OS 125 foi paga em dinheiro".';
+  if (intent.intent === 'os_do_dia') {
+    const targetDate = normalizeIsoDate(intent.dataPrevisao) || today;
+    const [rows] = await pool.query(
+      `SELECT o.*, c.nome AS cliente_nome
+         FROM ordens_servico o
+         JOIN clientes c ON c.id = o.cliente_id
+        WHERE o.user_id = ?
+          AND o.status <> 'cancelado'
+          AND (LEFT(o.data_previsao, 10) = ? OR LEFT(o.data_entrada, 10) = ?)
+        ORDER BY o.data_previsao ASC, o.numero ASC
+        LIMIT 20`,
+      [userId, targetDate, targetDate],
+    );
+    if (!rows.length) return `Nenhuma OS encontrada para ${formatDateBr(targetDate)}.`;
+    return `OS de ${formatDateBr(targetDate)}:\n` + rows.map(describeOrder).join('\n');
+  }
+
+  if (intent.intent === 'buscar_cliente') {
+    const rows = await searchSystemClients(userId, intent.cliente || intent.telefone || intent.cpfCnpj, 10);
+    if (!rows.length) return 'Nao encontrei cliente com esses dados.';
+    return rows.map(describeClient).join('\n');
+  }
+
+  if (intent.intent === 'listar_clientes_recentes') {
+    const rows = await searchSystemClients(userId, null, 10);
+    if (!rows.length) return 'Nenhum cliente cadastrado ainda.';
+    return 'Clientes recentes:\n' + rows.map(describeClient).join('\n');
+  }
+
+  if (intent.intent === 'buscar_os') {
+    let rows = [];
+    if (intent.osNumero) {
+      const order = await findOrderForAi(userId, intent);
+      rows = order ? [order] : [];
+    } else if (intent.cliente) {
+      const [orders] = await pool.query(
+        `SELECT o.*, c.nome AS cliente_nome
+           FROM ordens_servico o
+           JOIN clientes c ON c.id = o.cliente_id
+          WHERE o.user_id = ? AND LOWER(c.nome) LIKE ?
+          ORDER BY o.numero DESC LIMIT 10`,
+        [userId, `%${String(intent.cliente).toLowerCase()}%`],
+      );
+      rows = orders;
+    }
+    if (!rows.length) return 'Nao encontrei OS com esses dados.';
+    return rows.map(describeOrder).join('\n');
+  }
+
+  return 'Nao entendi o pedido. Exemplos: "quais OS tenho hoje?", "cadastre cliente Maria telefone 61999999999", "abra OS para Maria dia 05/06" ou "registre que a OS 125 foi paga em pix".';
 }
 
 app.post('/api/financeiro/os/:id/pagamentos', requireAuth, async (req, res) => {
@@ -1534,7 +2166,7 @@ app.post('/api/financeiro/ia/webhook', async (req, res) => {
     const authorized = authorizedRows[0];
     if (!authorized) {
       await logFinancialAi({ user_id: 'unauthorized', telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, status: 'bloqueado', erro: 'Numero nao autorizado' }).catch(() => {});
-      return res.status(403).json({ reply: 'Numero nao autorizado para usar a IA financeira.' });
+      return res.status(403).json({ reply: 'Numero nao autorizado para usar a IA do sistema.' });
     }
 
     if (!message && audioUrl) message = await transcribeAudioFromUrl(audioUrl);
@@ -1551,7 +2183,7 @@ app.post('/api/financeiro/ia/webhook', async (req, res) => {
       return res.json({ reply, whatsapp_sent: true });
     }
 
-    const intent = parseFinancialIntent(message);
+    const intent = await getSystemIntent(message);
 
     if (intent.intent === 'confirmar_acao') {
       const queryParams = [authorized.user_id, phone];
@@ -1576,56 +2208,40 @@ app.post('/api/financeiro/ia/webhook', async (req, res) => {
         return res.json({ reply, whatsapp_sent: true });
       }
       const entities = typeof pending.entidades === 'string' ? JSON.parse(pending.entidades || '{}') : pending.entidades || {};
-      let reply = 'Acao confirmada.';
-      if (pending.intencao === 'registrar_despesa') {
-        await createExpense({ userId: authorized.user_id, descricao: entities.description, valor: entities.value, formaPagamento: entities.formaPagamento, origem: 'whatsapp_ia' });
-        reply = `Despesa registrada: ${entities.description} - R$ ${Number(entities.value).toFixed(2)}.`;
-      }
-      if (pending.intencao === 'registrar_pagamento_os') {
-        const payment = await registerOrderPayment({ userId: authorized.user_id, ordemNumero: entities.osNumero, valor: entities.value, formaPagamento: entities.formaPagamento, origem: 'whatsapp_ia' });
-        reply = `Pagamento registrado na OS #${payment.order.numero}: R$ ${Number(payment.amount).toFixed(2)}.`;
-      }
-      if (pending.intencao === 'registrar_conta_pagar') {
-        const conta = await createAccountPayable({ userId: authorized.user_id, descricao: entities.description, valor: entities.value, dataVencimento: entities.dataVencimento, formaPagamento: entities.formaPagamento, origem: 'whatsapp_ia' });
-        reply = `Conta cadastrada: ${conta.descricao} - R$ ${Number(conta.valor).toFixed(2)}. Vencimento: ${conta.dataVencimento}.`;
-      }
+      const reply = await executeSystemWriteIntent(authorized.user_id, { ...entities, intent: pending.intencao });
       await logFinancialAi({ id: pending.id, user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: pending.mensagem, tipo_mensagem: pending.tipo_mensagem, intencao: pending.intencao, entidades, status: 'executado', resposta: reply, confirmacao_token: intent.token || pending.confirmacao_token, confirmado_em: now() });
       await sendFinancialAiReply(authorized.user_id, phone, reply);
       return res.json({ reply, whatsapp_sent: true });
     }
 
-    if (['registrar_despesa', 'registrar_pagamento_os', 'registrar_conta_pagar'].includes(intent.intent)) {
-      if (!canWriteFinancial(authorized.permissao)) {
+    if (SYSTEM_AI_WRITE_INTENTS.has(intent.intent)) {
+      if (!canWriteSystem(authorized.permissao)) {
         const reply = 'Seu numero tem permissao apenas de consulta.';
         await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, intencao: intent.intent, entidades: intent, status: 'negado', resposta: reply });
         await sendFinancialAiReply(authorized.user_id, phone, reply);
         return res.status(403).json({ reply, whatsapp_sent: true });
       }
-      if (!intent.value || intent.value <= 0) {
-        const reply = 'Informe um valor valido para registrar essa acao.';
-        await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, intencao: intent.intent, entidades: intent, status: 'erro', resposta: reply, erro: 'Valor ausente' });
+      if (SYSTEM_AI_ADMIN_INTENTS.has(intent.intent) && !canAdminSystem(authorized.permissao)) {
+        const reply = 'Essa acao exige permissao admin.';
+        await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, intencao: intent.intent, entidades: intent, status: 'negado', resposta: reply });
         await sendFinancialAiReply(authorized.user_id, phone, reply);
-        return res.json({ reply, whatsapp_sent: true });
+        return res.status(403).json({ reply, whatsapp_sent: true });
       }
-      if (intent.intent === 'registrar_conta_pagar' && !intent.dataVencimento) {
-        const reply = 'Informe a data de vencimento da conta.';
-        await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, intencao: intent.intent, entidades: intent, status: 'erro', resposta: reply, erro: 'Vencimento ausente' });
-        await sendFinancialAiReply(authorized.user_id, phone, reply);
-        return res.json({ reply, whatsapp_sent: true });
+      const prepared = await prepareSystemWriteIntent(authorized.user_id, intent);
+      if (!prepared.ok) {
+        await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, intencao: intent.intent, entidades: intent, status: 'erro', resposta: prepared.reply });
+        await sendFinancialAiReply(authorized.user_id, phone, prepared.reply);
+        return res.json({ reply: prepared.reply, whatsapp_sent: true });
       }
+      const preparedIntent = prepared.intent || intent;
       const token = crypto.randomBytes(3).toString('hex').toUpperCase();
-      const actionText = intent.intent === 'registrar_despesa'
-        ? `registrar despesa "${intent.description}" de R$ ${Number(intent.value).toFixed(2)}`
-        : intent.intent === 'registrar_conta_pagar'
-          ? `cadastrar conta "${intent.description}" de R$ ${Number(intent.value).toFixed(2)} com vencimento em ${intent.dataVencimento}`
-          : `registrar pagamento da OS #${intent.osNumero} de R$ ${Number(intent.value).toFixed(2)}`;
-      const reply = `Confirme para ${actionText}. Responda: confirmar ${token}`;
-      await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, intencao: intent.intent, entidades: intent, status: 'aguardando_confirmacao', resposta: reply, confirmacao_token: token });
+      const reply = `Confirme para ${prepared.actionText}. Responda: confirmar ${token}`;
+      await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, intencao: preparedIntent.intent, entidades: preparedIntent, status: 'aguardando_confirmacao', resposta: reply, confirmacao_token: token });
       await sendFinancialAiReply(authorized.user_id, phone, reply);
       return res.json({ reply, confirmation_required: true, token, whatsapp_sent: true });
     }
 
-    const reply = await answerFinancialQuery(authorized.user_id, intent);
+    const reply = await answerSystemQuery(authorized.user_id, intent);
     await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, intencao: intent.intent, entidades: intent, status: 'respondido', resposta: reply });
     await sendFinancialAiReply(authorized.user_id, phone, reply);
     res.json({ reply, whatsapp_sent: true });

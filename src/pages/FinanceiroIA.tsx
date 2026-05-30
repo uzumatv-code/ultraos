@@ -51,8 +51,8 @@ export function FinanceiroIA() {
       setAuthorized(authData || []);
       setLogs(logData || []);
     } catch (error) {
-      console.error('Erro ao carregar IA financeira:', error);
-      toast.error('Erro ao carregar configuracoes da IA financeira');
+      console.error('Erro ao carregar IA do sistema:', error);
+      toast.error('Erro ao carregar configuracoes da IA do sistema');
     } finally {
       setLoading(false);
     }
@@ -117,7 +117,7 @@ export function FinanceiroIA() {
   async function removeNumber(item: FinanceiroIAAutorizado) {
     const result = await alerts.confirm({
       title: 'Remover numero',
-      text: `Remover ${item.nome} da IA financeira?`,
+      text: `Remover ${item.nome} da IA do sistema?`,
       icon: 'warning'
     });
     if (!result.isConfirmed) return;
@@ -141,8 +141,8 @@ export function FinanceiroIA() {
       <div className="responsive-page">
         <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Automacao financeira</p>
-            <h1 className="mt-1 text-2xl sm:text-3xl font-semibold text-gray-950 dark:text-white">IA Financeira via WhatsApp</h1>
+            <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Automacao do sistema</p>
+            <h1 className="mt-1 text-2xl sm:text-3xl font-semibold text-gray-950 dark:text-white">IA do Sistema via WhatsApp</h1>
           </div>
           <div className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm text-gray-700 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-200">
             <Shield className="h-4 w-4" />
