@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Calendar, Send, ArrowLeft, X, Users, Music2, PenTool as Tool, DollarSign, FileText, Plus, Check, Edit2, Star, Clock, CreditCard, Banknote, Smartphone, Search } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { capitalize } from '../utils/formatters';
+import { formatLocalDate, toDateOnly, todayLocalDate } from '../utils/dates';
 import { Autocomplete } from '../components/Autocomplete';
 import { ClienteModal } from '../components/ClienteModal';
 import { InstrumentoModal } from '../components/InstrumentoModal';
@@ -23,12 +24,11 @@ import { MultiSelect } from '../components/MultiSelect';
 type FormaPagamento = 'credito' | 'debito' | 'pix';
 
 function todayForDatabase() {
-  return new Date().toISOString().slice(0, 10);
+  return todayLocalDate();
 }
 
 function dateForDatabase(value: string) {
-  if (!value) return '';
-  return value.includes('T') ? value.slice(0, 10) : value;
+  return toDateOnly(value);
 }
 
 export function NovaOrdem() {
@@ -1114,7 +1114,7 @@ ${servicosText || 'Nenhum serviço registrado.'}`;
               <div className="relative">
                 <input
                   type="text"
-                  value={dataPrevisao ? new Date(dataPrevisao).toLocaleDateString('pt-BR') : ''}
+                  value={formatLocalDate(dataPrevisao)}
                   readOnly
                   className="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-rose-500 focus:border-rose-500 bg-white dark:bg-gray-700 dark:text-gray-100 cursor-pointer transition-all"
                   placeholder="Clique para selecionar a data de previsão"
@@ -1160,7 +1160,7 @@ ${servicosIds.map(id => {
 
 💰 VALOR: ${formatCurrency(valorServicos - desconto)}
 💳 FORMA DE PAGAMENTO: ${formaPagamento.toUpperCase()}
-📅 PREVISÃO DE ENTREGA: ${dataPrevisao ? new Date(dataPrevisao).toLocaleDateString('pt-BR') : 'A definir'}
+📅 PREVISÃO DE ENTREGA: ${dataPrevisao ? formatLocalDate(dataPrevisao) : 'A definir'}
 
 ⏰ Horário de retirada: 10h às 18h
 
@@ -1306,9 +1306,7 @@ https://www.instagram.com/luthieriabrasilia/`;
                 height="auto"
                 selectable={true}
                 select={(info) => {
-                  const date = new Date(info.start);
-                  date.setHours(10, 0, 0);
-                  setDataPrevisao(date.toISOString());
+                  setDataPrevisao(toDateOnly(info.start));
                   setShowCalendar(false);
                 }}
                 events={ordensExistentes.map(ordem => ({

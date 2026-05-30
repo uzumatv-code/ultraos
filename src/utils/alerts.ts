@@ -1,5 +1,6 @@
 import Swal from 'sweetalert2';
 import { WhatsAppService } from './whatsapp-service';
+import { formatLocalDate } from './dates';
 import { supabase } from '../lib/supabase';
 
 // Detectar tema escuro
@@ -150,10 +151,10 @@ export const alerts = {
               </p>
             </div>
             <div>
-              <p class="${dark ? 'text-gray-300' : 'text-gray-700'}"><strong class="${dark ? 'text-gray-200' : 'text-gray-900'}">📅 Entrada:</strong> ${new Date(ordem.data_entrada).toLocaleDateString('pt-BR')}</p>
+              <p class="${dark ? 'text-gray-300' : 'text-gray-700'}"><strong class="${dark ? 'text-gray-200' : 'text-gray-900'}">📅 Entrada:</strong> ${formatLocalDate(ordem.data_entrada)}</p>
             </div>
             <div>
-              <p class="${dark ? 'text-gray-300' : 'text-gray-700'}"><strong class="${dark ? 'text-gray-200' : 'text-gray-900'}">📆 Previsão:</strong> ${new Date(ordem.data_previsao).toLocaleDateString('pt-BR')}</p>
+              <p class="${dark ? 'text-gray-300' : 'text-gray-700'}"><strong class="${dark ? 'text-gray-200' : 'text-gray-900'}">📆 Previsão:</strong> ${formatLocalDate(ordem.data_previsao)}</p>
             </div>
             <div>
               <p class="${dark ? 'text-gray-300' : 'text-gray-700'}"><strong class="${dark ? 'text-gray-200' : 'text-gray-900'}">💰 Valor:</strong> ${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(ordem.valor_total)}</p>

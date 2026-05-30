@@ -1,4 +1,5 @@
 import { supabase } from '../lib/supabase';
+import { formatLocalDate } from './dates';
 
 export interface MessageTemplate {
   id?: string;
@@ -341,12 +342,12 @@ Muito obrigado pela confiança! 🎸
     }
 
     if (data.data_criacao || data.data_entrada) {
-      const dataFormatada = new Date(data.data_criacao || data.data_entrada).toLocaleDateString('pt-BR');
+      const dataFormatada = formatLocalDate(data.data_criacao || data.data_entrada);
       message = message.replace(/{data_criacao}/g, dataFormatada);
     }
 
     if (data.previsao_entrega || data.data_previsao) {
-      const previsaoFormatada = new Date(data.previsao_entrega || data.data_previsao).toLocaleDateString('pt-BR');
+      const previsaoFormatada = formatLocalDate(data.previsao_entrega || data.data_previsao);
       message = message.replace(/{previsao_entrega}/g, previsaoFormatada);
     }
 

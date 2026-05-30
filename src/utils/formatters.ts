@@ -1,3 +1,5 @@
+import { formatLocalDate, parseLocalDate } from './dates';
+
 export function capitalize(text: string) {
   if (!text) return '';
   return text.toLowerCase().replace(/(^|\s)\w/g, letter => letter.toUpperCase());
@@ -11,21 +13,24 @@ export function formatCurrency(value: number): string {
 }
 
 export function formatDate(date: string | Date): string {
+  const parsed = parseLocalDate(date);
+  if (!parsed) return '';
+
+  if (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return formatLocalDate(date);
+  }
+
   return new Intl.DateTimeFormat('pt-BR', {
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
     hour: '2-digit',
     minute: '2-digit'
-  }).format(new Date(date));
+  }).format(parsed);
 }
 
 export function formatDateOnly(date: string | Date): string {
-  return new Intl.DateTimeFormat('pt-BR', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric'
-  }).format(new Date(date));
+  return formatLocalDate(date);
 }
 
 export function formatPhoneNumber(phone: string): string {

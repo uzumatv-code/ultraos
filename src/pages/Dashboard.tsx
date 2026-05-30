@@ -7,6 +7,7 @@ import { toast } from '../components/ToastCustom';
 import { alerts } from '../utils/alerts';
 import { useState, useEffect } from 'react';
 import { formatCurrency } from '../utils/formatters';
+import { toDateOnly } from '../utils/dates';
 import { CustomCalendar } from '../components/CustomCalendar';
 import { ModernCalendar } from '../components/ModernCalendar';
 
@@ -135,7 +136,7 @@ export function Dashboard() {
 
       const { error } = await supabase
         .from('ordens_servico')
-        .update({ data_previsao: newDate.toISOString() })
+        .update({ data_previsao: toDateOnly(newDate) })
         .eq('id', event.id);
 
       if (error) {

@@ -8,6 +8,7 @@ import { ConfiguracoesModal } from './ConfiguracoesModal';
 import { NotificacoesModal } from './NotificacoesModal';
 import { supabase } from '../lib/supabase';
 import { toast } from './ToastCustom';
+import { addDaysToDateOnly, todayLocalDate } from '../utils/dates';
 import type { OrdemServico, ContaPagar } from '../types/database';
 
 export function Header() {
@@ -123,10 +124,8 @@ export function Header() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user?.id || !user?.aud) return;
 
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const tomorrow = new Date(today);
-      tomorrow.setDate(tomorrow.getDate() + 1);
+      const today = todayLocalDate();
+      const tomorrow = addDaysToDateOnly(today, 1);
 
       const { data, error } = await supabase
         .from('ordens_servico')
@@ -137,8 +136,8 @@ export function Header() {
         `)
         .eq('user_id', user.id)
         .eq('status', 'pendente')
-        .gte('data_previsao', today.toISOString())
-        .lt('data_previsao', tomorrow.toISOString());
+        .gte('data_previsao', today)
+        .lt('data_previsao', tomorrow);
 
       if (error) throw error;
       setOrdensHoje(data || []);
@@ -156,10 +155,8 @@ export function Header() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user?.id || !user?.aud) return;
 
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const tomorrow = new Date(today);
-      tomorrow.setDate(tomorrow.getDate() + 1);
+      const today = todayLocalDate();
+      const tomorrow = addDaysToDateOnly(today, 1);
 
       const { data, error } = await supabase
         .from('contas_pagar')
@@ -169,8 +166,8 @@ export function Header() {
         `)
         .eq('user_id', user.id)
         .in('status', ['pendente', 'atrasado'])
-        .gte('data_vencimento', today.toISOString())
-        .lt('data_vencimento', tomorrow.toISOString());
+        .gte('data_vencimento', today)
+        .lt('data_vencimento', tomorrow);
 
       if (error) throw error;
       setContasHoje(data || []);

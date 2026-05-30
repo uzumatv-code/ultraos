@@ -4,6 +4,7 @@ import { Calendar, Clock, PenTool as Tool, Send, DollarSign, AlertTriangle } fro
 import { supabase } from '../lib/supabase';
 import { alerts } from '../utils/alerts';
 import { openWhatsApp, formatCurrency } from '../utils/formatters';
+import { parseLocalDate, toDateOnly, todayLocalDate } from '../utils/dates';
 import { toast } from './ToastCustom';
 import type { OrdemServico, ContaPagar } from '../types/database';
 
@@ -14,29 +15,30 @@ interface NotificacoesModalProps {
 }
 
 export function NotificacoesModal({ ordens, contas, onClose }: NotificacoesModalProps) {
-  const today = new Date().toISOString().split('T')[0];
+  const today = todayLocalDate();
 
   // Filter orders for today
   const ordensHoje = ordens.filter(ordem => 
-    ordem.data_previsao.split('T')[0] === today &&
+    toDateOnly(ordem.data_previsao) === today &&
     ordem.status !== 'concluido' &&
     ordem.status !== 'cancelado'
   ).sort((a, b) => 
-    new Date(a.data_previsao).getTime() - new Date(b.data_previsao).getTime()
+    (parseLocalDate(a.data_previsao)?.getTime() || 0) - (parseLocalDate(b.data_previsao)?.getTime() || 0)
   );
 
   // Filter bills due today
   const contasHoje = contas.filter(conta =>
-    conta.data_vencimento.split('T')[0] === today &&
+    toDateOnly(conta.data_vencimento) === today &&
     conta.status !== 'pago' &&
     conta.status !== 'cancelado'
   ).sort((a, b) =>
-    new Date(a.data_vencimento).getTime() - new Date(b.data_vencimento).getTime()
+    (parseLocalDate(a.data_vencimento)?.getTime() || 0) - (parseLocalDate(b.data_vencimento)?.getTime() || 0)
   );
 
   // Filter orders that are 6 months old
   const ordensSeisMeses = ordens.filter(ordem => {
-    const dataEntrada = new Date(ordem.data_entrada);
+    const dataEntrada = parseLocalDate(ordem.data_entrada);
+    if (!dataEntrada) return false;
     const hoje = new Date();
     const diffMeses = (hoje.getFullYear() - dataEntrada.getFullYear()) * 12 + 
                      (hoje.getMonth() - dataEntrada.getMonth());
@@ -180,10 +182,10 @@ Seu ${ordem.instrumento?.nome} ${ordem.marca?.nome} ${ordem.modelo} está a 6 me
                     <div className="flex items-center text-sm text-gray-500">
                       <Clock className="w-4 h-4 mr-1" />
                       <span>
-                        {new Date(ordem.data_previsao).toLocaleTimeString('pt-BR', {
+                        {parseLocalDate(ordem.data_previsao)?.toLocaleTimeString('pt-BR', {
                           hour: '2-digit',
                           minute: '2-digit'
-                        })}
+                        }) || '--:--'}
                       </span>
                     </div>
                     <button

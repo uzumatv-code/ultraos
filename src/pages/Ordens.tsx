@@ -6,6 +6,7 @@ import { supabase } from '../lib/supabase';
 import { toast } from '../components/ToastCustom';
 import { alerts } from '../utils/alerts';
 import { formatDate, formatCurrency } from '../utils/formatters';
+import { todayLocalDate } from '../utils/dates';
 import { WhatsAppService } from '../utils/whatsapp-service';
 import { EvaluationReminderService } from '../utils/evaluation-reminder-service';
 import { NFSeService } from '../utils/nfse-service';
@@ -251,7 +252,7 @@ export function Ordens() {
   async function handleChangeStatus(ordem: OrdemServico, newStatus: 'pendente' | 'em_andamento' | 'concluido' | 'cancelado') {
     try {
       const payload = newStatus === 'concluido'
-        ? { status: newStatus, data_entrega: new Date().toISOString().slice(0, 10) }
+        ? { status: newStatus, data_entrega: todayLocalDate() }
         : { status: newStatus };
 
       const { error } = await supabase
