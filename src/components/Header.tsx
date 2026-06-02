@@ -60,12 +60,26 @@ export function Header() {
   const [contasHoje, setContasHoje] = useState<ContaPagar[]>([]);
   const [logoUrl, setLogoUrl] = useState('');
   const [siteTitle, setSiteTitle] = useState('Sistema OS');
+  const [displayName, setDisplayName] = useState('Usuário');
+  const [displayRole, setDisplayRole] = useState('Usuário');
+  const [avatarUrl, setAvatarUrl] = useState('');
   const [loading, setLoading] = useState(true);
+
+  const atualizarPerfil = useCallback((user: any) => {
+    if (!user) return;
+
+    const nome = user.user_metadata?.nome || user.email?.split('@')[0] || 'Usuário';
+    const nivel = user.app_metadata?.nivel || 'usuario';
+    setDisplayName(nome);
+    setDisplayRole(nivel === 'admin' ? 'Administrador' : 'Usuário');
+    setAvatarUrl(user.user_metadata?.avatar_url || '');
+  }, []);
 
   const carregarConfiguracoes = useCallback(async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
+      atualizarPerfil(user);
 
       const { data, error } = await supabase
         .from('system_settings')
@@ -141,6 +155,14 @@ export function Header() {
     return () => clearInterval(interval);
   }, [carregarConfiguracoes]);
 
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      atualizarPerfil(session?.user || null);
+    });
+
+    return () => subscription.unsubscribe();
+  }, [atualizarPerfil]);
+
   async function handleLogout() {
     try {
       await supabase.auth.signOut();
@@ -152,6 +174,7 @@ export function Header() {
   }
 
   const notificationCount = ordensHoje.length + contasHoje.length;
+  const displayInitial = displayName.trim().charAt(0).toUpperCase() || 'U';
   const sidebar = (
     <aside className="flex h-full flex-col bg-slate-950 text-white">
       <div className="flex items-center gap-3 px-5 py-5">
@@ -223,10 +246,12 @@ export function Header() {
           onClick={() => navigate('/perfil')}
           className="mb-2 flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-sm text-slate-300 hover:bg-white/10 hover:text-white"
         >
-          <div className="h-9 w-9 rounded-full bg-slate-800" />
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-800 text-xs font-semibold text-slate-200">
+            {avatarUrl ? <img src={avatarUrl} alt={displayName} className="h-full w-full object-cover" /> : displayInitial}
+          </div>
           <div className="min-w-0">
-            <p className="truncate font-medium">Wesley Albuquerque</p>
-            <p className="truncate text-xs text-slate-500">Administrador</p>
+            <p className="truncate font-medium">{displayName}</p>
+            <p className="truncate text-xs text-slate-500">{displayRole}</p>
           </div>
         </button>
         <button

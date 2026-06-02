@@ -25,8 +25,8 @@ export function EditarPerfilModal({ isOpen, onClose, onSuccess }: EditarPerfilMo
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
+        setNome(user.user_metadata?.nome || '');
         setEmail(user.email || '');
-        // Aqui você pode carregar mais dados do perfil do usuário se necessário
       }
     } catch (error) {
       console.error('Erro ao carregar dados:', error);
@@ -36,16 +36,23 @@ export function EditarPerfilModal({ isOpen, onClose, onSuccess }: EditarPerfilMo
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+
+    const nomeFormatado = nome.trim();
+    if (!nomeFormatado) {
+      toast.error('Informe o nome do usuário');
+      return;
+    }
+
     setLoading(true);
 
     try {
       const { error } = await supabase.auth.updateUser({
-        email: email,
+        data: { nome: nomeFormatado },
       });
 
       if (error) throw error;
 
-      toast.success('Perfil atualizado com sucesso! Verifique seu email para confirmar as alterações.');
+      toast.success('Perfil atualizado com sucesso!');
       onSuccess();
       onClose();
     } catch (error) {
@@ -85,6 +92,23 @@ export function EditarPerfilModal({ isOpen, onClose, onSuccess }: EditarPerfilMo
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Nome
+                  </label>
+                  <div className="relative">
+                    <User className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
+                    <input
+                      type="text"
+                      value={nome}
+                      onChange={(e) => setNome(e.target.value)}
+                      className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 dark:bg-gray-700 dark:text-gray-200"
+                      placeholder="Nome do usuário"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                     Email
                   </label>
                   <div className="relative">
@@ -92,10 +116,9 @@ export function EditarPerfilModal({ isOpen, onClose, onSuccess }: EditarPerfilMo
                     <input
                       type="email"
                       value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 dark:bg-gray-700 dark:text-gray-200"
+                      readOnly
+                      className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-50 text-gray-600 dark:bg-gray-900 dark:text-gray-400"
                       placeholder="seu@email.com"
-                      required
                     />
                   </div>
                 </div>

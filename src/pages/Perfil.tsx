@@ -17,6 +17,7 @@ export function Perfil() {
   const [showNovoUsuarioModal, setShowNovoUsuarioModal] = useState(false);
   const [showEditarPerfilModal, setShowEditarPerfilModal] = useState(false);
   const [showConfigFiscalModal, setShowConfigFiscalModal] = useState(false);
+  const [nome, setNome] = useState('');
   const [email, setEmail] = useState('');
   const [notificacoesEmail, setNotificacoesEmail] = useState(true);
   const [notificacoesWhatsApp, setNotificacoesWhatsApp] = useState(true);
@@ -31,8 +32,9 @@ export function Perfil() {
   async function loadUserData() {
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      if (user?.email) {
-        setEmail(user.email);
+      if (user) {
+        setNome(user.user_metadata?.nome || '');
+        setEmail(user.email || '');
       }
     } catch (error) {
       console.error('Erro ao carregar dados do usuário:', error);
@@ -91,17 +93,27 @@ export function Perfil() {
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Email
+                  Nome
                 </label>
                 <div className="w-full px-3 py-2 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-800 dark:text-gray-200 flex items-center justify-between gap-2">
-                  <span className="min-w-0 truncate">{email}</span>
+                  <span className="min-w-0 truncate">{nome || 'Nome não informado'}</span>
                   <button
                     type="button"
                     onClick={() => setShowEditarPerfilModal(true)}
                     className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+                    title="Editar perfil"
                   >
                     <Edit className="w-4 h-4" />
                   </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Email
+                </label>
+                <div className="w-full px-3 py-2 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-800 dark:text-gray-200">
+                  <span className="block min-w-0 truncate">{email}</span>
                 </div>
               </div>
 
