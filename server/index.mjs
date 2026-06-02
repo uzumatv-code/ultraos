@@ -569,8 +569,8 @@ app.post('/api/query', requireAuth, async (req, res) => {
       if (!where.length) return res.status(400).json({ error: { message: 'Filtro obrigatorio para alteracao' } });
 
       if (action === 'delete') {
-        await pool.query(`DELETE FROM \`${physicalTable}\` WHERE ${where.join(' AND ')}`, params);
-        return res.json({ data: null, error: null });
+        const [result] = await pool.query(`DELETE FROM \`${physicalTable}\` WHERE ${where.join(' AND ')}`, params);
+        return res.json({ data: null, count: Number(result.affectedRows || 0), error: null });
       }
 
       const data = await filterDataToColumns(physicalTable, payload);
@@ -593,14 +593,14 @@ app.post('/api/query', requireAuth, async (req, res) => {
       }
       const keys = Object.keys(data);
       if (!keys.length) return res.json({ data: null, error: null });
-      await pool.query(
+      const [result] = await pool.query(
         `UPDATE \`${physicalTable}\` SET ${keys.map((key) => `\`${key}\` = ?`).join(', ')} WHERE ${where.join(' AND ')}`,
         [...Object.values(data), ...params],
       );
       for (const ordemId of affectedOrderIds) {
         await syncReceivableForOrder(pool, req.user.id, ordemId);
       }
-      return res.json({ data: null, error: null });
+      return res.json({ data: null, count: Number(result.affectedRows || 0), error: null });
     }
 
     if (action === 'upsert') {

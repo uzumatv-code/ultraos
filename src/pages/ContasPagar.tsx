@@ -178,6 +178,7 @@ export function ContasPagar() {
           categoria:categorias_financeiras(*)
         `)
         .eq('user_id', user.id)
+        .neq('status', 'cancelado')
         .order('data_vencimento', { ascending: true });
 
       if (error) throw error;
@@ -253,6 +254,7 @@ export function ContasPagar() {
           categoria:categorias_financeiras(*)
         `)
         .eq('user_id', user.id)
+        .neq('status', 'cancelado')
         .order('data_vencimento', { ascending: true })
         .gte('data_vencimento', monthStart)
         .lt('data_vencimento', nextMonthStart);
@@ -328,20 +330,21 @@ export function ContasPagar() {
     if (!confirm(`Deseja realmente excluir a conta ${conta.descricao}?`)) return;
 
     try {
-      const { error } = await supabase
+      const { count, error } = await supabase
         .from('contas_pagar')
-        .delete()
+        .update({ status: 'cancelado' })
         .eq('id', conta.id);
 
       if (error) throw error;
+      if (count === 0) throw new Error('Nenhuma conta foi excluida');
 
       toast.success('Conta excluída com sucesso!');
       // Se a página atual ficar vazia após exclusão, volte para a anterior
       if (paginatedContas.length === 1 && pagina > 0) {
         setPagina(pagina - 1);
-      } else {
-        await buscarDados();
       }
+      setContasSelecionadas((selecionadas) => selecionadas.filter((id) => id !== conta.id));
+      await buscarDados();
       await buscarContasCalendario();
     } catch (error) {
       console.error('Erro ao excluir conta:', error);
@@ -512,12 +515,13 @@ export function ContasPagar() {
 
     setAcaoEmMassaLoading(true);
     try {
-      const { error } = await supabase
+      const { count, error } = await supabase
         .from('contas_pagar')
-        .delete()
+        .update({ status: 'cancelado' })
         .in('id', contasSelecionadas);
 
       if (error) throw error;
+      if (count === 0) throw new Error('Nenhuma conta foi excluida');
 
       toast.success(`${selectedContas.length} conta(s) excluida(s) com sucesso!`);
       setContasSelecionadas([]);

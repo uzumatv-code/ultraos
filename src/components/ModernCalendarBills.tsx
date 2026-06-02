@@ -147,12 +147,13 @@ export function ModernCalendarBills({ bills, onEventClick, loading = false, onUp
 
     setUpdatingStatus(true);
     try {
-      const { error } = await supabase
+      const { count, error } = await supabase
         .from('contas_pagar')
-        .delete()
+        .update({ status: 'cancelado' })
         .eq('id', bill.id);
 
       if (error) throw error;
+      if (count === 0) throw new Error('Nenhuma conta foi excluida');
 
       toast.success('Conta excluída com sucesso!');
       onUpdate?.();
