@@ -114,13 +114,13 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 function Layout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-screen w-full overflow-x-hidden gradient-bg dark:bg-gradient-to-br dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
+    <div className="min-h-screen w-full overflow-x-hidden bg-gray-50 dark:bg-gray-950">
       <Header />
       <motion.div 
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5 }}
-        className="pb-[calc(5rem+env(safe-area-inset-bottom))] lg:pb-0"
+        className="pt-16 pb-[calc(5rem+env(safe-area-inset-bottom))] lg:pl-64 lg:pt-0 lg:pb-0"
       >
         {children}
       </motion.div>
