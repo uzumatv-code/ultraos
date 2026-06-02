@@ -5,13 +5,21 @@ import { KeyRound, Mail, Music2, Loader2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { toast } from '../components/ToastCustom';
 
+const REMEMBERED_LOGIN_KEY = 'ultraos-remembered-login-email';
+
 export function Login() {
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [senha, setSenha] = useState('');
+  const [memorizarLogin, setMemorizarLogin] = useState(false);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    const rememberedEmail = localStorage.getItem(REMEMBERED_LOGIN_KEY);
+    if (rememberedEmail) {
+      setEmail(rememberedEmail);
+      setMemorizarLogin(true);
+    }
     checkUser();
   }, [navigate]);
 
@@ -50,6 +58,12 @@ export function Login() {
         throw new Error('Login bem-sucedido mas sem sessão/usuário retornado');
       }
       
+      if (memorizarLogin) {
+        localStorage.setItem(REMEMBERED_LOGIN_KEY, email.trim().toLowerCase());
+      } else {
+        localStorage.removeItem(REMEMBERED_LOGIN_KEY);
+      }
+
       navigate('/dashboard');
       toast.success('Bem-vindo de volta! 👋');
     } catch (error: any) {
@@ -141,6 +155,7 @@ export function Login() {
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                autoComplete="username"
                 className="w-full pl-12 pr-4 py-3.5 bg-white/60 dark:bg-gray-800/60 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all duration-300 text-gray-800 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 shadow-inner-lg login-input"
                 placeholder="seu@email.com" 
                 required
@@ -161,12 +176,28 @@ export function Login() {
                 type="password"
                 value={senha}
                 onChange={(e) => setSenha(e.target.value)}
+                autoComplete="off"
                 className="w-full pl-12 pr-4 py-3.5 bg-white/60 dark:bg-gray-800/60 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all duration-300 text-gray-800 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 shadow-inner-lg login-input"
                 placeholder="••••••••"
                 required
               />
             </div>
           </motion.div>
+
+          <motion.label
+            initial={{ opacity: 0, x: -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: 0.65 }}
+            className="flex cursor-pointer items-center gap-3 text-sm font-medium text-gray-700 dark:text-gray-300 login-text"
+          >
+            <input
+              type="checkbox"
+              checked={memorizarLogin}
+              onChange={(e) => setMemorizarLogin(e.target.checked)}
+              className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800"
+            />
+            <span>Memorizar email</span>
+          </motion.label>
 
           <motion.button
             initial={{ opacity: 0, y: 20 }}

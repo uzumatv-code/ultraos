@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { DollarSign, Search, Plus, Pencil, Trash2, ChevronLeft, ChevronRight, Check, AlertTriangle, TrendingDown, Calendar } from 'lucide-react';
+import { DollarSign, Search, Plus, Pencil, Trash2, ChevronLeft, ChevronRight, Check, AlertTriangle, TrendingDown, Calendar, CheckCircle2, Square, X } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { toast } from '../components/ToastCustom';
 import { ContaPagarModal } from '../components/ContaPagarModal';
@@ -154,6 +154,8 @@ export function ContasPagar() {
   const [showCalendar, setShowCalendar] = useState(true);
   const [calendarType, setCalendarType] = useState<'custom' | 'modern'>('custom');
   const [contasCalendario, setContasCalendario] = useState<ContaPagar[]>([]);
+  const [contasSelecionadas, setContasSelecionadas] = useState<string[]>([]);
+  const [acaoEmMassaLoading, setAcaoEmMassaLoading] = useState(false);
 
   // Função para obter o primeiro e último dia do mês
   useEffect(() => {
@@ -347,24 +349,32 @@ export function ContasPagar() {
     }
   }
 
+  function authHeaders() {
+    const sessionRaw = localStorage.getItem('mysql-auth-session');
+    const token = sessionRaw ? JSON.parse(sessionRaw)?.access_token : null;
+    return {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    };
+  }
+
+  async function pagarConta(conta: ContaPagar) {
+    const response = await fetch(`/api/financeiro/contas-pagar/${conta.id}/pagar`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        forma_pagamento: conta.forma_pagamento
+      })
+    });
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(json.error?.message || 'Erro ao pagar conta');
+  }
+
   async function handlePagar(conta: ContaPagar) {
     try {
-      const sessionRaw = localStorage.getItem('mysql-auth-session');
-      const token = sessionRaw ? JSON.parse(sessionRaw)?.access_token : null;
-      const response = await fetch(`/api/financeiro/contas-pagar/${conta.id}/pagar`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {})
-        },
-        body: JSON.stringify({
-          forma_pagamento: conta.forma_pagamento
-        })
-      });
-      const json = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(json.error?.message || 'Erro ao pagar conta');
-
+      await pagarConta(conta);
       toast.success('Conta paga e despesa lancada!');
+      setContasSelecionadas((selecionadas) => selecionadas.filter((id) => id !== conta.id));
       await buscarDados();
       await buscarContasCalendario();
     } catch (error) {
@@ -398,12 +408,129 @@ export function ContasPagar() {
   }, [contas, globalFilter, statusFiltro, buscaCategoria]);
 
   // Paginação client-side
+  useEffect(() => {
+    setContasSelecionadas((selecionadas) =>
+      selecionadas.filter((id) => filteredContas.some((conta) => conta.id === id))
+    );
+  }, [filteredContas]);
+
   const paginatedContas = useMemo(() => {
     const start = pagina * itensPorPagina;
     return filteredContas.slice(start, start + itensPorPagina);
   }, [filteredContas, pagina, itensPorPagina]);
 
   const totalPaginas = Math.ceil(filteredContas.length / itensPorPagina);
+
+  const selectedSet = useMemo(() => new Set(contasSelecionadas), [contasSelecionadas]);
+  const selectedContas = useMemo(
+    () => filteredContas.filter((conta) => selectedSet.has(conta.id)),
+    [filteredContas, selectedSet]
+  );
+  const selectedPayableContas = useMemo(
+    () => selectedContas.filter((conta) => conta.status === 'pendente' || conta.status === 'atrasado'),
+    [selectedContas]
+  );
+  const totalSelecionado = useMemo(
+    () => selectedContas.reduce((acc, conta) => acc + Number(conta.valor || 0), 0),
+    [selectedContas]
+  );
+  const pageSelectionState = useMemo(() => {
+    if (!paginatedContas.length) return 'none';
+    const selectedOnPage = paginatedContas.filter((conta) => selectedSet.has(conta.id)).length;
+    if (selectedOnPage === 0) return 'none';
+    if (selectedOnPage === paginatedContas.length) return 'all';
+    return 'partial';
+  }, [paginatedContas, selectedSet]);
+
+  function toggleSelecionarConta(contaId: string) {
+    setContasSelecionadas((selecionadas) =>
+      selecionadas.includes(contaId)
+        ? selecionadas.filter((id) => id !== contaId)
+        : [...selecionadas, contaId]
+    );
+  }
+
+  function toggleSelecionarPagina() {
+    const idsPagina = paginatedContas.map((conta) => conta.id);
+    setContasSelecionadas((selecionadas) => {
+      const todosDaPaginaSelecionados = idsPagina.length > 0 && idsPagina.every((id) => selecionadas.includes(id));
+      if (todosDaPaginaSelecionados) {
+        return selecionadas.filter((id) => !idsPagina.includes(id));
+      }
+      return [...new Set([...selecionadas, ...idsPagina])];
+    });
+  }
+
+  function selecionarTodasFiltradas() {
+    setContasSelecionadas(filteredContas.map((conta) => conta.id));
+  }
+
+  async function handlePagarSelecionadas() {
+    if (!selectedPayableContas.length) {
+      toast.error('Selecione contas pendentes ou atrasadas para pagar');
+      return;
+    }
+
+    if (!confirm(`Deseja marcar ${selectedPayableContas.length} conta(s) como paga(s)?`)) return;
+
+    setAcaoEmMassaLoading(true);
+    const idsPagas = new Set<string>();
+    let falhas = 0;
+
+    try {
+      for (const conta of selectedPayableContas) {
+        try {
+          await pagarConta(conta);
+          idsPagas.add(conta.id);
+        } catch (error) {
+          console.error('Erro ao pagar conta em massa:', error);
+          falhas += 1;
+        }
+      }
+
+      setContasSelecionadas((selecionadas) => selecionadas.filter((id) => !idsPagas.has(id)));
+
+      if (falhas) {
+        toast.error(`${falhas} conta(s) nao puderam ser pagas`);
+      } else {
+        toast.success(`${idsPagas.size} conta(s) paga(s) e despesas lancadas!`);
+      }
+      await buscarDados();
+      await buscarContasCalendario();
+    } finally {
+      setAcaoEmMassaLoading(false);
+    }
+  }
+
+  async function handleDeletarSelecionadas() {
+    if (!selectedContas.length) {
+      toast.error('Selecione contas para excluir');
+      return;
+    }
+
+    if (!confirm(`Deseja realmente excluir ${selectedContas.length} conta(s) selecionada(s)?`)) return;
+
+    setAcaoEmMassaLoading(true);
+    try {
+      const { error } = await supabase
+        .from('contas_pagar')
+        .delete()
+        .in('id', contasSelecionadas);
+
+      if (error) throw error;
+
+      toast.success(`${selectedContas.length} conta(s) excluida(s) com sucesso!`);
+      setContasSelecionadas([]);
+      setPagina(0);
+      await buscarDados();
+      await buscarContasCalendario();
+    } catch (error) {
+      console.error('Erro ao excluir contas:', error);
+      toast.error('Erro ao excluir contas selecionadas');
+    } finally {
+      setAcaoEmMassaLoading(false);
+    }
+  }
 
   const statusColors = {
     pendente: 'bg-yellow-100 text-yellow-800',
@@ -414,6 +541,37 @@ export function ContasPagar() {
 
   // Colunas para TanStack Table
   const columns = useMemo<ColumnDef<ContaPagar, any>[]>(() => [
+    {
+      header: () => (
+        <button
+          type="button"
+          onClick={toggleSelecionarPagina}
+          className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
+          title={pageSelectionState === 'all' ? 'Desmarcar pagina' : 'Selecionar pagina'}
+        >
+          {pageSelectionState === 'none' ? (
+            <Square className="h-5 w-5" />
+          ) : (
+            <CheckCircle2 className={`h-5 w-5 ${pageSelectionState === 'partial' ? 'text-amber-500' : 'text-primary-600'}`} />
+          )}
+        </button>
+      ),
+      id: 'selecao',
+      cell: info => {
+        const selecionada = selectedSet.has(info.row.original.id);
+        return (
+          <button
+            type="button"
+            onClick={() => toggleSelecionarConta(info.row.original.id)}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-primary-50 hover:text-primary-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
+            title={selecionada ? 'Desmarcar conta' : 'Selecionar conta'}
+          >
+            {selecionada ? <CheckCircle2 className="h-5 w-5 text-primary-600" /> : <Square className="h-5 w-5" />}
+          </button>
+        );
+      },
+      size: 48,
+    },
     {
       header: 'Descrição',
       accessorKey: 'descricao',
@@ -461,7 +619,7 @@ export function ContasPagar() {
         </div>
       ),
     },
-  ], [setContaParaEditar, setModalAberto, handlePagar, handleDeletar]);
+  ], [setContaParaEditar, setModalAberto, handlePagar, handleDeletar, pageSelectionState, selectedSet]);
 
   const table = useReactTable({
     data: paginatedContas,
@@ -776,9 +934,64 @@ export function ContasPagar() {
               </select>
             </div>
 
+            {contasSelecionadas.length > 0 && (
+              <div className="mb-6 flex flex-col gap-3 rounded-xl border border-primary-200 bg-primary-50 p-4 dark:border-primary-500/30 dark:bg-primary-900/20 lg:flex-row lg:items-center lg:justify-between">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-primary-900 dark:text-primary-100">
+                    {contasSelecionadas.length} conta(s) selecionada(s)
+                  </p>
+                  <p className="text-sm text-primary-700 dark:text-primary-200">
+                    Total selecionado: {formatCurrency(totalSelecionado)}
+                    {selectedPayableContas.length > 0 ? ` - ${selectedPayableContas.length} pendente(s)/atrasada(s)` : ''}
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap sm:items-center sm:justify-end">
+                  {contasSelecionadas.length < filteredContas.length && (
+                    <Button
+                      onClick={selecionarTodasFiltradas}
+                      disabled={acaoEmMassaLoading}
+                      variant="ghost"
+                      size="sm"
+                      className="bg-white/70 dark:bg-gray-900/50"
+                    >
+                      Selecionar todas filtradas
+                    </Button>
+                  )}
+                  <Button
+                    onClick={handlePagarSelecionadas}
+                    disabled={acaoEmMassaLoading || selectedPayableContas.length === 0}
+                    variant="primary"
+                    size="sm"
+                  >
+                    <Check className="h-4 w-4" />
+                    Pagar selecionadas
+                  </Button>
+                  <Button
+                    onClick={handleDeletarSelecionadas}
+                    disabled={acaoEmMassaLoading}
+                    variant="danger"
+                    size="sm"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    Excluir
+                  </Button>
+                  <Button
+                    onClick={() => setContasSelecionadas([])}
+                    disabled={acaoEmMassaLoading}
+                    variant="ghost"
+                    size="sm"
+                    className="bg-white/70 dark:bg-gray-900/50"
+                  >
+                    <X className="h-4 w-4" />
+                    Limpar
+                  </Button>
+                </div>
+              </div>
+            )}
+
             {/* Tabela */}
             <div className="responsive-table-wrap rounded-xl border border-gray-200 dark:border-gray-700">
-              <table className="w-full min-w-[760px]">
+              <table className="w-full min-w-[820px]">
                 <thead className="bg-gradient-to-r from-gray-50 to-gray-100 dark:from-gray-800 dark:to-gray-700">
                   {table.getHeaderGroups().map(headerGroup => (
                     <tr key={headerGroup.id}>
