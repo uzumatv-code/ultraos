@@ -62,6 +62,18 @@ export function ContaPagarModal({
       if (!user) throw new Error('Usuário não autenticado');
 
       const valorNumerico = parseFloat(valor.replace('.', '').replace(',', '.'));
+      if (Number.isNaN(valorNumerico)) {
+        throw new Error('Valor inválido');
+      }
+
+      const vencimento = new Date(dataVencimento);
+      if (Number.isNaN(vencimento.getTime())) {
+        throw new Error('Data de vencimento inválida');
+      }
+
+      const categoriaValor = categoriaId || null;
+      const periodicidadeValor = recorrente ? periodicidade : 'unica';
+      const observacoesValor = observacoes || null;
 
       if (contaParaEditar) {
         const { error } = await supabase
@@ -69,12 +81,12 @@ export function ContaPagarModal({
           .update({
             descricao: capitalize(descricao),
             valor: valorNumerico,
-            data_vencimento: new Date(dataVencimento).toISOString(),
-            categoria_id: categoriaId,
+            data_vencimento: vencimento.toISOString(),
+            categoria_id: categoriaValor,
             recorrente,
             periodicidade,
-            observacoes,
-            status: status
+            observacoes: observacoesValor,
+            status
           })
           .eq('id', contaParaEditar.id)
           .eq('user_id', user.id);
@@ -87,11 +99,12 @@ export function ContaPagarModal({
           .insert([{
             descricao: capitalize(descricao),
             valor: valorNumerico,
-            data_vencimento: new Date(dataVencimento).toISOString(),
-            categoria_id: categoriaId,
+            data_vencimento: vencimento.toISOString(),
+            categoria_id: categoriaValor,
             recorrente,
-            periodicidade,
-            observacoes,
+            periodicidade: periodicidadeValor,
+            observacoes: observacoesValor,
+            status: 'pendente',
             user_id: user.id
           }]);
 
@@ -102,9 +115,9 @@ export function ContaPagarModal({
       onSuccess();
       onClose();
       limparFormulario();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Erro ao salvar conta:', error);
-      toast.error('Erro ao salvar conta');
+      toast.error(error?.message || 'Erro ao salvar conta');
     } finally {
       setLoading(false);
     }

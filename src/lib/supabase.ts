@@ -47,7 +47,13 @@ async function request(path: string, options: RequestInit = {}) {
   }
   if (session?.access_token) headers.set('Authorization', `Bearer ${session.access_token}`);
 
-  const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, { ...options, headers, credentials: 'same-origin' });
+  } catch (fetchError) {
+    throw { message: 'Erro de comunicacao com a API', details: fetchError };
+  }
+
   const json = await response.json().catch(() => ({}));
 
   if (!response.ok) {

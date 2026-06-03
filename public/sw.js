@@ -62,12 +62,16 @@ async function cacheFirst(request) {
   const cached = await caches.match(request);
   if (cached) return cached;
 
-  const response = await fetch(request);
-  if (isCacheable(response)) {
-    const cache = await caches.open(CACHE_NAME);
-    await cache.put(request, response.clone());
+  try {
+    const response = await fetch(request);
+    if (isCacheable(response)) {
+      const cache = await caches.open(CACHE_NAME);
+      await cache.put(request, response.clone());
+    }
+    return response;
+  } catch {
+    return cached || new Response('Offline', { status: 503, statusText: 'Offline' });
   }
-  return response;
 }
 
 function isCacheable(response) {
