@@ -75,13 +75,15 @@ export function ContaPagarModal({
       const periodicidadeValor = recorrente ? periodicidade : 'unica';
       const observacoesValor = observacoes || null;
 
+      const dataVencimentoValue = vencimento.toISOString().split('T')[0];
+
       if (contaParaEditar) {
         const { error } = await supabase
           .from('contas_pagar')
           .update({
             descricao: capitalize(descricao),
             valor: valorNumerico,
-            data_vencimento: vencimento.toISOString(),
+            data_vencimento: dataVencimentoValue,
             categoria_id: categoriaValor,
             recorrente,
             periodicidade,
@@ -99,7 +101,7 @@ export function ContaPagarModal({
           .insert([{
             descricao: capitalize(descricao),
             valor: valorNumerico,
-            data_vencimento: vencimento.toISOString(),
+            data_vencimento: dataVencimentoValue,
             categoria_id: categoriaValor,
             recorrente,
             periodicidade: periodicidadeValor,
