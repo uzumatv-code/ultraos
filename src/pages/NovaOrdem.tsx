@@ -10,6 +10,7 @@ import {
   ChevronRight,
   CreditCard,
   FileText,
+  X,
   MessageCircle,
   Printer,
   Send,
@@ -26,12 +27,17 @@ import { PrintOrdemModal } from '../components/PrintOrdemModal';
 import { supabase } from '../lib/supabase';
 import { toast } from '../components/ToastCustom';
 import { formatCurrency } from '../utils/formatters';
-import { toDateOnly, todayLocalDate } from '../utils/dates';
+import { addDaysToDateOnly, formatLocalDate, parseLocalDate, toDateOnly, todayLocalDate } from '../utils/dates';
 import { WhatsAppService } from '../utils/whatsapp-service';
 import type { Cliente, Instrumento, Marca, OrdemServico, Problema, Servico } from '../types/database';
 
 type FormaPagamento = 'credito' | 'debito' | 'pix';
 type AcaoAposSalvar = 'nenhuma' | 'mensagem' | 'pdf';
+type AgendaOrder = Pick<OrdemServico, 'id' | 'numero' | 'modelo' | 'data_previsao' | 'status'> & {
+  cliente?: Pick<Cliente, 'nome'> | null;
+  instrumento?: Pick<Instrumento, 'nome'> | null;
+  marca?: Pick<Marca, 'nome'> | null;
+};
 
 const steps = [
   { number: 1, title: 'Cliente e instrumento', description: 'Cliente, marca, modelo e acessórios' },
@@ -45,6 +51,34 @@ function dateForDatabase(value: string) {
 
 function todayForDatabase() {
   return todayLocalDate();
+}
+
+function formatDayLabel(value: string) {
+  const date = parseLocalDate(value);
+  return date ? date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : '--/--';
+}
+
+function formatWeekday(value: string) {
+  const date = parseLocalDate(value);
+  return date ? date.toLocaleDateString('pt-BR', { weekday: 'short' }).replace('.', '') : '';
+}
+
+function orderStatusLabel(status: OrdemServico['status']) {
+  const labels: Record<OrdemServico['status'], string> = {
+    pendente: 'Pendente',
+    em_andamento: 'Em andamento',
+    concluido: 'Concluida',
+    cancelado: 'Cancelada',
+    atraso: 'Atraso',
+  };
+  return labels[status] || status;
+}
+
+function scheduleLoad(count: number) {
+  if (count === 0) return { label: 'Livre', className: 'border-emerald-200 bg-emerald-50 text-emerald-800' };
+  if (count <= 2) return { label: 'Tranquilo', className: 'border-sky-200 bg-sky-50 text-sky-800' };
+  if (count <= 4) return { label: 'Moderado', className: 'border-amber-200 bg-amber-50 text-amber-800' };
+  return { label: 'Cheio', className: 'border-rose-200 bg-rose-50 text-rose-800' };
 }
 
 export function NovaOrdem() {
@@ -77,6 +111,9 @@ export function NovaOrdem() {
   const [showMarcaModal, setShowMarcaModal] = useState(false);
   const [showPrintModal, setShowPrintModal] = useState(false);
   const [ordemParaImprimir, setOrdemParaImprimir] = useState<OrdemServico | null>(null);
+  const [agendaOpen, setAgendaOpen] = useState(false);
+  const [agendaLoading, setAgendaLoading] = useState(false);
+  const [agendaOrders, setAgendaOrders] = useState<AgendaOrder[]>([]);
 
   useEffect(() => {
     carregarDados();
@@ -85,12 +122,71 @@ export function NovaOrdem() {
 
   const clienteSelecionado = clientes.find((cliente) => cliente.id === clienteId);
   const total = Math.max(0, Number(valorServicos || 0) - Number(desconto || 0));
+  const agendaStart = useMemo(() => {
+    const today = todayForDatabase();
+    const selected = dateForDatabase(dataPrevisao);
+    return selected && selected > today ? selected : today;
+  }, [dataPrevisao]);
+  const agendaDays = useMemo(() => Array.from({ length: 14 }, (_, index) => addDaysToDateOnly(agendaStart, index)), [agendaStart]);
+  const agendaOrdersByDate = useMemo(() => {
+    return agendaOrders.reduce<Record<string, AgendaOrder[]>>((acc, order) => {
+      const day = dateForDatabase(order.data_previsao);
+      if (!day) return acc;
+      acc[day] = [...(acc[day] || []), order];
+      return acc;
+    }, {});
+  }, [agendaOrders]);
 
   const canGoNext = useMemo(() => {
     if (step === 1) return Boolean(clienteId && instrumentoId && marcaId && modelo.trim());
     if (step === 2) return problemasIds.length > 0 || servicosIds.length > 0 || valorServicos > 0;
     return Boolean(dataPrevisao);
   }, [clienteId, dataPrevisao, instrumentoId, marcaId, modelo, problemasIds.length, servicosIds.length, step, valorServicos]);
+
+  useEffect(() => {
+    if (step !== 3 || !agendaOpen) return;
+
+    let cancelled = false;
+
+    async function carregarAgenda() {
+      try {
+        setAgendaLoading(true);
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) throw new Error('Usuario nao autenticado');
+
+        const start = agendaDays[0];
+        const endExclusive = addDaysToDateOnly(agendaDays[agendaDays.length - 1], 1);
+        const { data, error } = await supabase
+          .from('ordens_servico')
+          .select('id, numero, modelo, data_previsao, status, cliente:clientes(nome), instrumento:instrumentos(nome), marca:marcas(nome)')
+          .eq('user_id', user.id)
+          .gte('data_previsao', start)
+          .lt('data_previsao', endExclusive)
+          .order('data_previsao', { ascending: true })
+          .order('numero', { ascending: true });
+
+        if (error) throw error;
+
+        const openOrders = ((data || []) as AgendaOrder[]).filter((order) => {
+          if (id && order.id === id) return false;
+          return order.status !== 'concluido' && order.status !== 'cancelado';
+        });
+
+        if (!cancelled) setAgendaOrders(openOrders);
+      } catch (error) {
+        console.error('Erro ao carregar agenda de entregas:', error);
+        if (!cancelled) toast.error('Erro ao carregar agenda de entregas');
+      } finally {
+        if (!cancelled) setAgendaLoading(false);
+      }
+    }
+
+    carregarAgenda();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [agendaDays, agendaOpen, id, step]);
 
   async function carregarDados() {
     try {
@@ -440,8 +536,26 @@ ${buildServicesText() || 'Nenhum serviço registrado.'}`;
               <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_360px]">
                 <div className="space-y-5">
                   <Field label="Data de entrega / previsão *">
-                    <input type="date" value={dataPrevisao} onChange={(event) => setDataPrevisao(event.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100" required />
+                    <input
+                      type="date"
+                      value={dataPrevisao}
+                      onClick={() => setAgendaOpen(true)}
+                      onFocus={() => setAgendaOpen(true)}
+                      onChange={(event) => setDataPrevisao(event.target.value)}
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
+                      required
+                    />
                   </Field>
+                  {agendaOpen && (
+                    <DeliverySchedulePanel
+                      days={agendaDays}
+                      loading={agendaLoading}
+                      ordersByDate={agendaOrdersByDate}
+                      selectedDate={dataPrevisao}
+                      onClose={() => setAgendaOpen(false)}
+                      onSelectDate={(date) => setDataPrevisao(date)}
+                    />
+                  )}
                   <Field label="Observações para a ordem">
                     <textarea value={observacoes} onChange={(event) => setObservacoes(event.target.value)} rows={7} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100" placeholder="Mensagem, condições e informações adicionais para o cliente" />
                   </Field>
@@ -506,6 +620,101 @@ ${buildServicesText() || 'Nenhum serviço registrado.'}`;
           ordem={ordemParaImprimir}
         />
       )}
+    </div>
+  );
+}
+
+function DeliverySchedulePanel({
+  days,
+  loading,
+  ordersByDate,
+  selectedDate,
+  onClose,
+  onSelectDate,
+}: {
+  days: string[];
+  loading: boolean;
+  ordersByDate: Record<string, AgendaOrder[]>;
+  selectedDate: string;
+  onClose: () => void;
+  onSelectDate: (date: string) => void;
+}) {
+  const activeDate = selectedDate || days[0] || todayForDatabase();
+  const activeOrders = ordersByDate[activeDate] || [];
+  const activeLoad = scheduleLoad(activeOrders.length);
+
+  return (
+    <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-gray-950">Agenda de entregas</p>
+          <p className="text-xs text-gray-500">
+            {formatLocalDate(days[0])} ate {formatLocalDate(days[days.length - 1])}
+          </p>
+        </div>
+        <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-gray-500 hover:bg-white hover:text-gray-800" aria-label="Fechar agenda">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-7">
+        {days.map((day) => {
+          const count = ordersByDate[day]?.length || 0;
+          const load = scheduleLoad(count);
+          const active = day === activeDate;
+          return (
+            <button
+              key={day}
+              type="button"
+              onClick={() => onSelectDate(day)}
+              className={`min-h-[86px] rounded-lg border p-2 text-left transition ${
+                active ? 'border-violet-400 bg-white ring-2 ring-violet-100' : `${load.className} hover:bg-white`
+              }`}
+            >
+              <span className="block text-xs font-semibold uppercase">{formatWeekday(day)}</span>
+              <span className="mt-1 block text-base font-semibold">{formatDayLabel(day)}</span>
+              <span className="mt-2 inline-flex rounded-full bg-white/80 px-2 py-0.5 text-xs font-medium">
+                {count} OS
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="mt-3 rounded-lg border border-gray-200 bg-white p-3">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm font-semibold text-gray-950">{formatLocalDate(activeDate)}</p>
+          <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${activeLoad.className}`}>
+            {activeLoad.label}
+          </span>
+        </div>
+
+        {loading ? (
+          <p className="py-3 text-sm text-gray-500">Carregando agenda...</p>
+        ) : activeOrders.length === 0 ? (
+          <p className="py-3 text-sm text-gray-500">Nenhuma OS agendada para esta data.</p>
+        ) : (
+          <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
+            {activeOrders.map((order) => (
+              <div key={order.id} className="rounded-lg border border-gray-100 bg-gray-50 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-gray-950">
+                      OS #{order.numero} - {order.cliente?.nome || 'Cliente'}
+                    </p>
+                    <p className="mt-1 truncate text-xs text-gray-600">
+                      {[order.instrumento?.nome, order.marca?.nome, order.modelo].filter(Boolean).join(' ')}
+                    </p>
+                  </div>
+                  <span className="shrink-0 rounded-full bg-white px-2 py-1 text-xs font-medium text-gray-600">
+                    {orderStatusLabel(order.status)}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
