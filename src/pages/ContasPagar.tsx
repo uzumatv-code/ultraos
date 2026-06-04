@@ -669,11 +669,11 @@ export function ContasPagar() {
               setModalAberto(true);
             }}
             variant="primary"
-            size="lg"
-            className="w-full shadow-lg shadow-primary-200 dark:shadow-primary-900/30 sm:w-auto"
+            size="md"
+            icon={Plus}
+            className="h-11 w-full shrink-0 whitespace-nowrap shadow-md shadow-primary-200/70 dark:shadow-primary-900/30 sm:w-auto"
           >
-            <Plus className="w-5 h-5" />
-            <span>Nova Conta</span>
+            Nova Conta
           </Button>
         </motion.div>
         
@@ -1049,32 +1049,32 @@ export function ContasPagar() {
             </div>
 
             {/* Paginação */}
-            <div className="mt-6 flex flex-col sm:flex-row items-center justify-between gap-4 px-4 py-4 bg-gradient-to-r from-gray-50 to-gray-100 dark:from-gray-800 dark:to-gray-700 rounded-xl">
-              <p className="text-sm text-gray-700 dark:text-gray-300 font-medium">
+            <div className="mt-6 flex flex-col items-center justify-between gap-3 rounded-xl bg-gradient-to-r from-gray-50 to-gray-100 px-4 py-4 dark:from-gray-800 dark:to-gray-700 sm:flex-row">
+              <p className="text-center text-sm font-medium text-gray-700 dark:text-gray-300 sm:text-left">
                 Mostrando <span className="font-bold text-primary-600">{paginatedContas.length}</span> de <span className="font-bold text-primary-600">{filteredContas.length}</span> resultados
               </p>
-              <div className="flex items-center gap-3">
-                <Button
+              <div className="flex flex-wrap items-center justify-center gap-2 sm:justify-end">
+                <button
+                  type="button"
                   onClick={() => setPagina(p => Math.max(0, p - 1))}
                   disabled={pagina === 0}
-                  variant="ghost"
-                  size="sm"
+                  className="inline-flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-3 text-sm font-medium text-gray-700 transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-300 dark:hover:bg-gray-800"
                 >
-                  <ChevronLeft className="w-4 h-4" />
+                  <ChevronLeft className="h-4 w-4 shrink-0" />
                   Anterior
-                </Button>
-                <span className="text-sm text-gray-700 dark:text-gray-300 font-medium px-3 py-1 bg-white dark:bg-gray-800 rounded-lg">
+                </button>
+                <span className="inline-flex h-9 items-center whitespace-nowrap rounded-lg bg-white px-3 text-sm font-medium text-gray-700 dark:bg-gray-800 dark:text-gray-300">
                   Página <span className="font-bold text-primary-600">{pagina + 1}</span> de {totalPaginas || 1}
                 </span>
-                <Button
+                <button
+                  type="button"
                   onClick={() => setPagina(p => Math.min(totalPaginas - 1, p + 1))}
                   disabled={pagina >= totalPaginas - 1}
-                  variant="ghost"
-                  size="sm"
+                  className="inline-flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-3 text-sm font-medium text-gray-700 transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-300 dark:hover:bg-gray-800"
                 >
                   Próxima
-                  <ChevronRight className="w-4 h-4" />
-                </Button>
+                  <ChevronRight className="h-4 w-4 shrink-0" />
+                </button>
               </div>
             </div>
           </CardContent>
