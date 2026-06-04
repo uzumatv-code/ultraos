@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { KeyRound, Mail, Music2, Loader2 } from 'lucide-react';
+import { Eye, EyeOff, KeyRound, Mail, Music2, Loader2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { toast } from '../components/ToastCustom';
 
@@ -11,6 +11,7 @@ export function Login() {
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [senha, setSenha] = useState('');
+  const [mostrarSenha, setMostrarSenha] = useState(false);
   const [memorizarLogin, setMemorizarLogin] = useState(false);
   const [loading, setLoading] = useState(false);
 
@@ -173,14 +174,22 @@ export function Login() {
             <div className="relative">
               <KeyRound className="absolute left-4 top-1/2 -translate-y-1/2 text-primary-500 h-5 w-5" />
               <input
-                type="password"
+                type={mostrarSenha ? 'text' : 'password'}
                 value={senha}
                 onChange={(e) => setSenha(e.target.value)}
                 autoComplete="off"
-                className="w-full pl-12 pr-4 py-3.5 bg-white/60 dark:bg-gray-800/60 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all duration-300 text-gray-800 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 shadow-inner-lg login-input"
+                className="w-full pl-12 pr-12 py-3.5 bg-white/60 dark:bg-gray-800/60 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-all duration-300 text-gray-800 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 shadow-inner-lg login-input"
                 placeholder="••••••••"
                 required
               />
+              <button
+                type="button"
+                onClick={() => setMostrarSenha((current) => !current)}
+                className="absolute right-4 top-1/2 -translate-y-1/2 rounded-lg p-1 text-gray-500 transition-colors hover:bg-white/70 hover:text-primary-600 dark:hover:bg-gray-700/70"
+                aria-label={mostrarSenha ? 'Ocultar senha' : 'Mostrar senha'}
+              >
+                {mostrarSenha ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+              </button>
             </div>
           </motion.div>
 

@@ -7,17 +7,52 @@ if (!DATABASE_URL) {
   throw new Error('Configure DATABASE_URL ou MYSQL_URL antes de executar a migracao.');
 }
 
-const ddl = [
-  `CREATE TABLE IF NOT EXISTS categorias_financeiras (
+const nowSql = () => new Date().toISOString();
+
+const createTables = [
+  `CREATE TABLE IF NOT EXISTS usuarios (
+    id varchar(36) NOT NULL PRIMARY KEY,
+    email varchar(255) NOT NULL,
+    senha_hash varchar(255) NOT NULL,
+    nome varchar(255) DEFAULT NULL,
+    avatar_url varchar(500) DEFAULT NULL,
+    nivel varchar(50) DEFAULT 'usuario',
+    plano_atual varchar(50) DEFAULT 'trial',
+    dias_restantes int DEFAULT 14,
+    status_assinatura varchar(50) DEFAULT 'ativo',
+    ativo tinyint(1) DEFAULT 1,
+    email_verificado tinyint(1) DEFAULT 1,
+    ultimo_login varchar(50) DEFAULT NULL,
+    created_at varchar(50) DEFAULT NULL,
+    updated_at varchar(50) DEFAULT NULL,
+    UNIQUE KEY unique_usuarios_email (email),
+    INDEX idx_usuarios_email (email)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  `CREATE TABLE IF NOT EXISTS clientes (
     id varchar(36) NOT NULL PRIMARY KEY,
     user_id varchar(36) NOT NULL,
     nome varchar(255) NOT NULL,
-    tipo varchar(20) NOT NULL,
-    cor varchar(20) DEFAULT '#3B82F6',
+    cpf_cnpj varchar(30) DEFAULT NULL,
+    telefone varchar(30) DEFAULT NULL,
+    email varchar(255) DEFAULT NULL,
+    endereco text DEFAULT NULL,
+    avaliou tinyint(1) DEFAULT 0,
     created_at varchar(50) DEFAULT NULL,
     updated_at varchar(50) DEFAULT NULL,
-    INDEX idx_categorias_user (user_id),
-    INDEX idx_categorias_tipo (tipo)
+    INDEX idx_clientes_user (user_id),
+    INDEX idx_clientes_nome (nome),
+    INDEX idx_clientes_cpf_cnpj (cpf_cnpj)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  `CREATE TABLE IF NOT EXISTS marcas (
+    id varchar(36) NOT NULL PRIMARY KEY,
+    user_id varchar(36) NOT NULL,
+    nome varchar(255) NOT NULL,
+    created_at varchar(50) DEFAULT NULL,
+    updated_at varchar(50) DEFAULT NULL,
+    INDEX idx_marcas_user (user_id),
+    INDEX idx_marcas_nome (nome)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 
   `CREATE TABLE IF NOT EXISTS instrumentos (
@@ -30,6 +65,93 @@ const ddl = [
     INDEX idx_instrumentos_nome (nome)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 
+  `CREATE TABLE IF NOT EXISTS equipamentos (
+    id varchar(36) NOT NULL PRIMARY KEY,
+    user_id varchar(36) NOT NULL,
+    nome varchar(255) NOT NULL,
+    created_at varchar(50) DEFAULT NULL,
+    updated_at varchar(50) DEFAULT NULL,
+    INDEX idx_equipamentos_user (user_id),
+    INDEX idx_equipamentos_nome (nome)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  `CREATE TABLE IF NOT EXISTS servicos (
+    id varchar(36) NOT NULL PRIMARY KEY,
+    user_id varchar(36) NOT NULL,
+    nome varchar(255) NOT NULL,
+    descricao text DEFAULT NULL,
+    valor decimal(10,2) DEFAULT 0.00,
+    created_at varchar(50) DEFAULT NULL,
+    updated_at varchar(50) DEFAULT NULL,
+    INDEX idx_servicos_user (user_id),
+    INDEX idx_servicos_nome (nome)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  `CREATE TABLE IF NOT EXISTS problemas (
+    id varchar(36) NOT NULL PRIMARY KEY,
+    user_id varchar(36) NOT NULL,
+    nome varchar(255) NOT NULL,
+    descricao text DEFAULT NULL,
+    created_at varchar(50) DEFAULT NULL,
+    updated_at varchar(50) DEFAULT NULL,
+    INDEX idx_problemas_user (user_id),
+    INDEX idx_problemas_nome (nome)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  `CREATE TABLE IF NOT EXISTS categorias_financeiras (
+    id varchar(36) NOT NULL PRIMARY KEY,
+    user_id varchar(36) NOT NULL,
+    nome varchar(255) NOT NULL,
+    tipo varchar(20) NOT NULL,
+    cor varchar(20) DEFAULT '#3B82F6',
+    created_at varchar(50) DEFAULT NULL,
+    updated_at varchar(50) DEFAULT NULL,
+    INDEX idx_categorias_user (user_id),
+    INDEX idx_categorias_tipo (tipo)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  `CREATE TABLE IF NOT EXISTS ordens_servico (
+    id varchar(36) NOT NULL PRIMARY KEY,
+    user_id varchar(36) NOT NULL,
+    numero int NOT NULL,
+    cliente_id varchar(36) NOT NULL,
+    instrumento_id varchar(36) DEFAULT NULL,
+    equipamento_id varchar(36) DEFAULT NULL,
+    marca_id varchar(36) DEFAULT NULL,
+    modelo varchar(255) DEFAULT NULL,
+    acessorios text DEFAULT NULL,
+    problemas_ids json DEFAULT NULL,
+    problemas_descricoes json DEFAULT NULL,
+    problema_descricao text DEFAULT NULL,
+    servicos_ids json DEFAULT NULL,
+    servicos_descricoes json DEFAULT NULL,
+    servico_descricao text DEFAULT NULL,
+    valor_servicos decimal(10,2) DEFAULT 0.00,
+    desconto decimal(10,2) DEFAULT 0.00,
+    valor_total decimal(10,2) DEFAULT 0.00,
+    valor_pago decimal(10,2) DEFAULT 0.00,
+    status_financeiro varchar(50) DEFAULT 'pendente',
+    data_ultimo_pagamento varchar(50) DEFAULT NULL,
+    observacoes_financeiras text DEFAULT NULL,
+    forma_pagamento varchar(50) DEFAULT 'pix',
+    parcelas int DEFAULT 1,
+    observacoes text DEFAULT NULL,
+    data_entrada varchar(50) DEFAULT NULL,
+    data_previsao varchar(50) DEFAULT NULL,
+    data_entrega varchar(50) DEFAULT NULL,
+    status varchar(50) DEFAULT 'pendente',
+    solicita_avaliacao tinyint(1) DEFAULT 0,
+    created_at varchar(50) DEFAULT NULL,
+    updated_at varchar(50) DEFAULT NULL,
+    UNIQUE KEY unique_ordem_numero_user (user_id, numero),
+    INDEX idx_ordens_user (user_id),
+    INDEX idx_ordens_numero (numero),
+    INDEX idx_ordens_cliente (cliente_id),
+    INDEX idx_ordens_status (status),
+    INDEX idx_ordens_data_previsao (data_previsao),
+    INDEX idx_ordens_data_entrada (data_entrada)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
   `CREATE TABLE IF NOT EXISTS contas_pagar (
     id varchar(36) NOT NULL PRIMARY KEY,
     user_id varchar(36) NOT NULL,
@@ -37,11 +159,14 @@ const ddl = [
     valor decimal(10,2) NOT NULL DEFAULT 0.00,
     data_vencimento varchar(50) NOT NULL,
     data_pagamento varchar(50) DEFAULT NULL,
+    forma_pagamento varchar(50) DEFAULT NULL,
+    parcelas int DEFAULT 1,
     status varchar(50) DEFAULT 'pendente',
     categoria_id varchar(36) DEFAULT NULL,
     recorrente tinyint(1) DEFAULT 0,
     periodicidade varchar(50) DEFAULT 'unica',
-    observacoes text,
+    observacoes text DEFAULT NULL,
+    comprovante_url varchar(500) DEFAULT NULL,
     created_at varchar(50) DEFAULT NULL,
     updated_at varchar(50) DEFAULT NULL,
     INDEX idx_contas_user (user_id),
@@ -60,70 +185,16 @@ const ddl = [
     categoria_id varchar(36) DEFAULT NULL,
     conta_pagar_id varchar(36) DEFAULT NULL,
     ordem_servico_id varchar(36) DEFAULT NULL,
+    forma_pagamento varchar(50) DEFAULT NULL,
+    comprovante_url varchar(500) DEFAULT NULL,
+    origem varchar(50) DEFAULT 'manual',
     created_at varchar(50) DEFAULT NULL,
     updated_at varchar(50) DEFAULT NULL,
     INDEX idx_transacoes_user (user_id),
     INDEX idx_transacoes_tipo (tipo),
     INDEX idx_transacoes_data (data),
-    INDEX idx_transacoes_categoria (categoria_id)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
-
-  `CREATE TABLE IF NOT EXISTS configuracoes_whatsapp (
-    id varchar(36) NOT NULL PRIMARY KEY,
-    user_id varchar(36) NOT NULL,
-    method varchar(30) DEFAULT 'direct',
-    webhook_url varchar(500) DEFAULT NULL,
-    api_key varchar(255) DEFAULT NULL,
-    instance_name varchar(100) DEFAULT NULL,
-    created_at varchar(50) DEFAULT NULL,
-    updated_at varchar(50) DEFAULT NULL,
-    UNIQUE KEY unique_config_whatsapp_user (user_id)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
-
-  `CREATE TABLE IF NOT EXISTS system_settings (
-    id varchar(36) NOT NULL PRIMARY KEY,
-    user_id varchar(36) NOT NULL,
-    logo_url varchar(500) DEFAULT NULL,
-    site_title varchar(255) DEFAULT 'Sistema OS',
-    created_at varchar(50) DEFAULT NULL,
-    updated_at varchar(50) DEFAULT NULL,
-    UNIQUE KEY unique_system_settings_user (user_id)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
-
-  `CREATE TABLE IF NOT EXISTS agenda_logs (
-    id varchar(36) NOT NULL PRIMARY KEY,
-    user_id varchar(36) NOT NULL,
-    ordem_servico_id varchar(36) NOT NULL,
-    data_anterior varchar(50) NOT NULL,
-    data_nova varchar(50) NOT NULL,
-    profissional_anterior varchar(100) DEFAULT NULL,
-    profissional_novo varchar(100) DEFAULT NULL,
-    acao varchar(50) DEFAULT 'reagendamento',
-    created_at varchar(50) DEFAULT NULL,
-    INDEX idx_agenda_logs_user (user_id),
-    INDEX idx_agenda_logs_ordem (ordem_servico_id),
-    INDEX idx_agenda_logs_created_at (created_at)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
-
-  `CREATE TABLE IF NOT EXISTS avaliacoes_lembretes (
-    id varchar(36) NOT NULL PRIMARY KEY,
-    user_id varchar(36) NOT NULL,
-    ordem_servico_id varchar(36) NOT NULL,
-    cliente_id varchar(36) NOT NULL,
-    telefone varchar(30) DEFAULT NULL,
-    mensagem text DEFAULT NULL,
-    data_envio varchar(50) DEFAULT NULL,
-    status varchar(50) DEFAULT 'pendente',
-    avaliacao int DEFAULT NULL,
-    comentario text DEFAULT NULL,
-    mensagem_erro text DEFAULT NULL,
-    tentativas int DEFAULT 0,
-    created_at varchar(50) DEFAULT NULL,
-    updated_at varchar(50) DEFAULT NULL,
-    UNIQUE KEY unique_avaliacao_ordem_user (user_id, ordem_servico_id),
-    INDEX idx_avaliacoes_user (user_id),
-    INDEX idx_avaliacoes_ordem (ordem_servico_id),
-    INDEX idx_avaliacoes_status (status)
+    INDEX idx_transacoes_categoria (categoria_id),
+    INDEX idx_transacoes_ordem (ordem_servico_id)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 
   `CREATE TABLE IF NOT EXISTS contas_receber (
@@ -142,6 +213,7 @@ const ddl = [
     parcelas int DEFAULT 1,
     parcela_atual int DEFAULT 1,
     observacoes text DEFAULT NULL,
+    comprovante_url varchar(500) DEFAULT NULL,
     created_at varchar(50) DEFAULT NULL,
     updated_at varchar(50) DEFAULT NULL,
     UNIQUE KEY unique_conta_receber_ordem_user (user_id, ordem_servico_id),
@@ -169,7 +241,8 @@ const ddl = [
     INDEX idx_os_pagamentos_user (user_id),
     INDEX idx_os_pagamentos_ordem (ordem_servico_id),
     INDEX idx_os_pagamentos_cliente (cliente_id),
-    INDEX idx_os_pagamentos_data (data_pagamento)
+    INDEX idx_os_pagamentos_data (data_pagamento),
+    INDEX idx_os_pagamentos_transacao (transacao_financeira_id)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 
   `CREATE TABLE IF NOT EXISTS anexos_financeiros (
@@ -228,99 +301,453 @@ const ddl = [
     INDEX idx_financeiro_ia_logs_status (status),
     INDEX idx_financeiro_ia_logs_created (created_at)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  `CREATE TABLE IF NOT EXISTS configuracoes_empresa (
+    id varchar(36) NOT NULL PRIMARY KEY,
+    user_id varchar(36) NOT NULL,
+    nome_empresa varchar(255) DEFAULT NULL,
+    cnpj varchar(30) DEFAULT NULL,
+    telefone varchar(30) DEFAULT NULL,
+    telefone_empresa varchar(30) DEFAULT NULL,
+    email varchar(255) DEFAULT NULL,
+    horario_funcionamento varchar(100) DEFAULT NULL,
+    dias_funcionamento varchar(100) DEFAULT NULL,
+    logo_url varchar(500) DEFAULT NULL,
+    endereco text DEFAULT NULL,
+    google_review_link varchar(500) DEFAULT NULL,
+    instagram_handle varchar(100) DEFAULT NULL,
+    avaliacoes_enabled tinyint(1) DEFAULT 1,
+    avaliacoes_days_after_completion int DEFAULT 7,
+    avaliacoes_trigger_hour int DEFAULT 11,
+    avaliacoes_daily_limit int DEFAULT 20,
+    avaliacoes_min_interval_seconds int DEFAULT 20,
+    avaliacoes_last_processed_date varchar(10) DEFAULT NULL,
+    created_at varchar(50) DEFAULT NULL,
+    updated_at varchar(50) DEFAULT NULL,
+    UNIQUE KEY unique_config_empresa_user (user_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  `CREATE TABLE IF NOT EXISTS configuracoes_whatsapp (
+    id varchar(36) NOT NULL PRIMARY KEY,
+    user_id varchar(36) NOT NULL,
+    method varchar(30) DEFAULT 'direct',
+    webhook_url varchar(500) DEFAULT NULL,
+    api_key varchar(255) DEFAULT NULL,
+    instance_name varchar(100) DEFAULT NULL,
+    created_at varchar(50) DEFAULT NULL,
+    updated_at varchar(50) DEFAULT NULL,
+    UNIQUE KEY unique_config_whatsapp_user (user_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  `CREATE TABLE IF NOT EXISTS system_settings (
+    id varchar(36) NOT NULL PRIMARY KEY,
+    user_id varchar(36) NOT NULL,
+    logo_url varchar(500) DEFAULT NULL,
+    site_title varchar(255) DEFAULT 'Sistema OS',
+    created_at varchar(50) DEFAULT NULL,
+    updated_at varchar(50) DEFAULT NULL,
+    UNIQUE KEY unique_system_settings_user (user_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  `CREATE TABLE IF NOT EXISTS templates_mensagem (
+    id varchar(36) NOT NULL PRIMARY KEY,
+    user_id varchar(36) NOT NULL,
+    tipo varchar(50) NOT NULL,
+    template_name varchar(255) DEFAULT NULL,
+    conteudo text NOT NULL,
+    variables json DEFAULT NULL,
+    ativo tinyint(1) DEFAULT 1,
+    created_at varchar(50) DEFAULT NULL,
+    updated_at varchar(50) DEFAULT NULL,
+    UNIQUE KEY unique_template_tipo_user (user_id, tipo),
+    INDEX idx_templates_user (user_id),
+    INDEX idx_templates_tipo (tipo)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  `CREATE TABLE IF NOT EXISTS empresa_fiscal (
+    id varchar(36) NOT NULL PRIMARY KEY,
+    user_id varchar(36) NOT NULL,
+    razao_social varchar(255) NOT NULL,
+    nome_fantasia varchar(255) DEFAULT NULL,
+    cnpj varchar(20) NOT NULL,
+    inscricao_municipal varchar(50) NOT NULL,
+    inscricao_estadual varchar(50) DEFAULT NULL,
+    endereco varchar(255) NOT NULL,
+    numero varchar(20) NOT NULL,
+    complemento varchar(100) DEFAULT NULL,
+    bairro varchar(100) NOT NULL,
+    codigo_municipio varchar(10) NOT NULL,
+    uf char(2) NOT NULL,
+    cep varchar(10) NOT NULL,
+    telefone varchar(30) DEFAULT NULL,
+    email varchar(255) DEFAULT NULL,
+    regime_tributacao int NOT NULL,
+    optante_simples_nacional tinyint(1) DEFAULT 0,
+    incentivo_fiscal tinyint(1) DEFAULT 0,
+    aliquota_iss decimal(5,2) DEFAULT 0.00,
+    item_lista_servico varchar(10) NOT NULL,
+    codigo_cnae varchar(20) DEFAULT NULL,
+    codigo_tributacao_municipio varchar(20) DEFAULT NULL,
+    serie_rps varchar(10) DEFAULT '1',
+    ultimo_numero_rps int DEFAULT 0,
+    certificado_path varchar(500) DEFAULT NULL,
+    certificado_senha_encrypted varchar(800) DEFAULT NULL,
+    ambiente varchar(30) DEFAULT 'homologacao',
+    created_at varchar(50) DEFAULT NULL,
+    updated_at varchar(50) DEFAULT NULL,
+    UNIQUE KEY unique_empresa_fiscal_user (user_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  `CREATE TABLE IF NOT EXISTS notas_fiscais (
+    id varchar(36) NOT NULL PRIMARY KEY,
+    user_id varchar(36) NOT NULL,
+    ordem_servico_id varchar(36) NOT NULL,
+    numero_nfse varchar(50) DEFAULT NULL,
+    codigo_verificacao varchar(50) DEFAULT NULL,
+    numero_rps varchar(20) NOT NULL,
+    serie_rps varchar(10) NOT NULL,
+    data_emissao varchar(50) NOT NULL,
+    competencia varchar(7) NOT NULL,
+    discriminacao text NOT NULL,
+    valor_servicos decimal(10,2) NOT NULL,
+    valor_deducoes decimal(10,2) DEFAULT 0.00,
+    valor_pis decimal(10,2) DEFAULT 0.00,
+    valor_cofins decimal(10,2) DEFAULT 0.00,
+    valor_inss decimal(10,2) DEFAULT 0.00,
+    valor_ir decimal(10,2) DEFAULT 0.00,
+    valor_csll decimal(10,2) DEFAULT 0.00,
+    outras_retencoes decimal(10,2) DEFAULT 0.00,
+    valor_tributos decimal(10,2) DEFAULT 0.00,
+    valor_iss decimal(10,2) DEFAULT 0.00,
+    aliquota decimal(5,2) DEFAULT 0.00,
+    desconto_incondicionado decimal(10,2) DEFAULT 0.00,
+    desconto_condicionado decimal(10,2) DEFAULT 0.00,
+    iss_retido tinyint(1) DEFAULT 0,
+    item_lista_servico varchar(10) NOT NULL,
+    codigo_cnae varchar(20) DEFAULT NULL,
+    codigo_tributacao_municipio varchar(20) DEFAULT NULL,
+    codigo_municipio_prestacao varchar(10) NOT NULL,
+    exigibilidade_iss int DEFAULT 1,
+    municipio_incidencia varchar(10) NOT NULL,
+    status varchar(50) DEFAULT 'rascunho',
+    protocolo varchar(100) DEFAULT NULL,
+    mensagem_retorno text DEFAULT NULL,
+    xml_envio longtext DEFAULT NULL,
+    xml_retorno longtext DEFAULT NULL,
+    url_nota varchar(500) DEFAULT NULL,
+    data_cancelamento varchar(50) DEFAULT NULL,
+    motivo_cancelamento text DEFAULT NULL,
+    created_at varchar(50) DEFAULT NULL,
+    updated_at varchar(50) DEFAULT NULL,
+    INDEX idx_nf_user (user_id),
+    INDEX idx_nf_ordem (ordem_servico_id),
+    INDEX idx_nf_status (status),
+    INDEX idx_nf_numero (numero_nfse)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  `CREATE TABLE IF NOT EXISTS nfse_logs (
+    id varchar(36) NOT NULL PRIMARY KEY,
+    user_id varchar(36) NOT NULL,
+    nota_fiscal_id varchar(36) NOT NULL,
+    tipo_operacao varchar(50) NOT NULL,
+    status varchar(50) NOT NULL,
+    mensagem text DEFAULT NULL,
+    xml_enviado longtext DEFAULT NULL,
+    xml_recebido longtext DEFAULT NULL,
+    created_at varchar(50) DEFAULT NULL,
+    INDEX idx_nfse_logs_nf (nota_fiscal_id),
+    INDEX idx_nfse_logs_user (user_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  `CREATE TABLE IF NOT EXISTS agenda_logs (
+    id varchar(36) NOT NULL PRIMARY KEY,
+    user_id varchar(36) NOT NULL,
+    ordem_servico_id varchar(36) NOT NULL,
+    data_anterior varchar(50) NOT NULL,
+    data_nova varchar(50) NOT NULL,
+    profissional_anterior varchar(100) DEFAULT NULL,
+    profissional_novo varchar(100) DEFAULT NULL,
+    acao varchar(50) DEFAULT 'reagendamento',
+    created_at varchar(50) DEFAULT NULL,
+    INDEX idx_agenda_logs_user (user_id),
+    INDEX idx_agenda_logs_ordem (ordem_servico_id),
+    INDEX idx_agenda_logs_created_at (created_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  `CREATE TABLE IF NOT EXISTS avaliacoes_lembretes (
+    id varchar(36) NOT NULL PRIMARY KEY,
+    user_id varchar(36) NOT NULL,
+    ordem_servico_id varchar(36) NOT NULL,
+    cliente_id varchar(36) NOT NULL,
+    telefone varchar(30) DEFAULT NULL,
+    mensagem text DEFAULT NULL,
+    data_envio varchar(50) DEFAULT NULL,
+    status varchar(50) DEFAULT 'pendente',
+    avaliacao int DEFAULT NULL,
+    comentario text DEFAULT NULL,
+    mensagem_erro text DEFAULT NULL,
+    tentativas int DEFAULT 0,
+    created_at varchar(50) DEFAULT NULL,
+    updated_at varchar(50) DEFAULT NULL,
+    UNIQUE KEY unique_avaliacao_ordem_user (user_id, ordem_servico_id),
+    INDEX idx_avaliacoes_user (user_id),
+    INDEX idx_avaliacoes_ordem (ordem_servico_id),
+    INDEX idx_avaliacoes_status (status)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  `CREATE TABLE IF NOT EXISTS sessoes (
+    id varchar(36) NOT NULL PRIMARY KEY,
+    user_id varchar(36) NOT NULL,
+    token_hash varchar(255) NOT NULL,
+    refresh_token_hash varchar(255) DEFAULT NULL,
+    ip_address varchar(45) DEFAULT NULL,
+    user_agent text DEFAULT NULL,
+    expires_at varchar(50) NOT NULL,
+    created_at varchar(50) DEFAULT NULL,
+    INDEX idx_sessoes_user (user_id),
+    INDEX idx_sessoes_expires (expires_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 ];
 
-const alters = [
-  ['ordens_servico', 'instrumento_id', "ALTER TABLE ordens_servico ADD COLUMN instrumento_id varchar(36) DEFAULT NULL AFTER cliente_id"],
-  ['ordens_servico', 'problema_descricao', "ALTER TABLE ordens_servico ADD COLUMN problema_descricao text AFTER problemas_descricoes"],
-  ['ordens_servico', 'servico_descricao', "ALTER TABLE ordens_servico ADD COLUMN servico_descricao text AFTER servicos_descricoes"],
-  ['ordens_servico', 'status_financeiro', "ALTER TABLE ordens_servico ADD COLUMN status_financeiro varchar(50) DEFAULT 'pendente' AFTER valor_pago"],
-  ['ordens_servico', 'data_ultimo_pagamento', "ALTER TABLE ordens_servico ADD COLUMN data_ultimo_pagamento varchar(50) DEFAULT NULL AFTER status_financeiro"],
-  ['ordens_servico', 'observacoes_financeiras', "ALTER TABLE ordens_servico ADD COLUMN observacoes_financeiras text DEFAULT NULL AFTER data_ultimo_pagamento"],
-  ['ordens_servico', 'parcelas', "ALTER TABLE ordens_servico ADD COLUMN parcelas int DEFAULT 1 AFTER forma_pagamento"],
-  ['clientes', 'avaliou', "ALTER TABLE clientes ADD COLUMN avaliou tinyint(1) DEFAULT 0"],
-  ['contas_pagar', 'forma_pagamento', "ALTER TABLE contas_pagar ADD COLUMN forma_pagamento varchar(50) DEFAULT NULL AFTER data_pagamento"],
-  ['contas_pagar', 'parcelas', "ALTER TABLE contas_pagar ADD COLUMN parcelas int DEFAULT 1 AFTER forma_pagamento"],
-  ['contas_pagar', 'comprovante_url', "ALTER TABLE contas_pagar ADD COLUMN comprovante_url varchar(500) DEFAULT NULL AFTER observacoes"],
-  ['transacoes_financeiras', 'forma_pagamento', "ALTER TABLE transacoes_financeiras ADD COLUMN forma_pagamento varchar(50) DEFAULT NULL AFTER ordem_servico_id"],
-  ['transacoes_financeiras', 'comprovante_url', "ALTER TABLE transacoes_financeiras ADD COLUMN comprovante_url varchar(500) DEFAULT NULL AFTER forma_pagamento"],
-  ['transacoes_financeiras', 'origem', "ALTER TABLE transacoes_financeiras ADD COLUMN origem varchar(50) DEFAULT 'manual' AFTER comprovante_url"],
-  ['configuracoes_empresa', 'avaliacoes_enabled', "ALTER TABLE configuracoes_empresa ADD COLUMN avaliacoes_enabled tinyint(1) DEFAULT 1 AFTER instagram_handle"],
-  ['configuracoes_empresa', 'avaliacoes_days_after_completion', "ALTER TABLE configuracoes_empresa ADD COLUMN avaliacoes_days_after_completion int DEFAULT 7 AFTER avaliacoes_enabled"],
-  ['configuracoes_empresa', 'avaliacoes_trigger_hour', "ALTER TABLE configuracoes_empresa ADD COLUMN avaliacoes_trigger_hour int DEFAULT 11 AFTER avaliacoes_days_after_completion"],
-  ['configuracoes_empresa', 'avaliacoes_daily_limit', "ALTER TABLE configuracoes_empresa ADD COLUMN avaliacoes_daily_limit int DEFAULT 20 AFTER avaliacoes_trigger_hour"],
-  ['configuracoes_empresa', 'avaliacoes_min_interval_seconds', "ALTER TABLE configuracoes_empresa ADD COLUMN avaliacoes_min_interval_seconds int DEFAULT 20 AFTER avaliacoes_daily_limit"],
-  ['configuracoes_empresa', 'avaliacoes_last_processed_date', "ALTER TABLE configuracoes_empresa ADD COLUMN avaliacoes_last_processed_date varchar(10) DEFAULT NULL AFTER avaliacoes_min_interval_seconds"],
-  ['avaliacoes_lembretes', 'telefone', "ALTER TABLE avaliacoes_lembretes ADD COLUMN telefone varchar(30) DEFAULT NULL AFTER cliente_id"],
-  ['avaliacoes_lembretes', 'mensagem', "ALTER TABLE avaliacoes_lembretes ADD COLUMN mensagem text DEFAULT NULL AFTER telefone"],
-  ['avaliacoes_lembretes', 'mensagem_erro', "ALTER TABLE avaliacoes_lembretes ADD COLUMN mensagem_erro text DEFAULT NULL AFTER comentario"],
-  ['avaliacoes_lembretes', 'tentativas', "ALTER TABLE avaliacoes_lembretes ADD COLUMN tentativas int DEFAULT 0 AFTER mensagem_erro"],
-  ['templates_mensagem', 'template_type', "ALTER TABLE templates_mensagem ADD COLUMN template_type varchar(50) GENERATED ALWAYS AS (tipo) VIRTUAL"],
-  ['templates_mensagem', 'is_active', "ALTER TABLE templates_mensagem ADD COLUMN is_active tinyint(1) GENERATED ALWAYS AS (ativo) VIRTUAL"],
+const requiredColumns = {
+  usuarios: {
+    nome: 'varchar(255) DEFAULT NULL',
+    avatar_url: 'varchar(500) DEFAULT NULL',
+    nivel: "varchar(50) DEFAULT 'usuario'",
+    plano_atual: "varchar(50) DEFAULT 'trial'",
+    dias_restantes: 'int DEFAULT 14',
+    status_assinatura: "varchar(50) DEFAULT 'ativo'",
+    ativo: 'tinyint(1) DEFAULT 1',
+    email_verificado: 'tinyint(1) DEFAULT 1',
+    ultimo_login: 'varchar(50) DEFAULT NULL',
+    updated_at: 'varchar(50) DEFAULT NULL',
+  },
+  clientes: {
+    cpf_cnpj: 'varchar(30) DEFAULT NULL',
+    telefone: 'varchar(30) DEFAULT NULL',
+    email: 'varchar(255) DEFAULT NULL',
+    endereco: 'text DEFAULT NULL',
+    avaliou: 'tinyint(1) DEFAULT 0',
+    updated_at: 'varchar(50) DEFAULT NULL',
+  },
+  marcas: { updated_at: 'varchar(50) DEFAULT NULL' },
+  instrumentos: { updated_at: 'varchar(50) DEFAULT NULL' },
+  servicos: { updated_at: 'varchar(50) DEFAULT NULL' },
+  problemas: { updated_at: 'varchar(50) DEFAULT NULL' },
+  categorias_financeiras: { updated_at: 'varchar(50) DEFAULT NULL' },
+  ordens_servico: {
+    instrumento_id: 'varchar(36) DEFAULT NULL',
+    equipamento_id: 'varchar(36) DEFAULT NULL',
+    marca_id: 'varchar(36) DEFAULT NULL',
+    acessorios: 'text DEFAULT NULL',
+    problemas_ids: 'json DEFAULT NULL',
+    problemas_descricoes: 'json DEFAULT NULL',
+    problema_descricao: 'text DEFAULT NULL',
+    servicos_ids: 'json DEFAULT NULL',
+    servicos_descricoes: 'json DEFAULT NULL',
+    servico_descricao: 'text DEFAULT NULL',
+    valor_servicos: 'decimal(10,2) DEFAULT 0.00',
+    desconto: 'decimal(10,2) DEFAULT 0.00',
+    valor_total: 'decimal(10,2) DEFAULT 0.00',
+    valor_pago: 'decimal(10,2) DEFAULT 0.00',
+    status_financeiro: "varchar(50) DEFAULT 'pendente'",
+    data_ultimo_pagamento: 'varchar(50) DEFAULT NULL',
+    observacoes_financeiras: 'text DEFAULT NULL',
+    forma_pagamento: "varchar(50) DEFAULT 'pix'",
+    parcelas: 'int DEFAULT 1',
+    observacoes: 'text DEFAULT NULL',
+    data_entrega: 'varchar(50) DEFAULT NULL',
+    solicita_avaliacao: 'tinyint(1) DEFAULT 0',
+    updated_at: 'varchar(50) DEFAULT NULL',
+  },
+  contas_pagar: {
+    forma_pagamento: 'varchar(50) DEFAULT NULL',
+    parcelas: 'int DEFAULT 1',
+    comprovante_url: 'varchar(500) DEFAULT NULL',
+    updated_at: 'varchar(50) DEFAULT NULL',
+  },
+  transacoes_financeiras: {
+    conta_pagar_id: 'varchar(36) DEFAULT NULL',
+    ordem_servico_id: 'varchar(36) DEFAULT NULL',
+    forma_pagamento: 'varchar(50) DEFAULT NULL',
+    comprovante_url: 'varchar(500) DEFAULT NULL',
+    origem: "varchar(50) DEFAULT 'manual'",
+    updated_at: 'varchar(50) DEFAULT NULL',
+  },
+  contas_receber: {
+    categoria_id: 'varchar(36) DEFAULT NULL',
+    forma_pagamento: 'varchar(50) DEFAULT NULL',
+    parcelas: 'int DEFAULT 1',
+    parcela_atual: 'int DEFAULT 1',
+    observacoes: 'text DEFAULT NULL',
+    comprovante_url: 'varchar(500) DEFAULT NULL',
+    updated_at: 'varchar(50) DEFAULT NULL',
+  },
+  os_pagamentos: {
+    cliente_id: 'varchar(36) DEFAULT NULL',
+    transacao_financeira_id: 'varchar(36) DEFAULT NULL',
+    forma_pagamento: 'varchar(50) DEFAULT NULL',
+    observacoes: 'text DEFAULT NULL',
+    origem: "varchar(50) DEFAULT 'manual'",
+    status: "varchar(50) DEFAULT 'confirmado'",
+    updated_at: 'varchar(50) DEFAULT NULL',
+  },
+  configuracoes_empresa: {
+    cnpj: 'varchar(30) DEFAULT NULL',
+    telefone: 'varchar(30) DEFAULT NULL',
+    telefone_empresa: 'varchar(30) DEFAULT NULL',
+    email: 'varchar(255) DEFAULT NULL',
+    logo_url: 'varchar(500) DEFAULT NULL',
+    endereco: 'text DEFAULT NULL',
+    google_review_link: 'varchar(500) DEFAULT NULL',
+    instagram_handle: 'varchar(100) DEFAULT NULL',
+    avaliacoes_enabled: 'tinyint(1) DEFAULT 1',
+    avaliacoes_days_after_completion: 'int DEFAULT 7',
+    avaliacoes_trigger_hour: 'int DEFAULT 11',
+    avaliacoes_daily_limit: 'int DEFAULT 20',
+    avaliacoes_min_interval_seconds: 'int DEFAULT 20',
+    avaliacoes_last_processed_date: 'varchar(10) DEFAULT NULL',
+    updated_at: 'varchar(50) DEFAULT NULL',
+  },
+  templates_mensagem: {
+    template_name: 'varchar(255) DEFAULT NULL',
+    variables: 'json DEFAULT NULL',
+    updated_at: 'varchar(50) DEFAULT NULL',
+  },
+  avaliacoes_lembretes: {
+    telefone: 'varchar(30) DEFAULT NULL',
+    mensagem: 'text DEFAULT NULL',
+    mensagem_erro: 'text DEFAULT NULL',
+    tentativas: 'int DEFAULT 0',
+    updated_at: 'varchar(50) DEFAULT NULL',
+  },
+};
+
+const modifyColumns = [
+  ['usuarios', 'ultimo_login', 'varchar(50) DEFAULT NULL'],
+  ['usuarios', 'created_at', 'varchar(50) DEFAULT NULL'],
+  ['usuarios', 'updated_at', 'varchar(50) DEFAULT NULL'],
+  ['ordens_servico', 'data_entrada', 'varchar(50) DEFAULT NULL'],
+  ['ordens_servico', 'data_previsao', 'varchar(50) DEFAULT NULL'],
+  ['ordens_servico', 'data_entrega', 'varchar(50) DEFAULT NULL'],
+  ['ordens_servico', 'status', "varchar(50) DEFAULT 'pendente'"],
+  ['ordens_servico', 'forma_pagamento', "varchar(50) DEFAULT 'pix'"],
+  ['contas_pagar', 'data_vencimento', 'varchar(50) NOT NULL'],
+  ['contas_pagar', 'data_pagamento', 'varchar(50) DEFAULT NULL'],
+  ['contas_pagar', 'status', "varchar(50) DEFAULT 'pendente'"],
+  ['transacoes_financeiras', 'data', 'varchar(50) NOT NULL'],
+  ['contas_receber', 'data_vencimento', 'varchar(50) DEFAULT NULL'],
+  ['contas_receber', 'data_recebimento', 'varchar(50) DEFAULT NULL'],
+  ['notas_fiscais', 'data_emissao', 'varchar(50) NOT NULL'],
+  ['notas_fiscais', 'data_cancelamento', 'varchar(50) DEFAULT NULL'],
+  ['avaliacoes_lembretes', 'data_envio', 'varchar(50) DEFAULT NULL'],
+  ['avaliacoes_lembretes', 'status', "varchar(50) DEFAULT 'pendente'"],
 ];
 
-const modifications = [
-  "ALTER TABLE ordens_servico MODIFY COLUMN data_entrada varchar(50) DEFAULT NULL",
-  "ALTER TABLE ordens_servico MODIFY COLUMN data_previsao varchar(50) DEFAULT NULL",
-  "ALTER TABLE ordens_servico MODIFY COLUMN data_entrega varchar(50) DEFAULT NULL",
-  "ALTER TABLE avaliacoes_lembretes MODIFY COLUMN status varchar(50) DEFAULT 'pendente'",
-  "ALTER TABLE avaliacoes_lembretes MODIFY COLUMN data_envio varchar(50) DEFAULT NULL",
+const indexes = [
+  ['usuarios', 'unique_usuarios_email', 'ALTER TABLE usuarios ADD UNIQUE KEY unique_usuarios_email (email)'],
+  ['ordens_servico', 'unique_ordem_numero_user', 'ALTER TABLE ordens_servico ADD UNIQUE KEY unique_ordem_numero_user (user_id, numero)'],
+  ['contas_receber', 'unique_conta_receber_ordem_user', 'ALTER TABLE contas_receber ADD UNIQUE KEY unique_conta_receber_ordem_user (user_id, ordem_servico_id)'],
+  ['avaliacoes_lembretes', 'unique_avaliacao_ordem_user', 'ALTER TABLE avaliacoes_lembretes ADD UNIQUE KEY unique_avaliacao_ordem_user (user_id, ordem_servico_id)'],
+  ['financeiro_ia_autorizados', 'unique_financeiro_ia_phone_user', 'ALTER TABLE financeiro_ia_autorizados ADD UNIQUE KEY unique_financeiro_ia_phone_user (user_id, telefone)'],
+  ['configuracoes_empresa', 'unique_config_empresa_user', 'ALTER TABLE configuracoes_empresa ADD UNIQUE KEY unique_config_empresa_user (user_id)'],
+  ['configuracoes_whatsapp', 'unique_config_whatsapp_user', 'ALTER TABLE configuracoes_whatsapp ADD UNIQUE KEY unique_config_whatsapp_user (user_id)'],
+  ['system_settings', 'unique_system_settings_user', 'ALTER TABLE system_settings ADD UNIQUE KEY unique_system_settings_user (user_id)'],
+  ['templates_mensagem', 'unique_template_tipo_user', 'ALTER TABLE templates_mensagem ADD UNIQUE KEY unique_template_tipo_user (user_id, tipo)'],
 ];
 
-async function hasColumn(conn, table, column) {
+async function safeStep(label, fn, { warnOnly = true } = {}) {
+  try {
+    await fn();
+    console.log(`OK  ${label}`);
+  } catch (error) {
+    const message = `Falha em ${label}: ${error.message}`;
+    if (!warnOnly) throw new Error(message);
+    console.warn(`AVISO  ${message}`);
+  }
+}
+
+async function tableExists(conn, table) {
   const [rows] = await conn.query(
     `SELECT COUNT(*) AS total
-     FROM information_schema.COLUMNS
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+       FROM information_schema.TABLES
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
+    [table],
+  );
+  return Number(rows[0]?.total || 0) > 0;
+}
+
+async function columnExists(conn, table, column) {
+  const [rows] = await conn.query(
+    `SELECT COUNT(*) AS total
+       FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
     [table, column],
   );
-  return Number(rows[0].total) > 0;
+  return Number(rows[0]?.total || 0) > 0;
 }
 
-async function hasIndex(conn, table, indexName) {
+async function indexExists(conn, table, indexName) {
   const [rows] = await conn.query(
     `SELECT COUNT(*) AS total
-     FROM information_schema.STATISTICS
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?`,
+       FROM information_schema.STATISTICS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?`,
     [table, indexName],
   );
-  return Number(rows[0].total) > 0;
+  return Number(rows[0]?.total || 0) > 0;
 }
 
-const conn = await mysql.createConnection(DATABASE_URL);
-
-try {
-  for (const sql of ddl) {
-    await conn.query(sql);
-  }
-
-  for (const [table, column, sql] of alters) {
-    if (!(await hasColumn(conn, table, column))) {
-      try {
-        await conn.query(sql);
-      } catch (error) {
-        console.warn(`Aviso: nao foi possivel aplicar alter ${table}.${column}: ${error.message}`);
-      }
+async function addMissingColumns(conn) {
+  for (const [table, columns] of Object.entries(requiredColumns)) {
+    if (!(await tableExists(conn, table))) continue;
+    for (const [column, definition] of Object.entries(columns)) {
+      if (await columnExists(conn, table, column)) continue;
+      await safeStep(`adicionar coluna ${table}.${column}`, () => conn.query(`ALTER TABLE \`${table}\` ADD COLUMN \`${column}\` ${definition}`));
     }
   }
+}
 
-  for (const sql of modifications) {
-    try {
-      await conn.query(sql);
-    } catch (error) {
-      console.warn(`Aviso: nao foi possivel aplicar modificacao: ${error.message}`);
-    }
+async function modifyExistingColumns(conn) {
+  for (const [table, column, definition] of modifyColumns) {
+    if (!(await tableExists(conn, table)) || !(await columnExists(conn, table, column))) continue;
+    await safeStep(`normalizar tipo ${table}.${column}`, () => conn.query(`ALTER TABLE \`${table}\` MODIFY COLUMN \`${column}\` ${definition}`));
   }
+}
 
-  if (!(await hasIndex(conn, 'avaliacoes_lembretes', 'unique_avaliacao_ordem_user'))) {
-    try {
-      await conn.query('ALTER TABLE avaliacoes_lembretes ADD UNIQUE KEY unique_avaliacao_ordem_user (user_id, ordem_servico_id)');
-    } catch (error) {
-      console.warn(`Aviso: nao foi possivel criar indice unico de avaliacoes: ${error.message}`);
-    }
+async function addMissingIndexes(conn) {
+  for (const [table, indexName, sql] of indexes) {
+    if (!(await tableExists(conn, table)) || (await indexExists(conn, table, indexName))) continue;
+    await safeStep(`criar indice ${table}.${indexName}`, () => conn.query(sql));
   }
+}
 
-  try {
+async function normalizeExistingRows(conn) {
+  await safeStep('preencher datas/flags padrao', () => conn.query(`
+    UPDATE usuarios
+       SET ativo = COALESCE(ativo, 1),
+           nivel = COALESCE(NULLIF(nivel, ''), 'usuario'),
+           plano_atual = COALESCE(NULLIF(plano_atual, ''), 'trial'),
+           dias_restantes = COALESCE(dias_restantes, 14),
+           status_assinatura = COALESCE(NULLIF(status_assinatura, ''), 'ativo'),
+           email_verificado = COALESCE(email_verificado, 1),
+           updated_at = COALESCE(updated_at, created_at, ?)
+  `, [nowSql()]));
+
+  await safeStep('recalcular totais nulos de OS', () => conn.query(`
+    UPDATE ordens_servico
+       SET valor_servicos = COALESCE(valor_servicos, 0),
+           desconto = COALESCE(desconto, 0),
+           valor_total = CASE WHEN valor_total IS NULL THEN COALESCE(valor_servicos, 0) - COALESCE(desconto, 0) ELSE valor_total END,
+           valor_pago = COALESCE(valor_pago, 0),
+           status_financeiro = COALESCE(NULLIF(status_financeiro, ''), 'pendente'),
+           parcelas = COALESCE(parcelas, 1),
+           data_entrada = COALESCE(NULLIF(data_entrada, ''), DATE_FORMAT(CURDATE(), '%Y-%m-%d')),
+           updated_at = COALESCE(updated_at, created_at, ?)
+  `, [nowSql()]));
+}
+
+async function backfillEvaluationReminders(conn) {
+  await safeStep('backfill avaliacoes_lembretes', async () => {
     const [result] = await conn.query(`
       INSERT INTO avaliacoes_lembretes
         (id, user_id, ordem_servico_id, cliente_id, telefone, data_envio, status, comentario, tentativas, created_at, updated_at)
@@ -334,8 +761,8 @@ try {
         'enviado',
         'Historico migrado de solicita_avaliacao/clientes.avaliou',
         1,
-        COALESCE(o.updated_at, o.created_at),
-        NOW()
+        COALESCE(o.updated_at, o.created_at, ?),
+        ?
       FROM ordens_servico o
       JOIN clientes c ON c.id = o.cliente_id
       LEFT JOIN avaliacoes_lembretes al
@@ -345,15 +772,13 @@ try {
         AND o.status = 'concluido'
         AND (COALESCE(o.solicita_avaliacao, 0) = 1 OR COALESCE(c.avaliou, 0) = 1)
         AND COALESCE(NULLIF(c.telefone, ''), '') <> ''
-    `);
-    if (Number(result.affectedRows || 0) > 0) {
-      console.log(`Backfill de avaliacoes_lembretes: ${result.affectedRows} registro(s) criado(s).`);
-    }
-  } catch (error) {
-    console.warn(`Aviso: nao foi possivel executar backfill de avaliacoes: ${error.message}`);
-  }
+    `, [nowSql(), nowSql()]);
+    if (Number(result.affectedRows || 0) > 0) console.log(`Backfill avaliacoes_lembretes: ${result.affectedRows}`);
+  });
+}
 
-  try {
+async function backfillReceivables(conn) {
+  await safeStep('backfill contas_receber', async () => {
     const [result] = await conn.query(`
       INSERT INTO contas_receber
         (id, user_id, ordem_servico_id, cliente_id, descricao, valor, valor_recebido, data_vencimento,
@@ -378,8 +803,8 @@ try {
         o.forma_pagamento,
         COALESCE(o.parcelas, 1),
         'Recebivel migrado automaticamente a partir da ordem de servico',
-        COALESCE(o.created_at, NOW()),
-        NOW()
+        COALESCE(o.created_at, ?),
+        ?
       FROM ordens_servico o
       JOIN clientes c ON c.id = o.cliente_id
       LEFT JOIN contas_receber cr
@@ -388,15 +813,13 @@ try {
       WHERE cr.id IS NULL
         AND o.status <> 'cancelado'
         AND COALESCE(o.valor_total, COALESCE(o.valor_servicos, 0) - COALESCE(o.desconto, 0), 0) > 0
-    `);
-    if (Number(result.affectedRows || 0) > 0) {
-      console.log(`Backfill de contas_receber: ${result.affectedRows} registro(s) criado(s).`);
-    }
-  } catch (error) {
-    console.warn(`Aviso: nao foi possivel executar backfill de contas a receber: ${error.message}`);
-  }
+    `, [nowSql(), nowSql()]);
+    if (Number(result.affectedRows || 0) > 0) console.log(`Backfill contas_receber: ${result.affectedRows}`);
+  });
+}
 
-  try {
+async function backfillPayments(conn) {
+  await safeStep('backfill os_pagamentos', async () => {
     const [result] = await conn.query(`
       INSERT INTO os_pagamentos
         (id, user_id, ordem_servico_id, cliente_id, transacao_financeira_id, valor, forma_pagamento, data_pagamento,
@@ -413,66 +836,74 @@ try {
         'Pagamento migrado de transacoes_financeiras',
         COALESCE(t.origem, 'migracao'),
         'confirmado',
-        COALESCE(t.created_at, NOW()),
-        NOW()
+        COALESCE(t.created_at, ?),
+        ?
       FROM transacoes_financeiras t
       JOIN ordens_servico o ON o.id = t.ordem_servico_id
       LEFT JOIN os_pagamentos p ON p.transacao_financeira_id = t.id
       WHERE p.id IS NULL
         AND t.tipo = 'receita'
         AND t.ordem_servico_id IS NOT NULL
-    `);
-    if (Number(result.affectedRows || 0) > 0) {
-      console.log(`Backfill de os_pagamentos: ${result.affectedRows} registro(s) criado(s).`);
-    }
-  } catch (error) {
-    console.warn(`Aviso: nao foi possivel executar backfill de pagamentos de OS: ${error.message}`);
-  }
+    `, [nowSql(), nowSql()]);
+    if (Number(result.affectedRows || 0) > 0) console.log(`Backfill os_pagamentos: ${result.affectedRows}`);
+  });
+}
 
-  try {
-    await conn.query(`
-      UPDATE ordens_servico o
-      LEFT JOIN (
-        SELECT user_id, ordem_servico_id, COALESCE(SUM(valor), 0) AS total_pago, MAX(data_pagamento) AS ultima_data
+async function syncFinancialStatus(conn) {
+  await safeStep('sincronizar status financeiro das OS', () => conn.query(`
+    UPDATE ordens_servico o
+    LEFT JOIN (
+      SELECT user_id, ordem_servico_id, COALESCE(SUM(valor), 0) AS total_pago, MAX(data_pagamento) AS ultima_data
         FROM os_pagamentos
-        WHERE status = 'confirmado'
-        GROUP BY user_id, ordem_servico_id
-      ) p ON p.user_id = o.user_id AND p.ordem_servico_id = o.id
-      SET
-        o.valor_pago = COALESCE(p.total_pago, o.valor_pago, 0),
-        o.data_ultimo_pagamento = COALESCE(p.ultima_data, o.data_ultimo_pagamento),
-        o.status_financeiro = CASE
-          WHEN o.status = 'cancelado' THEN 'cancelado'
-          WHEN COALESCE(p.total_pago, o.valor_pago, 0) >= COALESCE(o.valor_total, 0) AND COALESCE(o.valor_total, 0) > 0 THEN 'pago'
-          WHEN COALESCE(p.total_pago, o.valor_pago, 0) > 0 THEN 'parcial'
-          ELSE 'pendente'
-        END
-    `);
-  } catch (error) {
-    console.warn(`Aviso: nao foi possivel sincronizar status financeiro das OS: ${error.message}`);
+       WHERE status = 'confirmado'
+       GROUP BY user_id, ordem_servico_id
+    ) p ON p.user_id = o.user_id AND p.ordem_servico_id = o.id
+       SET o.valor_pago = COALESCE(p.total_pago, o.valor_pago, 0),
+           o.data_ultimo_pagamento = COALESCE(p.ultima_data, o.data_ultimo_pagamento),
+           o.status_financeiro = CASE
+             WHEN o.status = 'cancelado' THEN 'cancelado'
+             WHEN COALESCE(p.total_pago, o.valor_pago, 0) >= COALESCE(o.valor_total, 0) AND COALESCE(o.valor_total, 0) > 0 THEN 'pago'
+             WHEN COALESCE(p.total_pago, o.valor_pago, 0) > 0 THEN 'parcial'
+             ELSE 'pendente'
+           END,
+           o.updated_at = ?
+  `, [nowSql()]));
+
+  await safeStep('sincronizar contas_receber', () => conn.query(`
+    UPDATE contas_receber cr
+    JOIN ordens_servico o ON o.user_id = cr.user_id AND o.id = cr.ordem_servico_id
+       SET cr.valor_recebido = COALESCE(o.valor_pago, 0),
+           cr.data_recebimento = CASE WHEN COALESCE(o.status_financeiro, 'pendente') = 'pago' THEN COALESCE(o.data_ultimo_pagamento, o.updated_at, cr.data_recebimento) ELSE cr.data_recebimento END,
+           cr.status = CASE
+             WHEN o.status = 'cancelado' THEN 'cancelado'
+             WHEN COALESCE(o.status_financeiro, 'pendente') = 'pago' THEN 'recebido'
+             WHEN COALESCE(o.status_financeiro, 'pendente') = 'parcial' THEN 'parcial'
+             WHEN COALESCE(cr.data_vencimento, '') < DATE_FORMAT(CURDATE(), '%Y-%m-%d') THEN 'atrasado'
+             ELSE 'pendente'
+           END,
+           cr.updated_at = ?
+  `, [nowSql()]));
+}
+
+const conn = await mysql.createConnection(DATABASE_URL);
+
+try {
+  await conn.query('SET NAMES utf8mb4');
+
+  for (const sql of createTables) {
+    await safeStep(`criar tabela ${sql.match(/CREATE TABLE IF NOT EXISTS ([a-z_]+)/)?.[1] || ''}`, () => conn.query(sql), { warnOnly: false });
   }
 
-  try {
-    await conn.query(`
-      UPDATE contas_receber cr
-      JOIN ordens_servico o ON o.user_id = cr.user_id AND o.id = cr.ordem_servico_id
-      SET
-        cr.valor_recebido = COALESCE(o.valor_pago, 0),
-        cr.data_recebimento = CASE WHEN COALESCE(o.status_financeiro, 'pendente') = 'pago' THEN COALESCE(o.data_ultimo_pagamento, o.updated_at, cr.data_recebimento) ELSE cr.data_recebimento END,
-        cr.status = CASE
-          WHEN o.status = 'cancelado' THEN 'cancelado'
-          WHEN COALESCE(o.status_financeiro, 'pendente') = 'pago' THEN 'recebido'
-          WHEN COALESCE(o.status_financeiro, 'pendente') = 'parcial' THEN 'parcial'
-          WHEN COALESCE(cr.data_vencimento, '') < DATE_FORMAT(CURDATE(), '%Y-%m-%d') THEN 'atrasado'
-          ELSE 'pendente'
-        END,
-        cr.updated_at = NOW()
-    `);
-  } catch (error) {
-    console.warn(`Aviso: nao foi possivel sincronizar contas a receber: ${error.message}`);
-  }
+  await addMissingColumns(conn);
+  await modifyExistingColumns(conn);
+  await addMissingIndexes(conn);
+  await normalizeExistingRows(conn);
+  await backfillEvaluationReminders(conn);
+  await backfillReceivables(conn);
+  await backfillPayments(conn);
+  await syncFinancialStatus(conn);
 
-  console.log('Migracao MySQL concluida.');
+  console.log('Migracao MySQL concluida com sucesso.');
 } finally {
   await conn.end();
 }
