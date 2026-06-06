@@ -229,11 +229,52 @@ Muito obrigado pela confiança! 🎸
 ];
 
 const TERMOS_DE_USO_VARIABLE = '{termos_de_uso}';
+const TERMOS_DE_USO_PREVIEW = 'A Vibratho instrumentos não fornece serviços de luthieria. Os serviços executados e valores recebidos são de total responsabilidade da Serviços Prime Luthieria, CNPJ: 30.057.854/0001-75. A empresa funciona nas dependências da Vibratho, porém não tem vínculo algum; apenas compartilhamos o mesmo interesse, que é atender as demandas de nossos clientes.';
+
+const PREVIEW_VALUES: Record<string, string> = {
+  cliente: 'João Silva',
+  instrumento: 'Violão',
+  marca: 'Yamaha',
+  modelo: 'C40',
+  numero: '1024',
+  acessorios: 'Capa simples',
+  servicos: 'Regulagem, troca de cordas e limpeza',
+  problemas: 'Trastejamento nas primeiras casas',
+  problemas_encontrados: 'Trastejamento e cordas oxidadas',
+  servicos_necessarios: 'Nivelamento de trastes, regulagem e troca de cordas',
+  valor: 'R$ 250,00',
+  valor_pendente: 'R$ 100,00',
+  valor_orcamento: 'R$ 250,00',
+  forma_pagamento: 'PIX',
+  data_criacao: '06/06/2026',
+  previsao_entrega: '13/06/2026',
+  observacoes: '📝 Observações: Cliente pediu urgência se possível.',
+  nome_empresa: 'Serviços Prime Luthieria - Samuel Luthier',
+  telefone_empresa: '(61) 99999-9999',
+  endereco_empresa: 'Brasília - DF',
+  cnpj: '30.057.854/0001-75',
+  horario_funcionamento: '10h às 13h | 14h às 18h',
+  dias_funcionamento: 'Segunda a Sábado',
+  dias_prontos: '3',
+  ultimo_servico: 'Regulagem completa',
+  meses_sem_manutencao: '6',
+  google_review_link: 'https://g.page/r/seu-perfil/review',
+  instagram_handle: '@vibrathoinstrumentos',
+  termos_de_uso: TERMOS_DE_USO_PREVIEW,
+};
 
 function withTermosDeUso(variables: string[] = []): string[] {
   return variables.includes(TERMOS_DE_USO_VARIABLE)
     ? variables
     : [...variables, TERMOS_DE_USO_VARIABLE];
+}
+
+function renderTemplatePreview(content?: string): string {
+  if (!content) return 'Selecione um template...';
+
+  return content
+    .replace(/[({]([a-zA-Z0-9_]+)\}/g, (match, key) => PREVIEW_VALUES[key] ?? match)
+    .trim();
 }
 
 export function TemplatesModal({ isOpen, onClose }: TemplatesModalProps) {
@@ -499,10 +540,10 @@ export function TemplatesModal({ isOpen, onClose }: TemplatesModalProps) {
                   </div>
 
                   <div>
-                    <h4 className="font-semibold text-gray-900 mb-2">Preview</h4>
+                    <h4 className="font-semibold text-gray-900 mb-2">Preview da mensagem</h4>
                     <div className="p-3 bg-gray-50 rounded-lg border text-sm max-h-60 overflow-y-auto">
                       <pre className="whitespace-pre-wrap font-sans">
-                        {currentTemplate?.template_content || 'Selecione um template...'}
+                        {renderTemplatePreview(currentTemplate?.template_content)}
                       </pre>
                     </div>
                   </div>
