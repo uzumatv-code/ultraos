@@ -228,6 +228,14 @@ Muito obrigado pela confiança! 🎸
   }
 ];
 
+const TERMOS_DE_USO_VARIABLE = '{termos_de_uso}';
+
+function withTermosDeUso(variables: string[] = []): string[] {
+  return variables.includes(TERMOS_DE_USO_VARIABLE)
+    ? variables
+    : [...variables, TERMOS_DE_USO_VARIABLE];
+}
+
 export function TemplatesModal({ isOpen, onClose }: TemplatesModalProps) {
   const [loading, setLoading] = useState(false);
   const [selectedType, setSelectedType] = useState<string>('nova_ordem');
@@ -260,12 +268,15 @@ export function TemplatesModal({ isOpen, onClose }: TemplatesModalProps) {
             template_type: defaultTemplate.type,
             template_name: defaultTemplate.name,
             template_content: defaultTemplate.defaultContent,
-            variables: defaultTemplate.variables,
+            variables: withTermosDeUso(defaultTemplate.variables),
             is_active: true
           });
         }
       } else {
-        setCurrentTemplate(data);
+        setCurrentTemplate({
+          ...data,
+          variables: withTermosDeUso(data.variables),
+        });
       }
     } catch (error) {
       console.error('Erro ao carregar template:', error);
@@ -375,7 +386,7 @@ export function TemplatesModal({ isOpen, onClose }: TemplatesModalProps) {
                           template_type: defaultTemplate.type,
                           template_name: defaultTemplate.name,
                           template_content: defaultTemplate.defaultContent,
-                          variables: defaultTemplate.variables,
+                          variables: withTermosDeUso(defaultTemplate.variables),
                           is_active: true
                         });
                       }
@@ -456,7 +467,7 @@ export function TemplatesModal({ isOpen, onClose }: TemplatesModalProps) {
                 <div className="p-4 flex-1 overflow-y-auto">
                   <h4 className="font-semibold text-gray-900 mb-4">Variáveis Disponíveis</h4>
                   <div className="space-y-2 mb-6">
-                    {TEMPLATE_TYPES.find(t => t.type === selectedType)?.variables.map((variable) => (
+                    {withTermosDeUso(TEMPLATE_TYPES.find(t => t.type === selectedType)?.variables).map((variable) => (
                       <button
                         key={variable}
                         onClick={() => {

@@ -1,6 +1,8 @@
 import { supabase } from '../lib/supabase';
 import { formatLocalDate } from './dates';
 
+const TERMOS_DE_USO = `A Vibratho instrumentos não fornece serviços de luthieria. Os serviços executados e valores recebidos são de total responsabilidade da Serviços Prime Luthieria, CNPJ: 30.057.854/0001-75. A empresa funciona nas dependências da Vibratho, porém não tem vínculo algum; apenas compartilhamos o mesmo interesse, que é atender as demandas de nossos clientes.`;
+
 export interface MessageTemplate {
   id?: string;
   template_type: string;
@@ -257,7 +259,13 @@ Muito obrigado pela confiança! 🎸
       }
     };
 
-    return defaults[templateType] || null;
+    const template = defaults[templateType] || null;
+    if (!template || template.variables.includes('{termos_de_uso}')) return template;
+
+    return {
+      ...template,
+      variables: [...template.variables, '{termos_de_uso}'],
+    };
   }
 
   static async processTemplate(templateType: string, data: any, empresaConfig?: any): Promise<string> {
@@ -313,15 +321,15 @@ Muito obrigado pela confiança! 🎸
     message = message.replace(/{valor_pendente}/g, data.valor_pendente ? `R$ ${data.valor_pendente.toFixed(2).replace('.', ',')}` : 'R$ 0,00');
     message = message.replace(/{valor_orcamento}/g, data.valor_orcamento ? `R$ ${data.valor_orcamento.toFixed(2).replace('.', ',')}` : 'A definir');
 
-    // Substituir variáveis da empresa (se disponível)
-    if (empresaConfig) {
-      message = message.replace(/{nome_empresa}/g, empresaConfig.nome_empresa || '');
-      message = message.replace(/{cnpj}/g, empresaConfig.cnpj || '');
-      message = message.replace(/{horario_funcionamento}/g, empresaConfig.horario_funcionamento || '');
-      message = message.replace(/{dias_funcionamento}/g, empresaConfig.dias_funcionamento || '');
-      message = message.replace(/{telefone_empresa}/g, empresaConfig.telefone || '');
-      message = message.replace(/{endereco_empresa}/g, empresaConfig.endereco || '');
-    }
+    // Substituir variáveis da empresa, mesmo quando ainda não há configuração salva.
+    const empresa = empresaConfig || {};
+    message = message.replace(/{nome_empresa}/g, empresa.nome_empresa || data.nome_empresa || 'Sua Empresa');
+    message = message.replace(/{cnpj}/g, empresa.cnpj || data.cnpj || '');
+    message = message.replace(/{horario_funcionamento}/g, empresa.horario_funcionamento || data.horario_funcionamento || '09:00 às 18:00');
+    message = message.replace(/{dias_funcionamento}/g, empresa.dias_funcionamento || data.dias_funcionamento || 'Segunda a Sexta');
+    message = message.replace(/{telefone_empresa}/g, empresa.telefone_empresa || empresa.telefone || data.telefone_empresa || data.telefone || '');
+    message = message.replace(/{endereco_empresa}/g, empresa.endereco || data.endereco || '');
+    message = message.replace(/[({]termos_de_uso\}/g, empresa.termos_de_uso || data.termos_de_uso || TERMOS_DE_USO);
 
     // Substituir outras variáveis específicas
     if (data.servicos && Array.isArray(data.servicos)) {
