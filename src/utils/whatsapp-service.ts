@@ -1,6 +1,13 @@
 import { supabase } from '../lib/supabase';
 import { TemplateService } from './template-service';
 
+const EMPRESA_CONFIG_DEFAULTS = {
+  nome_empresa: 'Sua Empresa',
+  telefone_empresa: '',
+  horario_funcionamento: '10h às 13h | 14h às 18h',
+  dias_funcionamento: 'Segunda a Sábado'
+};
+
 export interface WhatsAppConfig {
   method: 'direct' | 'webhook'; // 'webhook' = Evolution API direta
   webhook_url: string;
@@ -56,14 +63,15 @@ export class WhatsAppService {
         .single();
 
       if (error || !data) {
-        this.empresaConfig = {
-          nome_empresa: 'Sua Empresa',
-          telefone_empresa: '',
-          horario_funcionamento: '09:00 às 18:00',
-          dias_funcionamento: 'Segunda a Sexta'
-        };
+        this.empresaConfig = EMPRESA_CONFIG_DEFAULTS;
       } else {
-        this.empresaConfig = data;
+        this.empresaConfig = {
+          ...EMPRESA_CONFIG_DEFAULTS,
+          ...data,
+          horario_funcionamento: data.horario_funcionamento || EMPRESA_CONFIG_DEFAULTS.horario_funcionamento,
+          dias_funcionamento: data.dias_funcionamento || EMPRESA_CONFIG_DEFAULTS.dias_funcionamento,
+          telefone_empresa: data.telefone_empresa || data.telefone || EMPRESA_CONFIG_DEFAULTS.telefone_empresa,
+        };
       }
 
       return this.empresaConfig;

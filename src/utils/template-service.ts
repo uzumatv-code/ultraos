@@ -2,6 +2,8 @@ import { supabase } from '../lib/supabase';
 import { formatLocalDate } from './dates';
 
 const TERMOS_DE_USO = `A Vibratho instrumentos não fornece serviços de luthieria. Os serviços executados e valores recebidos são de total responsabilidade da Serviços Prime Luthieria, CNPJ: 30.057.854/0001-75. A empresa funciona nas dependências da Vibratho, porém não tem vínculo algum; apenas compartilhamos o mesmo interesse, que é atender as demandas de nossos clientes.`;
+const HORARIO_FUNCIONAMENTO_PADRAO = '10h às 13h | 14h às 18h';
+const DIAS_FUNCIONAMENTO_PADRAO = 'Segunda a Sábado';
 
 export interface MessageTemplate {
   id?: string;
@@ -325,8 +327,8 @@ Muito obrigado pela confiança! 🎸
     const empresa = empresaConfig || {};
     message = message.replace(/{nome_empresa}/g, empresa.nome_empresa || data.nome_empresa || 'Sua Empresa');
     message = message.replace(/{cnpj}/g, empresa.cnpj || data.cnpj || '');
-    message = message.replace(/{horario_funcionamento}/g, empresa.horario_funcionamento || data.horario_funcionamento || '09:00 às 18:00');
-    message = message.replace(/{dias_funcionamento}/g, empresa.dias_funcionamento || data.dias_funcionamento || 'Segunda a Sexta');
+    message = message.replace(/{horario_funcionamento}/g, empresa.horario_funcionamento || data.horario_funcionamento || HORARIO_FUNCIONAMENTO_PADRAO);
+    message = message.replace(/{dias_funcionamento}/g, empresa.dias_funcionamento || data.dias_funcionamento || DIAS_FUNCIONAMENTO_PADRAO);
     message = message.replace(/{telefone_empresa}/g, empresa.telefone_empresa || empresa.telefone || data.telefone_empresa || data.telefone || '');
     message = message.replace(/{endereco_empresa}/g, empresa.endereco || data.endereco || '');
     message = message.replace(/[({]termos_de_uso\}/g, empresa.termos_de_uso || data.termos_de_uso || TERMOS_DE_USO);
