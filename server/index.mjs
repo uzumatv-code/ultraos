@@ -504,9 +504,10 @@ app.post('/api/query', requireAuth, async (req, res) => {
       if (head) return res.json({ data: null, count: countRow.total, error: null });
 
       let sql = `SELECT * FROM \`${physicalTable}\`${whereSql}`;
-      for (const order of orders) {
-        if (cols.has(order.column)) sql += ` ORDER BY \`${order.column}\` ${order.ascending === false ? 'DESC' : 'ASC'}`;
-      }
+      const orderClauses = orders
+        .filter((order) => cols.has(order.column))
+        .map((order) => `\`${order.column}\` ${order.ascending === false ? 'DESC' : 'ASC'}`);
+      if (orderClauses.length) sql += ` ORDER BY ${orderClauses.join(', ')}`;
       if (range) {
         sql += ' LIMIT ? OFFSET ?';
         params.push(Number(range.to) - Number(range.from) + 1, Number(range.from));
