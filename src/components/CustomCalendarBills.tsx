@@ -19,6 +19,7 @@ export function CustomCalendarBills({ bills, onEventClick, loading = false, onUp
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [newDate, setNewDate] = useState('');
+  const [selectedDayBills, setSelectedDayBills] = useState<{ day: number; bills: ContaPagar[] } | null>(null);
 
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('pt-BR', {
@@ -204,9 +205,13 @@ export function CustomCalendarBills({ bills, onEventClick, loading = false, onUp
                   </motion.div>
                 ))}
                 {dayBills.length > 3 && (
-                  <div className="text-xs text-gray-500 dark:text-gray-400 pl-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedDayBills({ day: dayNumber, bills: dayBills })}
+                    className="w-full rounded px-1.5 py-1 text-left text-xs font-semibold text-blue-600 transition-colors hover:bg-blue-50 hover:text-blue-700 dark:text-blue-400 dark:hover:bg-blue-900/20"
+                  >
                     +{dayBills.length - 3} mais
-                  </div>
+                  </button>
                 )}
               </div>
             </>
@@ -282,6 +287,82 @@ export function CustomCalendarBills({ bills, onEventClick, loading = false, onUp
       <div className="grid grid-cols-7 gap-2">
         {renderCalendarDays()}
       </div>
+
+      {/* Day Bills Modal */}
+      <AnimatePresence>
+        {selectedDayBills && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+            onClick={() => setSelectedDayBills(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.9, y: 20 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-hidden"
+            >
+              <div className="sticky top-0 bg-gradient-to-br from-blue-500 to-indigo-600 p-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-11 h-11 bg-white/20 backdrop-blur-lg rounded-xl flex items-center justify-center">
+                      <CalendarIcon className="w-6 h-6 text-white" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-bold text-white">
+                        Contas do dia {String(selectedDayBills.day).padStart(2, '0')}/{String(month + 1).padStart(2, '0')}/{year}
+                      </h3>
+                      <p className="text-white/80 text-sm">
+                        {selectedDayBills.bills.length} conta(s) com vencimento
+                      </p>
+                    </div>
+                  </div>
+                  <motion.button
+                    whileHover={{ scale: 1.1, rotate: 90 }}
+                    whileTap={{ scale: 0.9 }}
+                    onClick={() => setSelectedDayBills(null)}
+                    className="text-white/80 hover:text-white transition-colors"
+                  >
+                    <X className="w-6 h-6" />
+                  </motion.button>
+                </div>
+              </div>
+
+              <div className="max-h-[70vh] overflow-y-auto p-5 space-y-3">
+                {selectedDayBills.bills.map((bill) => (
+                  <motion.button
+                    key={bill.id}
+                    type="button"
+                    whileHover={{ scale: 1.01 }}
+                    whileTap={{ scale: 0.99 }}
+                    onClick={() => {
+                      setSelectedBill(bill);
+                      setSelectedDayBills(null);
+                    }}
+                    className={`w-full rounded-xl border p-3 text-left transition-all hover:shadow-md ${getStatusColor(bill.status)}`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="font-semibold truncate">{bill.descricao}</div>
+                        {bill.categoria?.nome && (
+                          <div className="mt-1 text-xs opacity-75 truncate">{bill.categoria.nome}</div>
+                        )}
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <div className="font-bold">{formatCurrency(bill.valor)}</div>
+                        <div className="mt-1 text-xs opacity-75">{getStatusLabel(bill.status)}</div>
+                      </div>
+                    </div>
+                  </motion.button>
+                ))}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Bill Details Modal */}
       <AnimatePresence>
