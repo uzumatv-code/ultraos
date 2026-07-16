@@ -228,8 +228,8 @@ export function Ordens() {
 
       if (error) throw error;
 
-      alerts.success('Ordem de serviço excluída com sucesso!');
-      buscarOrdens();
+      await alerts.success('Ordem de serviço excluída com sucesso!');
+      await buscarOrdens();
     } catch (error) {
       console.error('Erro ao excluir ordem:', error);
       alerts.error('Erro ao excluir ordem de serviço');

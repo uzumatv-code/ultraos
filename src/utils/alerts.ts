@@ -32,13 +32,7 @@ export const alerts = {
       icon: 'success',
       confirmButtonText: 'OK',
       confirmButtonColor: '#10b981',
-      iconColor: '#10b981',
-      showClass: {
-        popup: 'animate__animated animate__fadeInDown'
-      },
-      hideClass: {
-        popup: 'animate__animated animate__fadeOutUp'
-      }
+      iconColor: '#10b981'
     });
   },
 
@@ -50,10 +44,7 @@ export const alerts = {
       icon: 'error',
       confirmButtonText: 'OK',
       confirmButtonColor: '#ef4444',
-      iconColor: '#ef4444',
-      showClass: {
-        popup: 'animate__animated animate__shakeX'
-      }
+      iconColor: '#ef4444'
     });
   },
 
@@ -65,10 +56,7 @@ export const alerts = {
       icon: 'info',
       confirmButtonText: 'OK',
       confirmButtonColor: '#3b82f6',
-      iconColor: '#3b82f6',
-      showClass: {
-        popup: 'animate__animated animate__fadeIn'
-      }
+      iconColor: '#3b82f6'
     });
   },
 
@@ -98,9 +86,6 @@ export const alerts = {
       confirmButtonText: options.confirmButtonText || '✓ Sim',
       cancelButtonText: options.cancelButtonText || '✕ Cancelar',
       iconColor: iconColors[options.icon || 'warning'],
-      showClass: {
-        popup: 'animate__animated animate__zoomIn'
-      },
       reverseButtons: true
     });
   },
@@ -202,9 +187,6 @@ export const alerts = {
       confirmButtonText: '✕ Fechar',
       confirmButtonColor: dark ? '#6b7280' : '#8B5CF6',
       width: '42rem',
-      showClass: {
-        popup: 'animate__animated animate__fadeInDown'
-      },
       didOpen: () => {
         const btnAndamento = document.getElementById('btn-andamento');
         const btnAtraso = document.getElementById('btn-atraso');

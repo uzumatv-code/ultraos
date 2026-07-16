@@ -24,6 +24,8 @@ import { InstrumentoModal } from '../components/InstrumentoModal';
 import { MarcaModal } from '../components/MarcaModal';
 import { MultiSelect } from '../components/MultiSelect';
 import { PrintOrdemModal } from '../components/PrintOrdemModal';
+import { ProblemaModal } from '../components/ProblemaModal';
+import { ServicoModal } from '../components/ServicoModal';
 import { supabase } from '../lib/supabase';
 import { toast } from '../components/ToastCustom';
 import { formatCurrency } from '../utils/formatters';
@@ -145,6 +147,8 @@ export function NovaOrdem() {
   const [showClienteModal, setShowClienteModal] = useState(false);
   const [showInstrumentoModal, setShowInstrumentoModal] = useState(false);
   const [showMarcaModal, setShowMarcaModal] = useState(false);
+  const [showProblemaModal, setShowProblemaModal] = useState(false);
+  const [showServicoModal, setShowServicoModal] = useState(false);
   const [showPrintModal, setShowPrintModal] = useState(false);
   const [ordemParaImprimir, setOrdemParaImprimir] = useState<OrdemServico | null>(null);
   const [agendaOpen, setAgendaOpen] = useState(false);
@@ -535,6 +539,8 @@ ${buildServicesText() || 'Nenhum serviço registrado.'}`;
                   descriptions={problemasDescricoes}
                   onDescriptionChange={(problemId, description) => setProblemasDescricoes((current) => ({ ...current, [problemId]: description }))}
                   getInitialDescription={(problemId) => problemas.find((item) => item.id === problemId)?.descricao || ''}
+                  onCreateNew={() => setShowProblemaModal(true)}
+                  createNewLabel="Cadastrar novo problema"
                   placeholder="Selecione problemas"
                 />
                 <MultiSelect
@@ -545,6 +551,8 @@ ${buildServicesText() || 'Nenhum serviço registrado.'}`;
                   descriptions={servicosDescricoes}
                   onDescriptionChange={(serviceId, description) => setServicosDescricoes((current) => ({ ...current, [serviceId]: description }))}
                   getInitialDescription={(serviceId) => servicos.find((item) => item.id === serviceId)?.descricao || ''}
+                  onCreateNew={() => setShowServicoModal(true)}
+                  createNewLabel="Cadastrar nova solução / serviço"
                   placeholder="Selecione serviços"
                 />
               </div>
@@ -648,6 +656,8 @@ ${buildServicesText() || 'Nenhum serviço registrado.'}`;
       <ClienteModal isOpen={showClienteModal} onClose={() => setShowClienteModal(false)} onSuccess={() => { carregarDados(); setShowClienteModal(false); }} />
       <InstrumentoModal isOpen={showInstrumentoModal} onClose={() => setShowInstrumentoModal(false)} onSuccess={() => { carregarDados(); setShowInstrumentoModal(false); }} />
       <MarcaModal isOpen={showMarcaModal} onClose={() => setShowMarcaModal(false)} onSuccess={() => { carregarDados(); setShowMarcaModal(false); }} />
+      <ProblemaModal isOpen={showProblemaModal} onClose={() => setShowProblemaModal(false)} onSuccess={() => { carregarDados(); setShowProblemaModal(false); }} />
+      <ServicoModal isOpen={showServicoModal} onClose={() => setShowServicoModal(false)} onSuccess={() => { carregarDados(); setShowServicoModal(false); }} />
 
       {ordemParaImprimir && (
         <PrintOrdemModal

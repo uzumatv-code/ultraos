@@ -15,6 +15,7 @@ interface MultiSelectProps {
   onDescriptionChange?: (id: string, description: string) => void;
   getInitialDescription?: (id: string) => string;
   onCreateNew?: () => void;
+  createNewLabel?: string;
   placeholder?: string;
   className?: string;
   label: string;
@@ -28,6 +29,7 @@ export function MultiSelect({
   onDescriptionChange,
   getInitialDescription,
   onCreateNew,
+  createNewLabel = 'Cadastrar novo',
   placeholder = 'Selecione opções',
   className = '',
   label,
@@ -191,7 +193,7 @@ export function MultiSelect({
                   }}
                   className="w-full px-4 py-2 text-sm text-purple-600 hover:bg-purple-50 rounded-lg transition-colors text-center font-medium"
                 >
-                  + Cadastrar Novo
+                  + {createNewLabel}
                 </button>
               </div>
             )}
