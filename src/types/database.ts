@@ -48,8 +48,10 @@ export interface OrdemServico {
   modelo: string;
   acessorios: string;
   problemas_ids: string[];
+  problemas_descricoes?: Record<string, string>;
   problema_descricao: string;
   servicos_ids: string[];
+  servicos_descricoes?: Record<string, string>;
   servico_descricao: string;
   valor_servicos: number;
   desconto: number;

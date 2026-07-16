@@ -81,6 +81,42 @@ function scheduleLoad(count: number) {
   return { label: 'Cheio', className: 'border-rose-200 bg-rose-50 text-rose-800' };
 }
 
+function normalizeDescriptions(value: unknown): Record<string, string> {
+  if (!value) return {};
+
+  let parsedValue = value;
+  if (typeof value === 'string') {
+    try {
+      parsedValue = JSON.parse(value);
+    } catch {
+      return {};
+    }
+  }
+
+  if (typeof parsedValue !== 'object' || Array.isArray(parsedValue)) return {};
+
+  return Object.fromEntries(
+    Object.entries(parsedValue as Record<string, unknown>)
+      .filter(([, description]) => typeof description === 'string')
+      .map(([itemId, description]) => [itemId, (description as string).trim()]),
+  );
+}
+
+function selectedDescriptions(ids: string[], descriptions: Record<string, string>) {
+  return Object.fromEntries(
+    ids
+      .filter((itemId) => Object.prototype.hasOwnProperty.call(descriptions, itemId))
+      .map((itemId) => [itemId, descriptions[itemId].trim()]),
+  );
+}
+
+function itemDescription(descriptions: Record<string, string>, itemId: string, defaultDescription?: string) {
+  if (Object.prototype.hasOwnProperty.call(descriptions, itemId)) {
+    return descriptions[itemId].trim();
+  }
+  return defaultDescription?.trim() || '';
+}
+
 export function NovaOrdem() {
   const navigate = useNavigate();
   const { id } = useParams();
@@ -239,7 +275,9 @@ export function NovaOrdem() {
       setModelo(data.modelo || '');
       setAcessorios(data.acessorios || '');
       setProblemasIds(data.problemas_ids || []);
+      setProblemasDescricoes(normalizeDescriptions(data.problemas_descricoes));
       setServicosIds(data.servicos_ids || []);
+      setServicosDescricoes(normalizeDescriptions(data.servicos_descricoes));
       setValorServicos(Number(data.valor_servicos || 0));
       setDesconto(Number(data.desconto || 0));
       setFormaPagamento(data.forma_pagamento || 'pix');
@@ -266,7 +304,7 @@ export function NovaOrdem() {
       .map((problemId) => {
         const problema = problemas.find((item) => item.id === problemId);
         if (!problema) return '';
-        const description = problemasDescricoes[problemId] || problema.descricao || '';
+        const description = itemDescription(problemasDescricoes, problemId, problema.descricao);
         return `${problema.nome}${description ? `: ${description}` : ''}`;
       })
       .filter(Boolean)
@@ -278,7 +316,7 @@ export function NovaOrdem() {
       .map((serviceId) => {
         const servico = servicos.find((item) => item.id === serviceId);
         if (!servico) return '';
-        const description = servicosDescricoes[serviceId] || servico.descricao || '';
+        const description = itemDescription(servicosDescricoes, serviceId, servico.descricao);
         return `${servico.nome}${description ? `: ${description}` : ''}`;
       })
       .filter(Boolean)
@@ -329,8 +367,10 @@ ${buildServicesText() || 'Nenhum serviço registrado.'}`;
         modelo: modelo.trim(),
         acessorios,
         problemas_ids: problemasIds,
+        problemas_descricoes: selectedDescriptions(problemasIds, problemasDescricoes),
         problema_descricao: buildProblemsText(),
         servicos_ids: servicosIds,
+        servicos_descricoes: selectedDescriptions(servicosIds, servicosDescricoes),
         servico_descricao: buildServicesText(),
         valor_servicos: Number(valorServicos || 0),
         desconto: Number(desconto || 0),
