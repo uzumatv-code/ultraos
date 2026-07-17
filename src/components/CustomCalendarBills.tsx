@@ -13,7 +13,7 @@ interface CustomCalendarBillsProps {
   onMonthChange?: (date: Date) => void;
 }
 
-export function CustomCalendarBills({ bills, onEventClick, loading = false, onUpdate, onMonthChange }: CustomCalendarBillsProps) {
+export function CustomCalendarBills({ bills, loading = false, onUpdate, onMonthChange }: CustomCalendarBillsProps) {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedBill, setSelectedBill] = useState<ContaPagar | null>(null);
   const [updatingStatus, setUpdatingStatus] = useState(false);
@@ -65,6 +65,10 @@ export function CustomCalendarBills({ bills, onEventClick, loading = false, onUp
              billDate.getMonth() === month &&
              billDate.getFullYear() === year;
     });
+  };
+
+  const handleBillClick = (bill: ContaPagar) => {
+    setSelectedBill(bill);
   };
 
   const getStatusColor = (status: string) => {
@@ -177,7 +181,7 @@ export function CustomCalendarBills({ bills, onEventClick, loading = false, onUp
           initial={{ opacity: 0, scale: 0.8 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ delay: i * 0.01 }}
-          className={`min-h-[100px] p-2 border border-gray-200 dark:border-gray-700 ${
+          className={`min-h-[132px] p-2 border border-gray-200 dark:border-gray-700 ${
             isCurrentMonth 
               ? 'bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-750' 
               : 'bg-gray-50 dark:bg-gray-900'
@@ -192,27 +196,19 @@ export function CustomCalendarBills({ bills, onEventClick, loading = false, onUp
               }`}>
                 {dayNumber}
               </div>
-              <div className="space-y-1">
-                {dayBills.slice(0, 3).map((bill) => (
+              <div className="max-h-44 space-y-1 overflow-y-auto pr-1">
+                {dayBills.map((bill) => (
                   <motion.div
                     key={bill.id}
-                    whileHover={{ scale: 1.05 }}
-                    onClick={() => setSelectedBill(bill)}
+                    whileHover={{ scale: 1.02 }}
+                    onClick={() => handleBillClick(bill)}
                     className={`text-xs p-1.5 rounded cursor-pointer border ${getStatusColor(bill.status)} transition-all`}
+                    title={`${bill.descricao} - ${formatCurrency(bill.valor)}`}
                   >
                     <div className="font-medium truncate">{bill.descricao}</div>
                     <div className="text-xs opacity-75">{formatCurrency(bill.valor)}</div>
                   </motion.div>
                 ))}
-                {dayBills.length > 3 && (
-                  <button
-                    type="button"
-                    onClick={() => setSelectedDayBills({ day: dayNumber, bills: dayBills })}
-                    className="w-full rounded px-1.5 py-1 text-left text-xs font-semibold text-blue-600 transition-colors hover:bg-blue-50 hover:text-blue-700 dark:text-blue-400 dark:hover:bg-blue-900/20"
-                  >
-                    +{dayBills.length - 3} mais
-                  </button>
-                )}
               </div>
             </>
           )}

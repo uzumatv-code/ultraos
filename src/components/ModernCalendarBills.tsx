@@ -33,7 +33,7 @@ interface ModernCalendarBillsProps {
   onMonthChange?: (date: Date) => void;
 }
 
-export function ModernCalendarBills({ bills, onEventClick, loading = false, onUpdate, onMonthChange }: ModernCalendarBillsProps) {
+export function ModernCalendarBills({ bills, loading = false, onUpdate, onMonthChange }: ModernCalendarBillsProps) {
   const [selectedBill, setSelectedBill] = useState<ContaPagar | null>(null);
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
@@ -190,6 +190,9 @@ export function ModernCalendarBills({ bills, onEventClick, loading = false, onUp
           eventPropGetter={eventStyleGetter}
           onSelectEvent={(event: BillEvent) => setSelectedBill(event.resource)}
           onNavigate={(date) => onMonthChange?.(date)}
+          popup
+          popupOffset={{ x: 12, y: 12 }}
+          showAllEvents
           messages={{
             next: 'Próximo',
             previous: 'Anterior',
