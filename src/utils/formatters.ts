@@ -54,7 +54,7 @@ CNPJ: 30.057.854/0001-75
 O.S Nº: ${ordem.numero}
 Data da entrada: ${formatDate(ordem.data_entrada || new Date())}
 
-Instrumento: ${ordem.marca?.nome || ''} ${ordem.modelo || ''}
+Equipamento: ${ordem.marca?.nome || ''} ${ordem.modelo || ''}
 Acessórios: ${ordem.acessorios || 'Nenhum'}
 
 Valor: ${formatCurrency(ordem.valor_servicos)}

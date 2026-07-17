@@ -524,7 +524,7 @@ export function ModernCalendar({ orders, onEventClick, loading = false, onUpdate
                     <div className="flex items-center gap-3">
                       <Wrench className="w-5 h-5 text-primary-600 dark:text-primary-400" />
                       <div>
-                        <p className="text-xs text-gray-500 dark:text-gray-400">Instrumento</p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">Equipamento</p>
                         <p className="font-semibold text-gray-800 dark:text-white">
                           {selectedEvent.ordem.instrumento?.nome} - {selectedEvent.ordem.marca?.nome}
                         </p>

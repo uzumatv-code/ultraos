@@ -43,15 +43,15 @@ export function Instrumentos() {
       setInstrumentos(data || []);
       setTotalInstrumentos(count || 0);
     } catch (error) {
-      console.error('Erro ao buscar instrumentos:', error);
-      toast.error('Erro ao carregar instrumentos');
+      console.error('Erro ao buscar equipamentos:', error);
+      toast.error('Erro ao carregar equipamentos');
     } finally {
       setLoading(false);
     }
   }
 
   async function handleExcluir(instrumento: Instrumento) {
-    if (!confirm(`Deseja realmente excluir o instrumento ${instrumento.nome}?`)) return;
+    if (!confirm(`Deseja realmente excluir o equipamento ${instrumento.nome}?`)) return;
 
     try {
       const { error } = await supabase
@@ -61,11 +61,11 @@ export function Instrumentos() {
 
       if (error) throw error;
 
-      toast.success('Instrumento excluído com sucesso!');
+      toast.success('Equipamento excluído com sucesso!');
       buscarInstrumentos();
     } catch (error) {
-      console.error('Erro ao excluir instrumento:', error);
-      toast.error('Erro ao excluir instrumento');
+      console.error('Erro ao excluir equipamento:', error);
+      toast.error('Erro ao excluir equipamento');
     }
   }
 
@@ -88,7 +88,7 @@ export function Instrumentos() {
                 <Music2 className="w-6 h-6 text-white" />
               </motion.div>
               <h1 className="responsive-heading text-slate-950 dark:text-white">
-                Instrumentos
+                Equipamentos
               </h1>
             </motion.div>
 
@@ -101,7 +101,7 @@ export function Instrumentos() {
                 <Search className="w-5 h-5 text-gray-400 dark:text-gray-500 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
-                  placeholder="Buscar instrumentos..."
+                  placeholder="Buscar equipamentos..."
                   value={busca}
                   onChange={(e) => setBusca(e.target.value)}
                   className="pl-10 pr-4 py-2 border border-gray-200 dark:border-purple-500/20 rounded-lg focus:ring-2 focus:ring-cyan-500 dark:focus:ring-cyan-400 focus:border-cyan-500 w-full sm:w-64 bg-white/50 dark:bg-gray-900/50 backdrop-blur-lg transition-all duration-200 text-gray-900 dark:text-gray-100"
@@ -118,7 +118,7 @@ export function Instrumentos() {
                 className="w-full sm:w-auto px-4 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-white font-medium rounded-lg transition-all duration-300 flex items-center justify-center gap-2 shadow-lg shadow-cyan-500/30 dark:shadow-cyan-500/20"
               >
                 <Plus className="w-5 h-5" />
-                <span>Novo Instrumento</span>
+                <span>Novo Equipamento</span>
               </motion.button>
             </motion.div>
           </div>
@@ -154,7 +154,7 @@ export function Instrumentos() {
                   ) : instrumentos.length === 0 ? (
                     <tr>
                       <td colSpan={2} className="px-6 py-8 text-center text-gray-500 dark:text-gray-400">
-                        Nenhum instrumento encontrado
+                        Nenhum equipamento encontrado
                       </td>
                     </tr>
                   ) : (

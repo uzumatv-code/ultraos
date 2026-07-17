@@ -38,7 +38,7 @@ const mainItems = [
 
 const supportItems = [
   { path: '/marcas', icon: Bookmark, label: 'Marcas' },
-  { path: '/instrumentos', icon: Music2, label: 'Instrumentos' },
+  { path: '/equipamentos', icon: Music2, label: 'Equipamentos' },
   { path: '/servicos', icon: Wrench, label: 'Serviços' },
   { path: '/problemas', icon: AlertTriangle, label: 'Problemas' },
   { path: '/avaliacoes', icon: Star, label: 'Avaliações' },

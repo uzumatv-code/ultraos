@@ -45,7 +45,7 @@ export function InstrumentoModal({ isOpen, onClose, instrumentoParaEditar, onSuc
           .eq('user_id', user.id);
 
         if (error) throw error;
-        toast.success('Instrumento atualizado com sucesso! 🎵');
+        toast.success('Equipamento atualizado com sucesso!');
       } else {
         const { error } = await supabase
           .from('instrumentos')
@@ -55,15 +55,15 @@ export function InstrumentoModal({ isOpen, onClose, instrumentoParaEditar, onSuc
           }]);
 
         if (error) throw error;
-        toast.success('Instrumento cadastrado com sucesso! 🎵');
+        toast.success('Equipamento cadastrado com sucesso!');
       }
 
       onSuccess();
       onClose();
       limparFormulario();
     } catch (error) {
-      console.error('Erro ao salvar instrumento:', error);
-      toast.error('Erro ao salvar instrumento. Tente novamente! ⚠️');
+      console.error('Erro ao salvar equipamento:', error);
+      toast.error('Erro ao salvar equipamento. Tente novamente!');
     } finally {
       setLoading(false);
     }
@@ -86,7 +86,7 @@ export function InstrumentoModal({ isOpen, onClose, instrumentoParaEditar, onSuc
             <div className="p-6">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-xl font-bold text-gray-800">
-                  {instrumentoParaEditar ? 'Editar Instrumento' : 'Novo Instrumento'}
+                  {instrumentoParaEditar ? 'Editar Equipamento' : 'Novo Equipamento'}
                 </h2>
                 <button
                   onClick={onClose}
@@ -99,7 +99,7 @@ export function InstrumentoModal({ isOpen, onClose, instrumentoParaEditar, onSuc
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Nome do Instrumento
+                    Nome do Equipamento
                   </label>
                   <input
                     type="text"

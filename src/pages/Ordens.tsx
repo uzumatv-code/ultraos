@@ -144,7 +144,7 @@ export function Ordens() {
         size: 120,
       },
       {
-        header: 'Instrumento',
+        header: 'Equipamento',
         accessorFn: row => `${row.instrumento?.nome || ''} ${row.marca?.nome || ''}\n${row.modelo || ''}`,
         id: 'instrumento',
         size: 120,
@@ -517,7 +517,7 @@ export function Ordens() {
                 </div>
                 
                 <div className="space-y-2 mb-4 text-sm">
-                  <p><span className="font-medium text-gray-700 dark:text-gray-300">Instrumento:</span> <span className="text-gray-600 dark:text-gray-400">{ordem.instrumento?.nome} - {ordem.marca?.nome}</span></p>
+                  <p><span className="font-medium text-gray-700 dark:text-gray-300">Equipamento:</span> <span className="text-gray-600 dark:text-gray-400">{ordem.instrumento?.nome} - {ordem.marca?.nome}</span></p>
                   <p><span className="font-medium text-gray-700 dark:text-gray-300">Entrada:</span> <span className="text-gray-600 dark:text-gray-400">{formatDate(ordem.data_entrada)}</span></p>
                   <p><span className="font-medium text-gray-700 dark:text-gray-300">Previsão:</span> <span className="text-gray-600 dark:text-gray-400">{formatDate(ordem.data_previsao)}</span></p>
                   <p><span className="font-medium text-gray-700 dark:text-gray-300">Valor:</span> <span className="text-gray-600 dark:text-gray-400">{formatCurrency(ordem.valor_servicos - (ordem.desconto || 0))}</span></p>

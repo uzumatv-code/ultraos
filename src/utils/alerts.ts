@@ -107,9 +107,9 @@ export const alerts = {
         
         <div class="${dark ? 'bg-blue-900/20 border border-blue-700/30' : 'bg-blue-50'} p-4 rounded-xl backdrop-blur-sm">
           <p class="font-semibold ${dark ? 'text-blue-300' : 'text-blue-900'} mb-3 flex items-center gap-2">
-            <span class="text-xl">🎸</span> Instrumento
+            <span class="text-xl">🎸</span> Equipamento
           </p>
-          <p class="${dark ? 'text-gray-300' : 'text-gray-700'} mb-2"><strong class="${dark ? 'text-gray-200' : 'text-gray-900'}">Instrumento:</strong> ${ordem.instrumento?.nome || 'N/A'}</p>
+          <p class="${dark ? 'text-gray-300' : 'text-gray-700'} mb-2"><strong class="${dark ? 'text-gray-200' : 'text-gray-900'}">Equipamento:</strong> ${ordem.instrumento?.nome || 'N/A'}</p>
           <p class="${dark ? 'text-gray-300' : 'text-gray-700'} mb-2"><strong class="${dark ? 'text-gray-200' : 'text-gray-900'}">Marca:</strong> ${ordem.marca?.nome || 'N/A'}</p>
           <p class="${dark ? 'text-gray-300' : 'text-gray-700'} mb-2"><strong class="${dark ? 'text-gray-200' : 'text-gray-900'}">Modelo:</strong> ${ordem.modelo || 'N/A'}</p>
           <p class="${dark ? 'text-gray-300' : 'text-gray-700'}"><strong class="${dark ? 'text-gray-200' : 'text-gray-900'}">Acessórios:</strong> ${ordem.acessorios || 'N/A'}</p>

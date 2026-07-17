@@ -184,7 +184,7 @@ function App() {
           }
         />
         <Route
-          path="/instrumentos"
+          path="/equipamentos"
           element={
             <ProtectedRoute>
               <Layout>
@@ -193,6 +193,7 @@ function App() {
             </ProtectedRoute>
           }
         />
+        <Route path="/instrumentos" element={<Navigate to="/equipamentos" replace />} />
         <Route
           path="/servicos"
           element={

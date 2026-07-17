@@ -115,9 +115,9 @@ export function PrintOrdemModal({ isOpen, onClose, ordem }: PrintOrdemModalProps
             </div>
 
             <div class="section">
-              <div class="section-title">INFORMAÇÕES DO INSTRUMENTO</div>
+              <div class="section-title">INFORMAÇÕES DO EQUIPAMENTO</div>
               <div class="row">
-                <span class="label">Instrumento:</span>
+                <span class="label">Equipamento:</span>
                 <span class="value">${ordem.instrumento?.nome || ''}</span>
               </div>
               <div class="row">

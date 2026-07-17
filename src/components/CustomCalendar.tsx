@@ -532,7 +532,7 @@ export function CustomCalendar({ orders, onEventClick, loading = false, onUpdate
                 <div className="flex items-start gap-4 p-4 rounded-xl bg-gray-50 dark:bg-gray-800/50">
                   <Wrench className="w-6 h-6 text-primary-600 dark:text-primary-400 mt-1" />
                   <div className="flex-1">
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Instrumento</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Equipamento</p>
                     <p className="font-bold text-lg text-gray-800 dark:text-white">
                       {selectedOrder.instrumento?.nome} - {selectedOrder.marca?.nome}
                     </p>

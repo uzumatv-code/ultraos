@@ -42,7 +42,7 @@ type AgendaOrder = Pick<OrdemServico, 'id' | 'numero' | 'modelo' | 'data_previsa
 };
 
 const steps = [
-  { number: 1, title: 'Cliente e instrumento', description: 'Cliente, marca, modelo e acessórios' },
+  { number: 1, title: 'Cliente e equipamento', description: 'Cliente, marca, modelo e acessórios' },
   { number: 2, title: 'Diagnóstico e solução', description: 'Problemas encontrados e serviços' },
   { number: 3, title: 'Pagamento e entrega', description: 'Valores, previsão e envio' },
 ];
@@ -478,8 +478,8 @@ ${buildServicesText() || 'Nenhum serviço registrado.'}`;
             <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
               <div className="flex items-center justify-between gap-3 border-b border-gray-100 pb-4">
                 <div>
-                  <h2 className="text-lg font-semibold text-gray-950">Cliente e instrumento</h2>
-                  <p className="text-sm text-gray-500">Selecione ou cadastre o cliente e identifique o instrumento.</p>
+                  <h2 className="text-lg font-semibold text-gray-950">Cliente e equipamento</h2>
+                  <p className="text-sm text-gray-500">Selecione ou cadastre o cliente e identifique o equipamento.</p>
                 </div>
                 <UserRound className="h-5 w-5 text-violet-500" />
               </div>
@@ -505,8 +505,8 @@ ${buildServicesText() || 'Nenhum serviço registrado.'}`;
                   <Autocomplete options={clientes} value={clienteId} onChange={(value) => setClienteId(value as string)} onCreateNew={() => setShowClienteModal(true)} placeholder="Selecione o cliente" />
                   {clienteSelecionado && <p className="mt-2 text-xs text-gray-500">{clienteSelecionado.telefone || 'Sem telefone cadastrado'}</p>}
                 </Field>
-                <Field label="Instrumento *">
-                  <Autocomplete options={instrumentos} value={instrumentoId} onChange={(value) => setInstrumentoId(value as string)} onCreateNew={() => setShowInstrumentoModal(true)} placeholder="Selecione o instrumento" />
+                <Field label="Equipamento *">
+                  <Autocomplete options={instrumentos} value={instrumentoId} onChange={(value) => setInstrumentoId(value as string)} onCreateNew={() => setShowInstrumentoModal(true)} placeholder="Selecione o equipamento" />
                 </Field>
                 <Field label="Marca *">
                   <Autocomplete options={marcas} value={marcaId} onChange={(value) => setMarcaId(value as string)} onCreateNew={() => setShowMarcaModal(true)} placeholder="Selecione a marca" />
@@ -515,7 +515,7 @@ ${buildServicesText() || 'Nenhum serviço registrado.'}`;
                   <input value={modelo} onChange={(event) => setModelo(event.target.value)} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100" placeholder="Ex: Cavaquinho Luthier Ferreira" />
                 </Field>
               </div>
-              <Field label="Acessórios do instrumento">
+              <Field label="Acessórios do equipamento">
                 <textarea value={acessorios} onChange={(event) => setAcessorios(event.target.value)} rows={4} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100" placeholder="Capa, correia, cabo, cordas, case..." />
               </Field>
             </motion.div>
@@ -532,7 +532,7 @@ ${buildServicesText() || 'Nenhum serviço registrado.'}`;
               </div>
               <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
                 <MultiSelect
-                  label="Problemas do instrumento"
+                  label="Problemas do equipamento"
                   options={problemas}
                   selectedIds={problemasIds}
                   onChange={setProblemasIds}
