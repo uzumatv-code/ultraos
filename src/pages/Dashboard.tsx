@@ -101,6 +101,10 @@ export function Dashboard() {
         console.error('Erro ao buscar estatísticas:', error);
         toast.error('Erro ao carregar estatísticas');
       }
+    } finally {
+      // Operadores não carregam faturamento; não depender dessa consulta para
+      // encerrar o carregamento inicial do Dashboard.
+      setLoading(false);
     }
   }
 
