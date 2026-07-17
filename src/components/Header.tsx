@@ -42,7 +42,7 @@ const supportItems: Array<{ path: string; icon: typeof Home; label: string; perm
   { path: '/equipamentos', icon: Music2, label: 'Equipamentos' },
   { path: '/servicos', icon: Wrench, label: 'Serviços' },
   { path: '/problemas', icon: AlertTriangle, label: 'Problemas' },
-  { path: '/avaliacoes', icon: Star, label: 'Avaliações' },
+  { path: '/avaliacoes', icon: Star, label: 'Avaliações', permission: 'settings.manage' },
   { path: '/configuracoes', icon: Settings, label: 'Configurações', permission: 'settings.manage' },
 ];
 

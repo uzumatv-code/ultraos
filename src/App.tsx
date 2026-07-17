@@ -308,9 +308,9 @@ function App() {
           path="/avaliacoes"
           element={
             <ProtectedRoute>
-              <Layout>
-                <AvaliacoesLembretes />
-              </Layout>
+              <RequirePermission permission="settings.manage">
+                <Layout><AvaliacoesLembretes /></Layout>
+              </RequirePermission>
             </ProtectedRoute>
           }
         />
