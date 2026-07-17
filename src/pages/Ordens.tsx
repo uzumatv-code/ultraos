@@ -12,6 +12,7 @@ import { EvaluationReminderService } from '../utils/evaluation-reminder-service'
 import { NFSeService } from '../utils/nfse-service';
 import { PrintOrdemModal } from '../components/PrintOrdemModal';
 import type { OrdemServico } from '../types/database';
+import { useAuth } from '../contexts/AuthContext';
 import {
   useReactTable,
   getCoreRowModel,
@@ -21,6 +22,7 @@ import {
 } from '@tanstack/react-table';
 
 export function Ordens() {
+  const { can } = useAuth();
   const navigate = useNavigate();
   const [ordens, setOrdens] = useState<OrdemServico[]>([]);
   const [loading, setLoading] = useState(true);
@@ -171,7 +173,7 @@ export function Ordens() {
             <option value="pendente">Pendente</option>
             <option value="em_andamento">Em Andamento</option>
             <option value="concluido">Concluído</option>
-            <option value="cancelado">Cancelado</option>
+            {can('ordens.cancel') && <option value="cancelado">Cancelado</option>}
           </select>
         ),
         size: 90,
@@ -202,13 +204,13 @@ export function Ordens() {
             <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => navigate(`/ordens/editar/${info.row.original.id}`)} className="p-1 text-purple-600 dark:text-purple-400 hover:text-purple-900 dark:hover:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded-lg transition-all duration-200" title="Editar ordem"><Edit className="w-4 h-4" /></motion.button>
             <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => { setOrdemParaImprimir(info.row.original); setShowPrintModal(true); }} className="p-1 text-purple-600 dark:text-purple-400 hover:text-purple-900 dark:hover:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded-lg transition-all duration-200" title="Imprimir ordem"><Printer className="w-4 h-4" /></motion.button>
             <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => handleWhatsAppShare(info.row.original)} className="p-1 text-green-600 dark:text-green-400 hover:text-green-900 dark:hover:text-green-300 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-lg transition-all duration-200" title="Enviar mensagem WhatsApp"><Send className="w-4 h-4" /></motion.button>
-            <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => handleRegistrarPagamento(info.row.original)} className="p-1 text-emerald-600 dark:text-emerald-400 hover:text-emerald-900 dark:hover:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 rounded-lg transition-all duration-200" title="Registrar pagamento"><DollarSign className="w-4 h-4" /></motion.button>
-            <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => handleExcluir(info.row.original)} className="p-1 text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-all duration-200" title="Excluir ordem"><Trash2 className="w-4 h-4" /></motion.button>
+            {can('financeiro.write') && <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => handleRegistrarPagamento(info.row.original)} className="p-1 text-emerald-600 dark:text-emerald-400 hover:text-emerald-900 dark:hover:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 rounded-lg transition-all duration-200" title="Registrar pagamento"><DollarSign className="w-4 h-4" /></motion.button>}
+            {can('ordens.delete') && <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => handleExcluir(info.row.original)} className="p-1 text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-all duration-200" title="Excluir ordem"><Trash2 className="w-4 h-4" /></motion.button>}
           </div>
         ),
         size: 90,
       },
-    ], [navigate, setOrdemParaImprimir, setShowPrintModal, handleWhatsAppShare, handleExcluir, handleChangeStatus]);
+    ].filter((column) => can('financeiro.read') || column.id !== 'financeiro'), [can, navigate, setOrdemParaImprimir, setShowPrintModal, handleWhatsAppShare, handleExcluir, handleChangeStatus]);
 
   async function handleExcluir(ordem: OrdemServico) {
     const result = await alerts.confirm({
@@ -262,7 +264,7 @@ export function Ordens() {
 
       if (error) throw error;
 
-      if (newStatus === 'concluido') {
+      if (newStatus === 'concluido' && can('financeiro.write')) {
         try {
           await registrarPagamentoOS(ordem, undefined, 'Receita lancada automaticamente ao concluir a OS');
         } catch (paymentError: any) {
@@ -512,7 +514,7 @@ export function Ordens() {
                     <option value="pendente">Pendente</option>
                     <option value="em_andamento">Em Andamento</option>
                     <option value="concluido">Concluído</option>
-                    <option value="cancelado">Cancelado</option>
+                    {can('ordens.cancel') && <option value="cancelado">Cancelado</option>}
                   </select>
                 </div>
                 
@@ -520,10 +522,10 @@ export function Ordens() {
                   <p><span className="font-medium text-gray-700 dark:text-gray-300">Equipamento:</span> <span className="text-gray-600 dark:text-gray-400">{ordem.instrumento?.nome} - {ordem.marca?.nome}</span></p>
                   <p><span className="font-medium text-gray-700 dark:text-gray-300">Entrada:</span> <span className="text-gray-600 dark:text-gray-400">{formatDate(ordem.data_entrada)}</span></p>
                   <p><span className="font-medium text-gray-700 dark:text-gray-300">Previsão:</span> <span className="text-gray-600 dark:text-gray-400">{formatDate(ordem.data_previsao)}</span></p>
-                  <p><span className="font-medium text-gray-700 dark:text-gray-300">Valor:</span> <span className="text-gray-600 dark:text-gray-400">{formatCurrency(ordem.valor_servicos - (ordem.desconto || 0))}</span></p>
+                  {can('financeiro.read') && <p><span className="font-medium text-gray-700 dark:text-gray-300">Valor:</span> <span className="text-gray-600 dark:text-gray-400">{formatCurrency(ordem.valor_servicos - (ordem.desconto || 0))}</span></p>}
                 </div>
                 
-                <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 pt-3 border-t border-gray-100 dark:border-gray-800">
+                <div className="grid grid-cols-3 gap-2 border-t border-gray-100 pt-3 sm:grid-cols-6 dark:border-gray-800">
                   <motion.button
                     whileHover={{ scale: 1.05 }}
                     whileTap={{ scale: 0.95 }}
@@ -545,7 +547,7 @@ export function Ordens() {
                   <motion.button
                     whileHover={{ scale: 1.05 }}
                     whileTap={{ scale: 0.95 }}
-                    onClick={() => handleWhatsAppShare(ordem)} 
+                    onClick={() => handleWhatsAppShare(ordem)}
                     className="flex-1 p-2 text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-lg transition-all"
                     title="WhatsApp"
                   >
@@ -571,7 +573,7 @@ export function Ordens() {
                   >
                     <Star className="w-5 h-5 mx-auto" />
                   </motion.button>
-                  <motion.button
+                  {can('nfse.manage') && <motion.button
                     whileHover={{ scale: 1.05 }}
                     whileTap={{ scale: 0.95 }}
                     onClick={() => ordem.status === 'concluido' && handleGerarNFSe(ordem)} 
@@ -584,8 +586,8 @@ export function Ordens() {
                     disabled={ordem.status !== 'concluido'}
                   >
                     <FileText className="w-5 h-5 mx-auto" />
-                  </motion.button>
-                  <motion.button
+                  </motion.button>}
+                  {can('ordens.delete') && <motion.button
                     whileHover={{ scale: 1.05 }}
                     whileTap={{ scale: 0.95 }}
                     onClick={() => handleExcluir(ordem)} 
@@ -593,7 +595,7 @@ export function Ordens() {
                     title="Excluir"
                   >
                     <Trash2 className="w-5 h-5 mx-auto" />
-                  </motion.button>
+                  </motion.button>}
                 </div>
               </motion.div>
             ))

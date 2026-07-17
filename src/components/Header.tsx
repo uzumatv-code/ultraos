@@ -25,24 +25,25 @@ import { supabase } from '../lib/supabase';
 import { toast } from './ToastCustom';
 import { addDaysToDateOnly, todayLocalDate } from '../utils/dates';
 import type { ContaPagar, OrdemServico } from '../types/database';
+import { Permission, useAuth } from '../contexts/AuthContext';
 
-const mainItems = [
+const mainItems: Array<{ path: string; icon: typeof Home; label: string; permission?: Permission }> = [
   { path: '/dashboard', icon: Home, label: 'Dashboard' },
   { path: '/clientes', icon: Users, label: 'Clientes' },
   { path: '/ordens', icon: Tool, label: 'Ordens de Serviço' },
-  { path: '/financeiro', icon: DollarSign, label: 'Financeiro' },
-  { path: '/notas-fiscais', icon: FileText, label: 'Notas Fiscais' },
-  { path: '/financeiro/ia', icon: DollarSign, label: 'IA Financeira' },
-  { path: '/contas', icon: Receipt, label: 'Contas a Pagar' },
+  { path: '/financeiro', icon: DollarSign, label: 'Financeiro', permission: 'financeiro.read' },
+  { path: '/notas-fiscais', icon: FileText, label: 'Notas Fiscais', permission: 'nfse.manage' },
+  { path: '/financeiro/ia', icon: DollarSign, label: 'IA Financeira', permission: 'financeiro.read' },
+  { path: '/contas', icon: Receipt, label: 'Contas a Pagar', permission: 'financeiro.read' },
 ];
 
-const supportItems = [
+const supportItems: Array<{ path: string; icon: typeof Home; label: string; permission?: Permission }> = [
   { path: '/marcas', icon: Bookmark, label: 'Marcas' },
   { path: '/equipamentos', icon: Music2, label: 'Equipamentos' },
   { path: '/servicos', icon: Wrench, label: 'Serviços' },
   { path: '/problemas', icon: AlertTriangle, label: 'Problemas' },
   { path: '/avaliacoes', icon: Star, label: 'Avaliações' },
-  { path: '/configuracoes', icon: Settings, label: 'Configurações' },
+  { path: '/configuracoes', icon: Settings, label: 'Configurações', permission: 'settings.manage' },
 ];
 
 function isItemActive(pathname: string, path: string) {
@@ -50,6 +51,7 @@ function isItemActive(pathname: string, path: string) {
 }
 
 export function Header() {
+  const { can } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -71,7 +73,7 @@ export function Header() {
     const nome = user.user_metadata?.nome || user.email?.split('@')[0] || 'Usuário';
     const nivel = user.app_metadata?.nivel || 'usuario';
     setDisplayName(nome);
-    setDisplayRole(nivel === 'admin' ? 'Administrador' : 'Usuário');
+    setDisplayRole(nivel === 'admin' ? 'Administrador' : 'Operador');
     setAvatarUrl(user.user_metadata?.avatar_url || '');
   }, []);
 
@@ -122,6 +124,10 @@ export function Header() {
   }
 
   async function buscarContasHoje() {
+    if (!can('financeiro.read')) {
+      setContasHoje([]);
+      return;
+    }
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user?.id || !user?.aud) return;
@@ -175,6 +181,8 @@ export function Header() {
 
   const notificationCount = ordensHoje.length + contasHoje.length;
   const displayInitial = displayName.trim().charAt(0).toUpperCase() || 'U';
+  const visibleMainItems = mainItems.filter((item) => !item.permission || can(item.permission));
+  const visibleSupportItems = supportItems.filter((item) => !item.permission || can(item.permission));
   const sidebar = (
     <aside className="flex h-full flex-col bg-slate-950 text-white">
       <div className="flex items-center gap-3 px-5 py-5">
@@ -188,7 +196,7 @@ export function Header() {
       </div>
 
       <nav className="flex-1 space-y-1 overflow-y-auto px-3 pb-4">
-        {mainItems.map((item) => {
+        {visibleMainItems.map((item) => {
           const Icon = item.icon;
           const active = isItemActive(location.pathname, item.path);
           return (
@@ -218,7 +226,7 @@ export function Header() {
         <AnimatePresence initial={false}>
           {showSupport && (
             <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="space-y-1 overflow-hidden">
-              {supportItems.map((item) => {
+              {visibleSupportItems.map((item) => {
                 const Icon = item.icon;
                 const active = isItemActive(location.pathname, item.path);
                 return (

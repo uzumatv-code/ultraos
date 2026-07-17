@@ -9,8 +9,10 @@ import { NovoUsuarioModal } from '../components/NovoUsuarioModal';
 import { EditarPerfilModal } from '../components/EditarPerfilModal';
 import ConfiguracaoFiscalModal from '../components/ConfiguracaoFiscalModal';
 import { Theme, setTheme } from '../lib/theme';
+import { useAuth } from '../contexts/AuthContext';
 
 export function Perfil() {
+  const { can } = useAuth();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [showAlterarSenhaModal, setShowAlterarSenhaModal] = useState(false);
@@ -126,21 +128,21 @@ export function Perfil() {
                   <span>Alterar Senha</span>
                 </button>
 
-                <button
+                {can('users.manage') && <button
                   onClick={() => setShowNovoUsuarioModal(true)}
                   className="w-full px-4 py-2 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors flex items-center justify-center space-x-2"
                 >
                   <UserPlus className="w-4 h-4" />
-                  <span>Novo Usuário</span>
-                </button>
+                  <span>Gerenciar Equipe</span>
+                </button>}
 
-                <button
+                {can('nfse.manage') && <button
                   onClick={() => setShowConfigFiscalModal(true)}
                   className="w-full px-4 py-2 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-lg hover:from-blue-700 hover:to-purple-700 transition-colors flex items-center justify-center space-x-2"
                 >
                   <Building2 className="w-4 h-4" />
                   <span>Dados Fiscais (NFS-e)</span>
-                </button>
+                </button>}
               </div>
             </div>
           </motion.div>

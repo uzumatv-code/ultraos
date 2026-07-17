@@ -82,13 +82,19 @@ export class WhatsAppService {
   }
 
   static async sendMessage(phoneNumber: string, message: string): Promise<boolean> {
-    const config = await this.loadConfig();
-    
-    if (config.method === 'webhook' && config.webhook_url) {
-      return this.sendViaEvolutionAPI(phoneNumber, message, config);
-    } else {
-      return this.sendViaDirect(phoneNumber, message);
-    }
+    const session = JSON.parse(localStorage.getItem('mysql-auth-session') || 'null');
+    const response = await fetch('/api/whatsapp/send', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${session?.access_token || ''}`,
+      },
+      body: JSON.stringify({ phone: phoneNumber, message }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error?.message || 'Falha ao enviar mensagem');
+    if (result.data?.direct_url) window.open(result.data.direct_url, '_blank', 'noopener,noreferrer');
+    return true;
   }
 
   static async sendOrderMessage(ordem: any): Promise<boolean> {

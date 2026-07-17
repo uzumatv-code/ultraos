@@ -17,7 +17,8 @@ CREATE TABLE IF NOT EXISTS `usuarios` (
   `senha_hash` VARCHAR(255) NOT NULL,
   `nome` VARCHAR(255) NULL,
   `avatar_url` VARCHAR(500) NULL,
-  `nivel` VARCHAR(50) DEFAULT 'usuario',
+  `conta_id` VARCHAR(36) NULL,
+  `nivel` VARCHAR(50) DEFAULT 'admin',
   `plano_atual` VARCHAR(50) DEFAULT 'trial',
   `dias_restantes` INT DEFAULT 14,
   `status_assinatura` VARCHAR(50) DEFAULT 'ativo',
@@ -26,7 +27,25 @@ CREATE TABLE IF NOT EXISTS `usuarios` (
   `ultimo_login` VARCHAR(50) NULL,
   `created_at` VARCHAR(50) DEFAULT NULL,
   `updated_at` VARCHAR(50) DEFAULT NULL,
-  INDEX `idx_usuarios_email` (`email`)
+  INDEX `idx_usuarios_email` (`email`),
+  INDEX `idx_usuarios_conta` (`conta_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `auditoria` (
+  `id` VARCHAR(36) NOT NULL PRIMARY KEY,
+  `user_id` VARCHAR(36) NOT NULL,
+  `actor_user_id` VARCHAR(36) NOT NULL,
+  `actor_email` VARCHAR(255) NULL,
+  `actor_role` VARCHAR(50) NOT NULL,
+  `acao` VARCHAR(80) NOT NULL,
+  `recurso` VARCHAR(80) NOT NULL,
+  `recurso_id` VARCHAR(36) NULL,
+  `detalhes` JSON NULL,
+  `ip_address` VARCHAR(45) NULL,
+  `created_at` VARCHAR(50) NOT NULL,
+  INDEX `idx_auditoria_conta` (`user_id`),
+  INDEX `idx_auditoria_actor` (`actor_user_id`),
+  INDEX `idx_auditoria_created` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ===========================================

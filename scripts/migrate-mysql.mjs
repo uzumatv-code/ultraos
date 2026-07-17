@@ -16,7 +16,8 @@ const createTables = [
     senha_hash varchar(255) NOT NULL,
     nome varchar(255) DEFAULT NULL,
     avatar_url varchar(500) DEFAULT NULL,
-    nivel varchar(50) DEFAULT 'usuario',
+    conta_id varchar(36) DEFAULT NULL,
+    nivel varchar(50) DEFAULT 'admin',
     plano_atual varchar(50) DEFAULT 'trial',
     dias_restantes int DEFAULT 14,
     status_assinatura varchar(50) DEFAULT 'ativo',
@@ -26,7 +27,25 @@ const createTables = [
     created_at varchar(50) DEFAULT NULL,
     updated_at varchar(50) DEFAULT NULL,
     UNIQUE KEY unique_usuarios_email (email),
-    INDEX idx_usuarios_email (email)
+    INDEX idx_usuarios_email (email),
+    INDEX idx_usuarios_conta (conta_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  `CREATE TABLE IF NOT EXISTS auditoria (
+    id varchar(36) NOT NULL PRIMARY KEY,
+    user_id varchar(36) NOT NULL,
+    actor_user_id varchar(36) NOT NULL,
+    actor_email varchar(255) DEFAULT NULL,
+    actor_role varchar(50) NOT NULL,
+    acao varchar(80) NOT NULL,
+    recurso varchar(80) NOT NULL,
+    recurso_id varchar(36) DEFAULT NULL,
+    detalhes json DEFAULT NULL,
+    ip_address varchar(45) DEFAULT NULL,
+    created_at varchar(50) NOT NULL,
+    INDEX idx_auditoria_conta (user_id),
+    INDEX idx_auditoria_actor (actor_user_id),
+    INDEX idx_auditoria_created (created_at)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 
   `CREATE TABLE IF NOT EXISTS clientes (
@@ -513,7 +532,8 @@ const requiredColumns = {
   usuarios: {
     nome: 'varchar(255) DEFAULT NULL',
     avatar_url: 'varchar(500) DEFAULT NULL',
-    nivel: "varchar(50) DEFAULT 'usuario'",
+    conta_id: 'varchar(36) DEFAULT NULL',
+    nivel: "varchar(50) DEFAULT 'admin'",
     plano_atual: "varchar(50) DEFAULT 'trial'",
     dias_restantes: 'int DEFAULT 14',
     status_assinatura: "varchar(50) DEFAULT 'ativo'",
@@ -646,6 +666,7 @@ const modifyColumns = [
 
 const indexes = [
   ['usuarios', 'unique_usuarios_email', 'ALTER TABLE usuarios ADD UNIQUE KEY unique_usuarios_email (email)'],
+  ['usuarios', 'idx_usuarios_conta', 'ALTER TABLE usuarios ADD INDEX idx_usuarios_conta (conta_id)'],
   ['ordens_servico', 'unique_ordem_numero_user', 'ALTER TABLE ordens_servico ADD UNIQUE KEY unique_ordem_numero_user (user_id, numero)'],
   ['contas_receber', 'unique_conta_receber_ordem_user', 'ALTER TABLE contas_receber ADD UNIQUE KEY unique_conta_receber_ordem_user (user_id, ordem_servico_id)'],
   ['avaliacoes_lembretes', 'unique_avaliacao_ordem_user', 'ALTER TABLE avaliacoes_lembretes ADD UNIQUE KEY unique_avaliacao_ordem_user (user_id, ordem_servico_id)'],
@@ -725,7 +746,8 @@ async function normalizeExistingRows(conn) {
   await safeStep('preencher datas/flags padrao', () => conn.query(`
     UPDATE usuarios
        SET ativo = COALESCE(ativo, 1),
-           nivel = COALESCE(NULLIF(nivel, ''), 'usuario'),
+           nivel = CASE WHEN conta_id IS NULL THEN 'admin' ELSE COALESCE(NULLIF(nivel, ''), 'operador') END,
+           conta_id = COALESCE(conta_id, id),
            plano_atual = COALESCE(NULLIF(plano_atual, ''), 'trial'),
            dias_restantes = COALESCE(dias_restantes, 14),
            status_assinatura = COALESCE(NULLIF(status_assinatura, ''), 'ativo'),

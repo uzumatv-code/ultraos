@@ -10,8 +10,10 @@ import { formatCurrency } from '../utils/formatters';
 import { toDateOnly } from '../utils/dates';
 import { CustomCalendar } from '../components/CustomCalendar';
 import { ModernCalendar } from '../components/ModernCalendar';
+import { useAuth } from '../contexts/AuthContext';
 
 export function Dashboard() {
+  const { can } = useAuth();
   const navigate = useNavigate();
   const [showCalendar, setShowCalendar] = React.useState(true);
   const [calendarType, setCalendarType] = React.useState<'custom' | 'modern'>('custom');
@@ -27,7 +29,7 @@ export function Dashboard() {
 
   useEffect(() => {
     fetchStats();
-    fetchRevenue();
+    if (can('financeiro.read')) fetchRevenue();
     fetchOrdensAgendadas();
   }, []);
 
@@ -163,7 +165,7 @@ export function Dashboard() {
           </p>
         </header>
         {/* Cards de Estatísticas */}
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 lg:gap-6 mb-6 sm:mb-8">
+        <div className={`mb-6 grid grid-cols-1 gap-4 sm:mb-8 sm:grid-cols-2 lg:gap-6 ${can('financeiro.read') ? 'lg:grid-cols-4' : 'lg:grid-cols-3'}`}>
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -261,7 +263,7 @@ export function Dashboard() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.4 }}
-            className="glass dark:glass-dark rounded-xl sm:rounded-2xl p-4 sm:p-6 shadow-glass card-hover group cursor-pointer"
+            className={`${can('financeiro.read') ? '' : 'hidden'} glass dark:glass-dark card-hover group cursor-pointer rounded-xl p-4 sm:rounded-2xl sm:p-6`}
             onClick={() => setShowRevenue(!showRevenue)}
           >
             <div className="flex items-center justify-between gap-3">

@@ -39,4 +39,4 @@ COPY scripts/ ./scripts/
 
 EXPOSE 3000
 
-CMD ["node", "server/index.mjs"]
+CMD ["sh", "-c", "npm run migrate:mysql && node server/index.mjs"]

@@ -1,16 +1,18 @@
 import { Link, useLocation } from 'react-router-dom';
 import { Home, Users, PenTool as Tool, DollarSign, FileText } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { useAuth } from '../contexts/AuthContext';
 
 export function BottomNavigation() {
   const location = useLocation();
+  const { can } = useAuth();
 
   const navItems = [
     { path: '/dashboard', icon: Home, label: 'Início' },
     { path: '/clientes', icon: Users, label: 'Clientes' },
     { path: '/ordens', icon: Tool, label: 'Ordens' },
-    { path: '/notas-fiscais', icon: FileText, label: 'NFS-e' },
-    { path: '/financeiro', icon: DollarSign, label: 'Finanças' },
+    ...(can('nfse.manage') ? [{ path: '/notas-fiscais', icon: FileText, label: 'NFS-e' }] : []),
+    ...(can('financeiro.read') ? [{ path: '/financeiro', icon: DollarSign, label: 'Finanças' }] : []),
   ];
 
   return (

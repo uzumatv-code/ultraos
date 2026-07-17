@@ -5,8 +5,10 @@ import { supabase } from '../lib/supabase';
 import { toast } from '../components/ToastCustom';
 import { ProblemaModal } from '../components/ProblemaModal';
 import type { Problema } from '../types/database';
+import { useAuth } from '../contexts/AuthContext';
 
 export function Problemas() {
+  const { can } = useAuth();
   const [problemas, setProblemas] = useState<Problema[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalAberto, setModalAberto] = useState(false);
@@ -204,6 +206,7 @@ export function Problemas() {
                             <motion.button
                               whileHover={{ scale: 1.1 }}
                               whileTap={{ scale: 0.9 }}
+                              hidden={!can('cadastros.delete')}
                               onClick={() => handleExcluir(problema)}
                               className="p-2 text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-all duration-200"
                             >
@@ -281,6 +284,7 @@ export function Problemas() {
                     <motion.button
                       whileHover={{ scale: 1.05 }}
                       whileTap={{ scale: 0.95 }}
+                      hidden={!can('cadastros.delete')}
                       onClick={() => handleExcluir(problema)}
                       className="flex-1 px-4 py-2 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg transition-colors flex items-center justify-center space-x-2"
                     >

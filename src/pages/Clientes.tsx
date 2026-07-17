@@ -5,8 +5,10 @@ import { supabase } from '../lib/supabase';
 import { toast } from '../components/ToastCustom';
 import { ClienteModal } from '../components/ClienteModal';
 import type { Cliente } from '../types/database';
+import { useAuth } from '../contexts/AuthContext';
 
 export function Clientes() {
+  const { can } = useAuth();
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalAberto, setModalAberto] = useState(false);
@@ -236,14 +238,14 @@ export function Clientes() {
                           >
                             <Pencil className="w-5 h-5" />
                           </motion.button>
-                          <motion.button
+                          {can('clientes.delete') && <motion.button
                             whileHover={{ scale: 1.1 }}
                             whileTap={{ scale: 0.9 }}
                             onClick={() => handleExcluir(cliente)}
                             className="p-2 text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-all duration-200"
                           >
                             <Trash2 className="w-5 h-5" />
-                          </motion.button>
+                          </motion.button>}
                         </div>
                       </td>
                     </motion.tr>
@@ -302,7 +304,7 @@ export function Clientes() {
                     <Pencil className="w-4 h-4" />
                     <span>Editar</span>
                   </motion.button>
-                  <motion.button
+                  {can('clientes.delete') && <motion.button
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
                     onClick={() => handleExcluir(cliente)}
@@ -310,7 +312,7 @@ export function Clientes() {
                   >
                     <Trash2 className="w-4 h-4" />
                     <span>Excluir</span>
-                  </motion.button>
+                  </motion.button>}
                 </div>
               </motion.div>
             ))

@@ -5,8 +5,10 @@ import { supabase } from '../lib/supabase';
 import { toast } from '../components/ToastCustom';
 import { InstrumentoModal } from '../components/InstrumentoModal';
 import type { Instrumento } from '../types/database';
+import { useAuth } from '../contexts/AuthContext';
 
 export function Instrumentos() {
+  const { can } = useAuth();
   const [instrumentos, setInstrumentos] = useState<Instrumento[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalAberto, setModalAberto] = useState(false);
@@ -185,6 +187,7 @@ export function Instrumentos() {
                             <motion.button
                               whileHover={{ scale: 1.1 }}
                               whileTap={{ scale: 0.9 }}
+                              hidden={!can('cadastros.delete')}
                               onClick={() => handleExcluir(instrumento)}
                               className="p-2 text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-all duration-200"
                             >

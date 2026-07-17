@@ -99,7 +99,37 @@ const allowedTables = new Set([
   'nfse_logs',
   'agenda_logs',
   'avaliacoes_lembretes',
+  'auditoria',
 ]);
+
+const OPERATOR_READ_TABLES = new Set([
+  'clientes', 'marcas', 'instrumentos', 'equipamentos', 'servicos', 'problemas',
+  'ordens_servico', 'configuracoes_empresa',
+  'system_settings', 'message_templates', 'templates_mensagem', 'agenda_logs',
+  'avaliacoes_lembretes',
+]);
+const OPERATOR_INSERT_TABLES = new Set([
+  'clientes', 'marcas', 'instrumentos', 'equipamentos', 'servicos', 'problemas',
+  'ordens_servico', 'agenda_logs', 'avaliacoes_lembretes',
+]);
+const OPERATOR_UPDATE_TABLES = new Set([
+  'clientes', 'marcas', 'instrumentos', 'equipamentos', 'servicos', 'problemas',
+  'ordens_servico', 'avaliacoes_lembretes',
+]);
+const OPERATOR_UPSERT_TABLES = new Set(['avaliacoes_lembretes']);
+const OPERATOR_ORDER_BLOCKED_COLUMNS = new Set([
+  'valor_pago', 'status_financeiro', 'data_ultimo_pagamento', 'observacoes_financeiras',
+]);
+const OPERATOR_ORDER_UPDATE_BLOCKED_COLUMNS = new Set([
+  ...OPERATOR_ORDER_BLOCKED_COLUMNS,
+]);
+const OPERATOR_STATUS_TRANSITIONS = {
+  pendente: new Set(['pendente', 'em_andamento', 'concluido']),
+  em_andamento: new Set(['em_andamento', 'concluido']),
+  atraso: new Set(['atraso', 'em_andamento', 'concluido']),
+  concluido: new Set(['concluido']),
+  cancelado: new Set(['cancelado']),
+};
 
 const relationMap = {
   ordens_servico: {
@@ -146,6 +176,7 @@ app.use(cors({
   credentials: true,
 }));
 app.use(express.json({ limit: '10mb' }));
+app.use('/uploads/certificados', (_req, res) => res.status(404).end());
 app.use('/uploads', express.static(uploadsDir));
 
 app.get('/api/health', (_req, res) => {
@@ -227,6 +258,8 @@ function signUser(user) {
     aud: 'authenticated',
     plano_atual: user.plano_atual || 'trial',
     status_assinatura: user.status_assinatura || 'ativo',
+    nivel: normalizedRole(user),
+    conta_id: user.conta_id || user.id,
   };
   return jwt.sign(payload, JWT_SECRET, { expiresIn: TOKEN_TTL });
 }
@@ -244,9 +277,47 @@ function publicUser(user) {
     app_metadata: {
       plano_atual: user.plano_atual || 'trial',
       status_assinatura: user.status_assinatura || 'ativo',
-      nivel: user.nivel || 'usuario',
+      nivel: normalizedRole(user),
+      conta_id: user.conta_id || user.id,
     },
   };
+}
+
+function normalizedRole(user) {
+  if (!user) return 'operador';
+  if (!user.conta_id || user.conta_id === user.id) return 'admin';
+  return user.nivel === 'admin' ? 'admin' : 'operador';
+}
+
+function canQuery(role, table, action) {
+  if (table === 'auditoria') return role === 'admin' && action === 'select';
+  if (role === 'admin') return true;
+  if (action === 'select') return OPERATOR_READ_TABLES.has(table);
+  if (action === 'insert') return OPERATOR_INSERT_TABLES.has(table);
+  if (action === 'update') return OPERATOR_UPDATE_TABLES.has(table);
+  if (action === 'upsert') return OPERATOR_UPSERT_TABLES.has(table);
+  return false;
+}
+
+function requireAdmin(req, res, next) {
+  if (req.auth?.role !== 'admin') {
+    return res.status(403).json({ error: { message: 'Esta ação exige acesso de administrador' } });
+  }
+  next();
+}
+
+async function writeAudit(req, { action, resource, resourceId = null, details = null }) {
+  try {
+    await pool.query(
+      `INSERT INTO auditoria
+       (id, user_id, actor_user_id, actor_email, actor_role, acao, recurso, recurso_id, detalhes, ip_address, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [uuid(), req.auth.accountId, req.auth.userId, req.auth.email, req.auth.role, action, resource,
+        resourceId, details ? JSON.stringify(details) : null, req.ip || null, now()],
+    );
+  } catch (error) {
+    console.error('Falha ao registrar auditoria:', error.message);
+  }
 }
 
 async function getColumns(table) {
@@ -294,9 +365,9 @@ async function filterDataToColumns(table, data) {
   return normalized;
 }
 
-async function normalizeRows(table, rows, select) {
+async function normalizeRows(table, rows, select, accountId) {
   const out = rows.map((row) => normalizeRow(table, row));
-  await attachRelations(table, out, select || '');
+  await attachRelations(table, out, select || '', accountId);
   return out;
 }
 
@@ -321,7 +392,7 @@ function normalizeRow(table, row) {
   return copy;
 }
 
-async function attachRelations(table, rows, select) {
+async function attachRelations(table, rows, select, accountId) {
   const relations = relationMap[table];
   if (!relations || !rows.length) return;
 
@@ -331,25 +402,42 @@ async function attachRelations(table, rows, select) {
     if (!ids.length) continue;
 
     const placeholders = ids.map(() => '?').join(',');
+    const targetCols = await getColumns(targetTable);
+    const tenantClause = accountId && targetCols.has('user_id') ? ' AND `user_id` = ?' : '';
     const [relatedRows] = await pool.query(
-      `SELECT * FROM \`${targetTable}\` WHERE id IN (${placeholders})`,
-      ids,
+      `SELECT * FROM \`${targetTable}\` WHERE id IN (${placeholders})${tenantClause}`,
+      tenantClause ? [...ids, accountId] : ids,
     );
     const relatedById = new Map(relatedRows.map((row) => [row.id, normalizeRow(targetTable, row)]));
     for (const row of rows) row[alias] = relatedById.get(row[fk]) || null;
   }
 }
 
-function requireAuth(req, res, next) {
+async function requireAuth(req, res, next) {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
   if (!token) return res.status(401).json({ error: { message: 'Sessao invalida' } });
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    req.user = { id: decoded.sub, email: decoded.email, aud: 'authenticated' };
+    const user = await findUserById(decoded.sub);
+    if (!user || user.ativo === 0 || user.status_assinatura === 'bloqueado') {
+      return res.status(401).json({ error: { message: 'Usuário inativo ou sessão inválida' } });
+    }
+    const role = normalizedRole(user);
+    const accountId = user.conta_id || user.id;
+    if (accountId !== user.id) {
+      const accountOwner = await findUserById(accountId);
+      if (!accountOwner || accountOwner.ativo === 0 || accountOwner.status_assinatura === 'bloqueado') {
+        return res.status(401).json({ error: { message: 'A conta principal está inativa' } });
+      }
+    }
+    req.auth = { userId: user.id, accountId, role, email: user.email };
+    // Compatibilidade: o restante do backend usa req.user.id como escopo dos dados.
+    req.user = { id: accountId, actorId: user.id, email: user.email, aud: 'authenticated', role };
     next();
-  } catch {
+  } catch (error) {
+    console.error('Falha de autenticação:', error.message);
     res.status(401).json({ error: { message: 'Sessao expirada' } });
   }
 }
@@ -404,9 +492,9 @@ app.post('/api/auth/signup', async (req, res) => {
     const createdAt = now();
     await pool.query(
       `INSERT INTO usuarios
-       (id, email, senha_hash, nivel, plano_atual, dias_restantes, status_assinatura, ativo, email_verificado, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'trial', 14, 'ativo', 1, 1, ?, ?)`,
-      [id, email, hash, 'usuario', createdAt, createdAt],
+       (id, email, senha_hash, conta_id, nivel, plano_atual, dias_restantes, status_assinatura, ativo, email_verificado, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'admin', 'trial', 14, 'ativo', 1, 1, ?, ?)`,
+      [id, email, hash, id, createdAt, createdAt],
     );
 
     const user = await findUserById(id);
@@ -418,7 +506,7 @@ app.post('/api/auth/signup', async (req, res) => {
 });
 
 app.get('/api/auth/session', requireAuth, async (req, res) => {
-  const user = await findUserById(req.user.id);
+  const user = await findUserById(req.auth.userId);
   if (!user) return res.status(401).json({ error: { message: 'Sessao invalida' } });
   res.json({ session: { access_token: req.headers.authorization.slice(7), token_type: 'bearer', user: publicUser(user) }, user: publicUser(user) });
 });
@@ -429,14 +517,106 @@ app.patch('/api/auth/user', requireAuth, async (req, res) => {
     if (req.body.password) updates.senha_hash = await bcrypt.hash(String(req.body.password), 12);
     if (req.body.data?.nome) updates.nome = req.body.data.nome;
     if (req.body.data?.avatar_url) updates.avatar_url = req.body.data.avatar_url;
-    if (!Object.keys(updates).length) return res.json({ user: publicUser(await findUserById(req.user.id)) });
+    if (!Object.keys(updates).length) return res.json({ user: publicUser(await findUserById(req.auth.userId)) });
 
     updates.updated_at = now();
     const sets = Object.keys(updates).map((key) => `\`${key}\` = ?`).join(', ');
-    await pool.query(`UPDATE usuarios SET ${sets} WHERE id = ?`, [...Object.values(updates), req.user.id]);
-    res.json({ user: publicUser(await findUserById(req.user.id)) });
+    await pool.query(`UPDATE usuarios SET ${sets} WHERE id = ?`, [...Object.values(updates), req.auth.userId]);
+    res.json({ user: publicUser(await findUserById(req.auth.userId)) });
   } catch (error) {
     res.status(500).json({ error: { message: error.message } });
+  }
+});
+
+app.get('/api/admin/usuarios', requireAuth, requireAdmin, async (req, res) => {
+  const [rows] = await pool.query(
+    `SELECT id, email, nome, nivel, ativo, ultimo_login, created_at
+       FROM usuarios WHERE conta_id = ? ORDER BY nome, email`,
+    [req.auth.accountId],
+  );
+  res.json({ data: rows.map((row) => ({ ...row, nivel: normalizedRole({ ...row, conta_id: req.auth.accountId }) })) });
+});
+
+app.post('/api/admin/usuarios', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const password = String(req.body.password || '');
+    const nome = String(req.body.nome || '').trim();
+    const nivel = req.body.nivel === 'admin' ? 'admin' : 'operador';
+    if (!email || password.length < 8) {
+      return res.status(400).json({ error: { message: 'Informe um e-mail e uma senha com pelo menos 8 caracteres' } });
+    }
+    if (await findUserByEmail(email)) {
+      return res.status(409).json({ error: { message: 'E-mail já cadastrado' } });
+    }
+    const id = uuid();
+    const createdAt = now();
+    const hash = await bcrypt.hash(password, 12);
+    await pool.query(
+      `INSERT INTO usuarios
+       (id, email, senha_hash, nome, conta_id, nivel, plano_atual, dias_restantes, status_assinatura, ativo, email_verificado, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'equipe', 0, 'ativo', 1, 1, ?, ?)`,
+      [id, email, hash, nome || null, req.auth.accountId, nivel, createdAt, createdAt],
+    );
+    await writeAudit(req, { action: 'usuario.criar', resource: 'usuarios', resourceId: id, details: { email, nivel } });
+    res.status(201).json({ data: { id, email, nome, nivel, ativo: 1, created_at: createdAt } });
+  } catch (error) {
+    res.status(500).json({ error: { message: error.message } });
+  }
+});
+
+app.patch('/api/admin/usuarios/:id', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const targetId = String(req.params.id || '');
+    const deactivating = req.body.ativo === false || req.body.ativo === 0;
+    const demoting = req.body.nivel !== undefined && req.body.nivel !== 'admin';
+    if (targetId === req.auth.userId && (deactivating || demoting)) {
+      return res.status(400).json({ error: { message: 'Você não pode remover o próprio acesso administrativo' } });
+    }
+    const [targets] = await pool.query('SELECT id, nivel, ativo FROM usuarios WHERE id = ? AND conta_id = ? LIMIT 1', [targetId, req.auth.accountId]);
+    if (!targets.length) return res.status(404).json({ error: { message: 'Usuário não encontrado' } });
+    if (targets[0].nivel === 'admin' && targets[0].ativo && (deactivating || demoting)) {
+      const [[adminCount]] = await pool.query(
+        "SELECT COUNT(*) AS total FROM usuarios WHERE conta_id = ? AND nivel = 'admin' AND ativo = 1",
+        [req.auth.accountId],
+      );
+      if (Number(adminCount.total) <= 1) {
+        return res.status(400).json({ error: { message: 'A conta precisa manter pelo menos um administrador ativo' } });
+      }
+    }
+    const updates = {};
+    if (req.body.nome !== undefined) updates.nome = String(req.body.nome || '').trim() || null;
+    if (req.body.nivel !== undefined) updates.nivel = req.body.nivel === 'admin' ? 'admin' : 'operador';
+    if (req.body.ativo !== undefined) updates.ativo = req.body.ativo ? 1 : 0;
+    if (req.body.password) updates.senha_hash = await bcrypt.hash(String(req.body.password), 12);
+    updates.updated_at = now();
+    const keys = Object.keys(updates);
+    await pool.query(`UPDATE usuarios SET ${keys.map((key) => `\`${key}\` = ?`).join(', ')} WHERE id = ? AND conta_id = ?`, [...keys.map((key) => updates[key]), targetId, req.auth.accountId]);
+    await writeAudit(req, { action: 'usuario.atualizar', resource: 'usuarios', resourceId: targetId, details: { ...req.body, password: req.body.password ? '[alterada]' : undefined } });
+    res.json({ data: { id: targetId, updated: true } });
+  } catch (error) {
+    res.status(500).json({ error: { message: error.message } });
+  }
+});
+
+app.post('/api/whatsapp/send', requireAuth, async (req, res) => {
+  try {
+    const phone = String(req.body.phone || '');
+    const message = String(req.body.message || '').trim();
+    if (!validatePhone(phone) || !message || message.length > 5000) {
+      return res.status(400).json({ error: { message: 'Telefone ou mensagem inválidos' } });
+    }
+    const config = await loadWhatsAppConfig(req.auth.accountId);
+    if (config?.method === 'webhook' && config.webhook_url) {
+      await sendEvaluationViaEvolution(phone, message, config);
+      await writeAudit(req, { action: 'whatsapp.enviar', resource: 'mensagem', details: { phone: normalizePhone(phone), method: 'webhook' } });
+      return res.json({ data: { sent: true, method: 'webhook' } });
+    }
+    const directUrl = `https://wa.me/${normalizePhone(phone)}?text=${encodeURIComponent(message)}`;
+    await writeAudit(req, { action: 'whatsapp.preparar', resource: 'mensagem', details: { phone: normalizePhone(phone), method: 'direct' } });
+    return res.json({ data: { sent: true, method: 'direct', direct_url: directUrl } });
+  } catch (error) {
+    res.status(502).json({ error: { message: error.message || 'Falha ao enviar mensagem' } });
   }
 });
 
@@ -488,11 +668,19 @@ app.post('/api/query', requireAuth, async (req, res) => {
 
     const physicalTable = table === 'message_templates' ? 'templates_mensagem' : table;
     const cols = await getColumns(physicalTable);
+    if (!canQuery(req.auth.role, physicalTable, action)) {
+      return res.status(403).json({ error: { message: 'Seu perfil não possui permissão para esta ação' } });
+    }
 
     if (action === 'select') {
       const where = [];
       const params = [];
-      for (const filter of filters) addFilter(where, params, cols, filter);
+      // O tenant sempre vem da sessao. Ignorar user_id enviado pelo cliente evita
+      // que um subusuario filtre acidentalmente pelo proprio id em vez da conta.
+      for (const filter of filters) {
+        if (filter?.column === 'user_id') continue;
+        addFilter(where, params, cols, filter);
+      }
       for (const expression of orFilters) addOrFilter(where, params, cols, expression);
       if (cols.has('user_id')) {
         where.push('`user_id` = ?');
@@ -517,7 +705,12 @@ app.post('/api/query', requireAuth, async (req, res) => {
       }
 
       const [rows] = await pool.query(sql, params);
-      const normalized = await normalizeRows(physicalTable, rows, select);
+      const normalized = await normalizeRows(physicalTable, rows, select, req.auth.accountId);
+      if (req.auth.role === 'operador' && physicalTable === 'ordens_servico') {
+        for (const row of normalized) {
+          for (const column of OPERATOR_ORDER_BLOCKED_COLUMNS) delete row[column];
+        }
+      }
 
       if (single || maybeSingle) {
         if (!normalized.length && single) return res.status(406).json({ error: { code: 'PGRST116', message: 'No rows found' }, data: null, count: countRow.total });
@@ -533,6 +726,10 @@ app.post('/api/query', requireAuth, async (req, res) => {
 
       for (const row of inputRows) {
         const data = await filterDataToColumns(physicalTable, row);
+        if (req.auth.role === 'operador' && physicalTable === 'ordens_servico') {
+          for (const column of OPERATOR_ORDER_BLOCKED_COLUMNS) delete data[column];
+          if (data.status && !['pendente', 'em_andamento', 'concluido'].includes(data.status)) data.status = 'pendente';
+        }
         if (cols.has('id') && !data.id) data.id = uuid();
         if (cols.has('user_id')) data.user_id = req.user.id;
         if (cols.has('created_at') && !data.created_at) data.created_at = now();
@@ -554,15 +751,25 @@ app.post('/api/query', requireAuth, async (req, res) => {
           await syncReceivableForOrder(pool, data.user_id, data.id);
         }
         inserted.push(normalizeRow(physicalTable, data));
+        await writeAudit(req, { action: 'registro.criar', resource: physicalTable, resourceId: data.id || null, details: { fields: Object.keys(data) } });
       }
 
       return res.json({ data: single ? inserted[0] : inserted, error: null });
     }
 
     if (action === 'update' || action === 'delete') {
+      if (req.auth.role === 'operador' && physicalTable === 'ordens_servico' && action === 'update') {
+        const exactIdFilter = filters.find((filter) => filter?.column === 'id' && filter?.operator === 'eq' && filter?.value);
+        if (!exactIdFilter) {
+          return res.status(400).json({ error: { message: 'A alteração da ordem exige um identificador único' } });
+        }
+      }
       const where = [];
       const params = [];
-      for (const filter of filters) addFilter(where, params, cols, filter);
+      for (const filter of filters) {
+        if (filter?.column === 'user_id') continue;
+        addFilter(where, params, cols, filter);
+      }
       if (cols.has('user_id')) {
         where.push('`user_id` = ?');
         params.push(req.user.id);
@@ -571,11 +778,31 @@ app.post('/api/query', requireAuth, async (req, res) => {
 
       if (action === 'delete') {
         const [result] = await pool.query(`DELETE FROM \`${physicalTable}\` WHERE ${where.join(' AND ')}`, params);
+        await writeAudit(req, { action: 'registro.excluir', resource: physicalTable, details: { filters, affected: Number(result.affectedRows || 0) } });
         return res.json({ data: null, count: Number(result.affectedRows || 0), error: null });
       }
 
       const data = await filterDataToColumns(physicalTable, payload);
       if (cols.has('user_id')) delete data.user_id;
+      if (req.auth.role === 'operador' && physicalTable === 'ordens_servico') {
+        for (const column of OPERATOR_ORDER_UPDATE_BLOCKED_COLUMNS) delete data[column];
+        const [[currentOrder]] = await pool.query(
+          `SELECT status FROM \`${physicalTable}\` WHERE ${where.join(' AND ')} LIMIT 1`,
+          params,
+        );
+        if (['concluido', 'cancelado'].includes(currentOrder?.status)) {
+          const terminalAllowedFields = new Set(['status', 'solicita_avaliacao', 'updated_at']);
+          if (Object.keys(data).some((key) => !terminalAllowedFields.has(key))) {
+            return res.status(403).json({ error: { message: 'Ordens concluídas ou canceladas não podem ser editadas pelo operador' } });
+          }
+        }
+        if (data.status) {
+          const allowed = OPERATOR_STATUS_TRANSITIONS[currentOrder?.status] || new Set();
+          if (!allowed.has(data.status)) {
+            return res.status(403).json({ error: { message: 'O operador não pode executar esta transição de status' } });
+          }
+        }
+      }
       const affectedOrderIds = [];
       if (physicalTable === 'ordens_servico') {
         const [ordersBeforeUpdate] = await pool.query(
@@ -601,6 +828,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
       for (const ordemId of affectedOrderIds) {
         await syncReceivableForOrder(pool, req.user.id, ordemId);
       }
+      await writeAudit(req, { action: 'registro.atualizar', resource: physicalTable, details: { filters, fields: Object.keys(data), affected: Number(result.affectedRows || 0) } });
       return res.json({ data: null, count: Number(result.affectedRows || 0), error: null });
     }
 
@@ -616,10 +844,14 @@ app.post('/api/query', requireAuth, async (req, res) => {
           return col;
         })
         .filter((col) => cols.has(col));
+      if (cols.has('user_id') && !conflictCols.includes('user_id')) conflictCols.push('user_id');
       const upserted = [];
 
       for (const row of inputRows) {
         const data = await filterDataToColumns(physicalTable, row);
+        if (req.auth.role === 'operador' && physicalTable === 'ordens_servico') {
+          for (const column of OPERATOR_ORDER_UPDATE_BLOCKED_COLUMNS) delete data[column];
+        }
         if (cols.has('id') && !data.id) data.id = uuid();
         if (cols.has('user_id')) data.user_id = req.user.id;
         if (cols.has('created_at') && !data.created_at) data.created_at = now();
@@ -644,6 +876,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
           );
         }
         upserted.push(normalizeRow(physicalTable, data));
+        await writeAudit(req, { action: 'registro.upsert', resource: physicalTable, resourceId: data.id || null, details: { fields: Object.keys(data) } });
       }
       return res.json({ data: upserted, error: null });
     }
@@ -656,23 +889,24 @@ app.post('/api/query', requireAuth, async (req, res) => {
 
 app.post('/api/rpc/get_next_order_number', requireAuth, async (req, res) => {
   try {
-    const userId = req.body?.p_user_id || req.user.id;
-    if (userId !== req.user.id) {
+    const requestedUserId = req.body?.p_user_id;
+    if (requestedUserId && ![req.user.id, req.auth.userId].includes(requestedUserId)) {
       return res.status(403).json({ data: null, error: { message: 'Acesso negado' } });
     }
 
-    const next = await getNextOrderNumber(userId);
+    const next = await getNextOrderNumber(req.user.id);
     res.json({ data: next, error: null });
   } catch (error) {
     res.status(500).json({ data: null, error: { message: error.message } });
   }
 });
 
-app.post('/api/rpc/get_next_rps_number', requireAuth, async (req, res) => {
-  const userId = req.body?.p_user_id || req.user.id;
-  if (userId !== req.user.id) {
+app.post('/api/rpc/get_next_rps_number', requireAuth, requireAdmin, async (req, res) => {
+  const requestedUserId = req.body?.p_user_id;
+  if (requestedUserId && ![req.user.id, req.auth.userId].includes(requestedUserId)) {
     return res.status(403).json({ data: null, error: { message: 'Acesso negado' } });
   }
+  const userId = req.user.id;
 
   const conn = await pool.getConnection();
   try {
@@ -691,7 +925,7 @@ app.post('/api/rpc/get_next_rps_number', requireAuth, async (req, res) => {
   }
 });
 
-app.post('/api/storage/:bucket/upload', requireAuth, express.raw({ type: '*/*', limit: '8mb' }), async (req, res) => {
+app.post('/api/storage/:bucket/upload', requireAuth, requireAdmin, express.raw({ type: '*/*', limit: '8mb' }), async (req, res) => {
   try {
     const upload = resolveUploadPath(req.params.bucket, req.query.path);
     if (!upload) return res.status(400).json({ error: { message: 'Caminho invalido' } });
@@ -703,7 +937,7 @@ app.post('/api/storage/:bucket/upload', requireAuth, express.raw({ type: '*/*', 
   }
 });
 
-app.delete('/api/storage/:bucket', requireAuth, async (req, res) => {
+app.delete('/api/storage/:bucket', requireAuth, requireAdmin, async (req, res) => {
   const paths = Array.isArray(req.body?.paths) ? req.body.paths : [];
   for (const item of paths) {
     const upload = resolveUploadPath(req.params.bucket, item);
@@ -2097,7 +2331,7 @@ async function answerSystemQuery(userId, intent) {
   return 'Nao entendi o pedido. Exemplos: "quais OS tenho hoje?", "cadastre cliente Maria telefone 61999999999", "abra OS para Maria dia 05/06" ou "registre que a OS 125 foi paga em pix".';
 }
 
-app.post('/api/financeiro/os/:id/pagamentos', requireAuth, async (req, res) => {
+app.post('/api/financeiro/os/:id/pagamentos', requireAuth, requireAdmin, async (req, res) => {
   try {
     const result = await registerOrderPayment({
       userId: req.user.id,
@@ -2113,7 +2347,7 @@ app.post('/api/financeiro/os/:id/pagamentos', requireAuth, async (req, res) => {
   }
 });
 
-app.post('/api/financeiro/contas-pagar/:id/pagar', requireAuth, async (req, res) => {
+app.post('/api/financeiro/contas-pagar/:id/pagar', requireAuth, requireAdmin, async (req, res) => {
   try {
     const result = await payAccountPayable({
       userId: req.user.id,

@@ -1,12 +1,11 @@
-import React, { Suspense, lazy, useEffect, useState } from 'react';
+import React, { Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { motion } from 'framer-motion';
-import { supabase } from './lib/supabase';
 import { Header } from './components/Header';
 import { BottomNavigation } from './components/BottomNavigation';
-import { toast } from './components/ToastCustom';
 import { ReminderProvider } from './contexts/ReminderContext';
+import { AuthProvider, Permission, useAuth } from './contexts/AuthContext';
 
 const Login = lazy(() => import('./pages/Login').then((module) => ({ default: module.Login })));
 const Dashboard = lazy(() => import('./pages/Dashboard').then((module) => ({ default: module.Dashboard })));
@@ -39,45 +38,7 @@ function RouteFallback() {
 }
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const [loading, setLoading] = useState(true);
-  const [authenticated, setAuthenticated] = useState(false);
-
-  useEffect(() => {
-    checkUser();
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setAuthenticated(!!session);
-      setLoading(false);
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
-
-  async function checkUser() {
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        setAuthenticated(false);
-        return;
-      }
-      
-      if (!session.access_token || !session.user?.aud) {
-        await supabase.auth.signOut();
-        setAuthenticated(false);
-        return;
-      }
-
-      setAuthenticated(!!session);
-    } catch (error: any) {
-      console.error('Erro ao verificar autenticação:', error);
-      if (!error?.message?.includes('Failed to fetch')) {
-        toast.error('Erro ao verificar autenticação');
-      }
-      setAuthenticated(false);
-    } finally {
-      setLoading(false);
-    }
-  }
+  const { authenticated, loading } = useAuth();
 
   if (loading) {
     return (
@@ -124,6 +85,12 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function RequirePermission({ permission, children }: { permission: Permission; children: React.ReactNode }) {
+  const { can, loading } = useAuth();
+  if (loading) return <RouteFallback />;
+  return can(permission) ? <>{children}</> : <Navigate to="/dashboard" replace />;
+}
+
 function Layout({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen w-full bg-slate-50 dark:bg-slate-950">
@@ -143,6 +110,7 @@ function Layout({ children }: { children: React.ReactNode }) {
 
 function App() {
   return (
+    <AuthProvider>
     <ReminderProvider>
       <BrowserRouter
         future={{
@@ -248,9 +216,9 @@ function App() {
           path="/contas"
           element={
             <ProtectedRoute>
-              <Layout>
-                <ContasPagar />
-              </Layout>
+              <RequirePermission permission="financeiro.read">
+                <Layout><ContasPagar /></Layout>
+              </RequirePermission>
             </ProtectedRoute>
           }
         />
@@ -268,9 +236,9 @@ function App() {
           path="/financeiro"
           element={
             <ProtectedRoute>
-              <Layout>
-                <Financeiro />
-              </Layout>
+              <RequirePermission permission="financeiro.read">
+                <Layout><Financeiro /></Layout>
+              </RequirePermission>
             </ProtectedRoute>
           }
         />
@@ -278,9 +246,9 @@ function App() {
           path="/financeiro/ia"
           element={
             <ProtectedRoute>
-              <Layout>
-                <FinanceiroIA />
-              </Layout>
+              <RequirePermission permission="financeiro.read">
+                <Layout><FinanceiroIA /></Layout>
+              </RequirePermission>
             </ProtectedRoute>
           }
         />
@@ -288,9 +256,9 @@ function App() {
           path="/transacoes"
           element={
             <ProtectedRoute>
-              <Layout>
-                <Transacoes />
-              </Layout>
+              <RequirePermission permission="financeiro.read">
+                <Layout><Transacoes /></Layout>
+              </RequirePermission>
             </ProtectedRoute>
           }
         />
@@ -298,9 +266,9 @@ function App() {
           path="/configuracoes-whatsapp"
           element={
             <ProtectedRoute>
-              <Layout>
-                <ConfiguracoesWhatsApp />
-              </Layout>
+              <RequirePermission permission="settings.manage">
+                <Layout><ConfiguracoesWhatsApp /></Layout>
+              </RequirePermission>
             </ProtectedRoute>
           }
         />
@@ -308,9 +276,9 @@ function App() {
           path="/configuracoes"
           element={
             <ProtectedRoute>
-              <Layout>
-                <ConfiguracoesCompletas />
-              </Layout>
+              <RequirePermission permission="settings.manage">
+                <Layout><ConfiguracoesCompletas /></Layout>
+              </RequirePermission>
             </ProtectedRoute>
           }
         />
@@ -318,9 +286,9 @@ function App() {
           path="/notas-fiscais"
           element={
             <ProtectedRoute>
-              <Layout>
-                <NotasFiscais />
-              </Layout>
+              <RequirePermission permission="nfse.manage">
+                <Layout><NotasFiscais /></Layout>
+              </RequirePermission>
             </ProtectedRoute>
           }
         />
@@ -328,9 +296,9 @@ function App() {
           path="/notas-fiscais/:id"
           element={
             <ProtectedRoute>
-              <Layout>
-                <NotasFiscais />
-              </Layout>
+              <RequirePermission permission="nfse.manage">
+                <Layout><NotasFiscais /></Layout>
+              </RequirePermission>
             </ProtectedRoute>
           }
         />
@@ -395,6 +363,7 @@ function App() {
       />
       </BrowserRouter>
     </ReminderProvider>
+    </AuthProvider>
   );
 }
 
