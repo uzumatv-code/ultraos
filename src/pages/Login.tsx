@@ -14,6 +14,9 @@ export function Login() {
   const [mostrarSenha, setMostrarSenha] = useState(false);
   const [memorizarLogin, setMemorizarLogin] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [showForgotPassword, setShowForgotPassword] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotLoading, setForgotLoading] = useState(false);
 
   useEffect(() => {
     const rememberedEmail = localStorage.getItem(REMEMBERED_LOGIN_KEY);
@@ -87,6 +90,26 @@ export function Login() {
       toast.error(`Erro no login: ${error.message || 'Erro desconhecido'}`);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleForgotPassword(e: React.FormEvent) {
+    e.preventDefault();
+    setForgotLoading(true);
+    try {
+      const response = await fetch('/api/auth/password-reset/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: forgotEmail }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error?.message || 'Não foi possível iniciar a recuperação');
+      toast.success(result.message || 'Se o e-mail estiver cadastrado, você receberá as instruções.');
+      setShowForgotPassword(false);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Não foi possível iniciar a recuperação');
+    } finally {
+      setForgotLoading(false);
     }
   }
 
@@ -196,6 +219,16 @@ export function Login() {
             </div>
           </motion.div>
 
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() => { setForgotEmail(email); setShowForgotPassword(true); }}
+              className="min-h-10 text-sm font-semibold text-violet-700 transition-colors hover:text-violet-900 dark:text-violet-300 dark:hover:text-violet-200"
+            >
+              Esqueci minha senha
+            </button>
+          </div>
+
           <motion.label
             initial={{ opacity: 0, x: -20 }}
             animate={{ opacity: 1, x: 0 }}
@@ -231,6 +264,33 @@ export function Login() {
           </motion.button>
         </form>
       </motion.div>
+
+      {showForgotPassword && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 px-4" role="dialog" aria-modal="true" aria-labelledby="forgot-password-title">
+          <form onSubmit={handleForgotPassword} className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-900">
+            <h2 id="forgot-password-title" className="text-xl font-semibold text-slate-950 dark:text-white">Recuperar senha</h2>
+            <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">Informe seu e-mail. Se ele estiver cadastrado, enviaremos um link válido por uma hora.</p>
+            <label className="mt-5 block text-sm font-medium text-slate-700 dark:text-slate-200" htmlFor="forgot-email">E-mail</label>
+            <input
+              id="forgot-email"
+              type="email"
+              value={forgotEmail}
+              onChange={(event) => setForgotEmail(event.target.value)}
+              required
+              autoComplete="email"
+              className="mt-2 min-h-12 w-full rounded-lg border border-slate-300 bg-white px-3 text-slate-950 outline-none ring-violet-500 focus:ring-2 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+              placeholder="seu@email.com"
+            />
+            <div className="mt-6 flex justify-end gap-3">
+              <button type="button" onClick={() => setShowForgotPassword(false)} className="min-h-11 rounded-lg px-4 text-sm font-semibold text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800">Cancelar</button>
+              <button type="submit" disabled={forgotLoading} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-violet-600 px-4 text-sm font-semibold text-white hover:bg-violet-700 disabled:opacity-60">
+                {forgotLoading && <Loader2 className="h-4 w-4 animate-spin" />}
+                Enviar link
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </main>
   );
 }

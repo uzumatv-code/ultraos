@@ -10,7 +10,6 @@ interface AlterarSenhaModalProps {
 }
 
 export function AlterarSenhaModal({ isOpen, onClose }: AlterarSenhaModalProps) {
-  const [senhaAtual, setSenhaAtual] = useState('');
   const [novaSenha, setNovaSenha] = useState('');
   const [confirmarSenha, setConfirmarSenha] = useState('');
   const [loading, setLoading] = useState(false);
@@ -23,8 +22,8 @@ export function AlterarSenhaModal({ isOpen, onClose }: AlterarSenhaModalProps) {
       return;
     }
 
-    if (novaSenha.length < 6) {
-      toast.error('A nova senha deve ter pelo menos 6 caracteres');
+    if (novaSenha.length < 8) {
+      toast.error('A nova senha deve ter pelo menos 8 caracteres');
       return;
     }
 
@@ -49,7 +48,6 @@ export function AlterarSenhaModal({ isOpen, onClose }: AlterarSenhaModalProps) {
   }
 
   function limparFormulario() {
-    setSenhaAtual('');
     setNovaSenha('');
     setConfirmarSenha('');
   }
@@ -91,7 +89,7 @@ export function AlterarSenhaModal({ isOpen, onClose }: AlterarSenhaModalProps) {
                       className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
                       placeholder="Digite a nova senha"
                       required
-                      minLength={6}
+                      minLength={8}
                     />
                   </div>
                 </div>
@@ -109,7 +107,7 @@ export function AlterarSenhaModal({ isOpen, onClose }: AlterarSenhaModalProps) {
                       className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
                       placeholder="Confirme a nova senha"
                       required
-                      minLength={6}
+                      minLength={8}
                     />
                   </div>
                 </div>

@@ -8,6 +8,7 @@ import { ReminderProvider } from './contexts/ReminderContext';
 import { AuthProvider, Permission, useAuth } from './contexts/AuthContext';
 
 const Login = lazy(() => import('./pages/Login').then((module) => ({ default: module.Login })));
+const RedefinirSenha = lazy(() => import('./pages/RedefinirSenha').then((module) => ({ default: module.RedefinirSenha })));
 const Dashboard = lazy(() => import('./pages/Dashboard').then((module) => ({ default: module.Dashboard })));
 const Clientes = lazy(() => import('./pages/Clientes').then((module) => ({ default: module.Clientes })));
 const Marcas = lazy(() => import('./pages/Marcas').then((module) => ({ default: module.Marcas })));
@@ -121,6 +122,7 @@ function App() {
       <Suspense fallback={<RouteFallback />}>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/redefinir-senha" element={<RedefinirSenha />} />
         <Route
           path="/dashboard"
           element={

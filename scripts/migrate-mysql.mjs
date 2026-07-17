@@ -23,6 +23,7 @@ const createTables = [
     status_assinatura varchar(50) DEFAULT 'ativo',
     ativo tinyint(1) DEFAULT 1,
     email_verificado tinyint(1) DEFAULT 1,
+    senha_alterada_em varchar(50) DEFAULT NULL,
     ultimo_login varchar(50) DEFAULT NULL,
     created_at varchar(50) DEFAULT NULL,
     updated_at varchar(50) DEFAULT NULL,
@@ -46,6 +47,19 @@ const createTables = [
     INDEX idx_auditoria_conta (user_id),
     INDEX idx_auditoria_actor (actor_user_id),
     INDEX idx_auditoria_created (created_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  `CREATE TABLE IF NOT EXISTS recuperacoes_senha (
+    id varchar(36) NOT NULL PRIMARY KEY,
+    user_id varchar(36) NOT NULL,
+    token_hash char(64) NOT NULL,
+    expires_at varchar(50) NOT NULL,
+    used_at varchar(50) DEFAULT NULL,
+    requested_ip varchar(45) DEFAULT NULL,
+    created_at varchar(50) NOT NULL,
+    UNIQUE KEY unique_recuperacoes_senha_token (token_hash),
+    INDEX idx_recuperacoes_senha_user (user_id),
+    INDEX idx_recuperacoes_senha_expires (expires_at)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 
   `CREATE TABLE IF NOT EXISTS clientes (
@@ -539,6 +553,7 @@ const requiredColumns = {
     status_assinatura: "varchar(50) DEFAULT 'ativo'",
     ativo: 'tinyint(1) DEFAULT 1',
     email_verificado: 'tinyint(1) DEFAULT 1',
+    senha_alterada_em: 'varchar(50) DEFAULT NULL',
     ultimo_login: 'varchar(50) DEFAULT NULL',
     updated_at: 'varchar(50) DEFAULT NULL',
   },

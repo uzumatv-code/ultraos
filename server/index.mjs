@@ -8,6 +8,7 @@ import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import mysql from 'mysql2/promise';
+import nodemailer from 'nodemailer';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -18,6 +19,11 @@ const HOST = process.env.HOST || '0.0.0.0';
 const DATABASE_URL = process.env.DATABASE_URL || process.env.MYSQL_URL;
 const JWT_SECRET = process.env.JWT_SECRET;
 const TOKEN_TTL = process.env.JWT_TTL || '12h';
+const APP_URL = String(process.env.APP_URL || '').replace(/\/$/, '');
+const GMAIL_USER = process.env.GMAIL_USER;
+const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD;
+const MAIL_FROM = process.env.MAIL_FROM || GMAIL_USER;
+const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000;
 const uploadsDir = path.join(rootDir, 'uploads');
 const EVALUATION_JOB_ENABLED = process.env.EVALUATION_JOB_ENABLED !== 'false';
 const EVALUATION_JOB_INTERVAL_MS = Number(process.env.EVALUATION_JOB_INTERVAL_MS || 60_000);
@@ -198,6 +204,28 @@ app.get('/api/health/db', async (_req, res) => {
 
 function now() {
   return new Date().toISOString();
+}
+
+function passwordResetTokenHash(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+function passwordResetEmail({ name, resetUrl }) {
+  const displayName = name || 'usuário';
+  return {
+    subject: 'Redefinição de senha — Sistema OS',
+    text: `Olá, ${displayName}.\n\nRecebemos uma solicitação para redefinir sua senha. Acesse o link abaixo em até 1 hora:\n${resetUrl}\n\nSe não foi você, ignore este e-mail.`,
+    html: `<div style="font-family:Arial,sans-serif;color:#1e293b;line-height:1.6"><h2>Redefinição de senha</h2><p>Olá, ${escapeHtml(displayName)}.</p><p>Recebemos uma solicitação para redefinir sua senha. Este link expira em <strong>1 hora</strong>.</p><p><a href="${escapeHtml(resetUrl)}" style="display:inline-block;background:#7c3aed;color:#fff;padding:12px 18px;border-radius:8px;text-decoration:none;font-weight:700">Redefinir senha</a></p><p>Se não foi você, ignore este e-mail. Sua senha não será alterada.</p></div>`,
+  };
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
+}
+
+function passwordResetMailer() {
+  if (!GMAIL_USER || !GMAIL_APP_PASSWORD || !APP_URL) return null;
+  return nodemailer.createTransport({ service: 'gmail', auth: { user: GMAIL_USER, pass: GMAIL_APP_PASSWORD } });
 }
 
 function todayDate() {
@@ -424,6 +452,9 @@ async function requireAuth(req, res, next) {
     if (!user || user.ativo === 0 || user.status_assinatura === 'bloqueado') {
       return res.status(401).json({ error: { message: 'Usuário inativo ou sessão inválida' } });
     }
+    if (user.senha_alterada_em && Number(decoded.iat || 0) < Math.floor(new Date(user.senha_alterada_em).getTime() / 1000)) {
+      return res.status(401).json({ error: { message: 'Sua senha foi alterada. Entre novamente.' } });
+    }
     const role = normalizedRole(user);
     const accountId = user.conta_id || user.id;
     if (accountId !== user.id) {
@@ -475,6 +506,95 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
+app.post('/api/auth/password-reset/request', async (req, res) => {
+  const genericResponse = { message: 'Se este e-mail estiver cadastrado, enviaremos as instruções para redefinir a senha.' };
+  try {
+    const mailer = passwordResetMailer();
+    if (!mailer) {
+      console.error('Recuperação de senha indisponível: configure APP_URL, GMAIL_USER e GMAIL_APP_PASSWORD.');
+      return res.status(503).json({ error: { message: 'Recuperação de senha está temporariamente indisponível.' } });
+    }
+
+    const email = String(req.body.email || '').trim().toLowerCase();
+    if (!email) return res.json(genericResponse);
+    const user = await findUserByEmail(email);
+    if (!user || user.ativo === 0) return res.json(genericResponse);
+
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const [[attempts]] = await pool.query(
+      'SELECT COUNT(*) AS total FROM recuperacoes_senha WHERE user_id = ? AND created_at >= ?',
+      [user.id, oneHourAgo],
+    );
+    if (Number(attempts.total) >= 3) return res.json(genericResponse);
+
+    const token = crypto.randomBytes(32).toString('hex');
+    const createdAt = now();
+    const expiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_MS).toISOString();
+    await pool.query('UPDATE recuperacoes_senha SET used_at = ? WHERE user_id = ? AND used_at IS NULL', [createdAt, user.id]);
+    await pool.query(
+      `INSERT INTO recuperacoes_senha (id, user_id, token_hash, expires_at, used_at, requested_ip, created_at)
+       VALUES (?, ?, ?, ?, NULL, ?, ?)`,
+      [uuid(), user.id, passwordResetTokenHash(token), expiresAt, req.ip || null, createdAt],
+    );
+
+    const resetUrl = `${APP_URL}/redefinir-senha?token=${encodeURIComponent(token)}`;
+    const emailContent = passwordResetEmail({ name: user.nome, resetUrl });
+    await mailer.sendMail({ from: MAIL_FROM, to: user.email, ...emailContent });
+    await pool.query(
+      `INSERT INTO auditoria (id, user_id, actor_user_id, actor_email, actor_role, acao, recurso, recurso_id, detalhes, ip_address, created_at)
+       VALUES (?, ?, ?, ?, 'sistema', 'senha.recuperacao.solicitada', 'usuarios', ?, NULL, ?, ?)`,
+      [uuid(), user.conta_id || user.id, user.id, user.email, user.id, req.ip || null, createdAt],
+    ).catch((error) => console.error('Falha ao auditar recuperação de senha:', error.message));
+    return res.json(genericResponse);
+  } catch (error) {
+    console.error('Falha ao solicitar recuperação de senha:', error.message);
+    return res.status(502).json({ error: { message: 'Não foi possível enviar o e-mail de recuperação. Tente novamente.' } });
+  }
+});
+
+app.post('/api/auth/password-reset/confirm', async (req, res) => {
+  const token = String(req.body.token || '');
+  const password = String(req.body.password || '');
+  if (!/^[a-f0-9]{64}$/i.test(token) || password.length < 8) {
+    return res.status(400).json({ error: { message: 'Link inválido ou senha com menos de 8 caracteres.' } });
+  }
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [[resetRequest]] = await conn.query(
+      `SELECT id, user_id FROM recuperacoes_senha
+       WHERE token_hash = ? AND used_at IS NULL AND expires_at > ? LIMIT 1 FOR UPDATE`,
+      [passwordResetTokenHash(token), now()],
+    );
+    if (!resetRequest) {
+      await conn.rollback();
+      return res.status(400).json({ error: { message: 'Este link é inválido, já foi utilizado ou expirou.' } });
+    }
+
+    const changedAt = now();
+    const hash = await bcrypt.hash(password, 12);
+    await conn.query('UPDATE usuarios SET senha_hash = ?, senha_alterada_em = ?, updated_at = ? WHERE id = ?', [hash, changedAt, changedAt, resetRequest.user_id]);
+    await conn.query('UPDATE recuperacoes_senha SET used_at = ? WHERE user_id = ? AND used_at IS NULL', [changedAt, resetRequest.user_id]);
+    const [[user]] = await conn.query('SELECT email, conta_id FROM usuarios WHERE id = ? LIMIT 1', [resetRequest.user_id]);
+    if (user) {
+      await conn.query(
+        `INSERT INTO auditoria (id, user_id, actor_user_id, actor_email, actor_role, acao, recurso, recurso_id, detalhes, ip_address, created_at)
+         VALUES (?, ?, ?, ?, 'sistema', 'senha.recuperacao.concluida', 'usuarios', ?, NULL, ?, ?)`,
+        [uuid(), user.conta_id || resetRequest.user_id, resetRequest.user_id, user.email, resetRequest.user_id, req.ip || null, changedAt],
+      );
+    }
+    await conn.commit();
+    return res.json({ message: 'Senha redefinida com sucesso. Entre com a nova senha.' });
+  } catch (error) {
+    await conn.rollback();
+    console.error('Falha ao redefinir senha:', error.message);
+    return res.status(500).json({ error: { message: 'Não foi possível redefinir a senha.' } });
+  } finally {
+    conn.release();
+  }
+});
+
 app.post('/api/auth/signup', async (req, res) => {
   try {
     const email = String(req.body.email || '').trim().toLowerCase();
@@ -513,8 +633,14 @@ app.get('/api/auth/session', requireAuth, async (req, res) => {
 
 app.patch('/api/auth/user', requireAuth, async (req, res) => {
   try {
+    if (req.body.password && String(req.body.password).length < 8) {
+      return res.status(400).json({ error: { message: 'A senha precisa ter pelo menos 8 caracteres' } });
+    }
     const updates = {};
-    if (req.body.password) updates.senha_hash = await bcrypt.hash(String(req.body.password), 12);
+    if (req.body.password) {
+      updates.senha_hash = await bcrypt.hash(String(req.body.password), 12);
+      updates.senha_alterada_em = now();
+    }
     if (req.body.data?.nome) updates.nome = req.body.data.nome;
     if (req.body.data?.avatar_url) updates.avatar_url = req.body.data.avatar_url;
     if (!Object.keys(updates).length) return res.json({ user: publicUser(await findUserById(req.auth.userId)) });
@@ -568,6 +694,9 @@ app.post('/api/admin/usuarios', requireAuth, requireAdmin, async (req, res) => {
 app.patch('/api/admin/usuarios/:id', requireAuth, requireAdmin, async (req, res) => {
   try {
     const targetId = String(req.params.id || '');
+    if (req.body.password && String(req.body.password).length < 8) {
+      return res.status(400).json({ error: { message: 'A senha precisa ter pelo menos 8 caracteres' } });
+    }
     const deactivating = req.body.ativo === false || req.body.ativo === 0;
     const demoting = req.body.nivel !== undefined && req.body.nivel !== 'admin';
     if (targetId === req.auth.userId && (deactivating || demoting)) {
@@ -588,7 +717,10 @@ app.patch('/api/admin/usuarios/:id', requireAuth, requireAdmin, async (req, res)
     if (req.body.nome !== undefined) updates.nome = String(req.body.nome || '').trim() || null;
     if (req.body.nivel !== undefined) updates.nivel = req.body.nivel === 'admin' ? 'admin' : 'operador';
     if (req.body.ativo !== undefined) updates.ativo = req.body.ativo ? 1 : 0;
-    if (req.body.password) updates.senha_hash = await bcrypt.hash(String(req.body.password), 12);
+    if (req.body.password) {
+      updates.senha_hash = await bcrypt.hash(String(req.body.password), 12);
+      updates.senha_alterada_em = now();
+    }
     updates.updated_at = now();
     const keys = Object.keys(updates);
     await pool.query(`UPDATE usuarios SET ${keys.map((key) => `\`${key}\` = ?`).join(', ')} WHERE id = ? AND conta_id = ?`, [...keys.map((key) => updates[key]), targetId, req.auth.accountId]);

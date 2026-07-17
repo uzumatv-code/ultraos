@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS `usuarios` (
   `status_assinatura` VARCHAR(50) DEFAULT 'ativo',
   `ativo` BOOLEAN DEFAULT TRUE,
   `email_verificado` BOOLEAN DEFAULT FALSE,
+  `senha_alterada_em` VARCHAR(50) NULL,
   `ultimo_login` VARCHAR(50) NULL,
   `created_at` VARCHAR(50) DEFAULT NULL,
   `updated_at` VARCHAR(50) DEFAULT NULL,
@@ -46,6 +47,19 @@ CREATE TABLE IF NOT EXISTS `auditoria` (
   INDEX `idx_auditoria_conta` (`user_id`),
   INDEX `idx_auditoria_actor` (`actor_user_id`),
   INDEX `idx_auditoria_created` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `recuperacoes_senha` (
+  `id` VARCHAR(36) NOT NULL PRIMARY KEY,
+  `user_id` VARCHAR(36) NOT NULL,
+  `token_hash` CHAR(64) NOT NULL,
+  `expires_at` VARCHAR(50) NOT NULL,
+  `used_at` VARCHAR(50) DEFAULT NULL,
+  `requested_ip` VARCHAR(45) DEFAULT NULL,
+  `created_at` VARCHAR(50) NOT NULL,
+  UNIQUE KEY `unique_recuperacoes_senha_token` (`token_hash`),
+  INDEX `idx_recuperacoes_senha_user` (`user_id`),
+  INDEX `idx_recuperacoes_senha_expires` (`expires_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ===========================================
