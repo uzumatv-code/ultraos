@@ -639,7 +639,7 @@ export function ContasPagar() {
   });
 
   return (
-    <div className="min-h-screen overflow-x-hidden bg-gradient-to-br from-purple-50 via-white to-blue-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
       <div className="responsive-page">
         {/* Header */}
         <motion.div 
@@ -655,7 +655,7 @@ export function ContasPagar() {
               <DollarSign className="w-7 h-7 text-white" />
             </motion.div>
             <div className="min-w-0">
-              <h1 className="responsive-heading text-gradient">
+              <h1 className="responsive-heading text-slate-950 dark:text-white">
                 Contas a Pagar
               </h1>
               <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">

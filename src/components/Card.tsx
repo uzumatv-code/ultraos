@@ -18,13 +18,13 @@ export function Card({
   className = '',
   ...props 
 }: CardProps) {
-  const baseClasses = 'rounded-xl sm:rounded-2xl shadow-glass min-w-0';
+  const baseClasses = 'min-w-0 rounded-xl border border-slate-200 shadow-sm dark:border-slate-800';
   const variantClasses = 
-    variant === 'glass' ? 'glass dark:glass-dark' :
-    variant === 'gradient' ? 'gradient-primary text-white' :
-    glass ? 'glass dark:glass-dark' : 'bg-white dark:bg-gray-800';
+    variant === 'glass' ? 'bg-white dark:bg-slate-900' :
+    variant === 'gradient' ? 'bg-violet-600 text-white border-violet-600' :
+    glass ? 'bg-white dark:bg-slate-900' : 'bg-white dark:bg-slate-900';
   const hoverClasses = hover ? 'card-hover' : '';
-  const gradientClasses = gradient ? 'gradient-primary text-white' : '';
+  const gradientClasses = gradient ? 'border-violet-600 bg-violet-600 text-white' : '';
   
   return (
     <motion.div
@@ -40,7 +40,7 @@ export function Card({
 
 export function CardHeader({ children, className = '' }: { children: ReactNode; className?: string }) {
   return (
-    <div className={`px-6 py-4 border-b border-gray-200 dark:border-gray-700 ${className}`}>
+    <div className={`border-b border-slate-200 px-4 py-4 sm:px-5 dark:border-slate-800 ${className}`}>
       {children}
     </div>
   );
@@ -48,7 +48,7 @@ export function CardHeader({ children, className = '' }: { children: ReactNode; 
 
 export function CardTitle({ children, className = '' }: { children: ReactNode; className?: string }) {
   return (
-    <h3 className={`text-lg font-bold text-gray-800 dark:text-white ${className}`}>
+    <h3 className={`text-base font-semibold text-slate-950 dark:text-white ${className}`}>
       {children}
     </h3>
   );
@@ -56,7 +56,7 @@ export function CardTitle({ children, className = '' }: { children: ReactNode; c
 
 export function CardContent({ children, className = '' }: { children: ReactNode; className?: string }) {
   return (
-    <div className={`p-6 ${className}`}>
+    <div className={`p-4 sm:p-5 ${className}`}>
       {children}
     </div>
   );
@@ -84,12 +84,12 @@ export function StatCard({
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay }}
-      className="glass dark:glass-dark rounded-xl sm:rounded-2xl p-4 sm:p-6 shadow-glass card-hover group min-w-0"
+      className="group min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition-[border-color,box-shadow] hover:border-slate-300 hover:shadow-md sm:p-5 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700"
     >
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-sm font-medium text-gray-600 dark:text-gray-400">{title}</p>
-          <p className="text-2xl sm:text-3xl font-bold text-gray-800 dark:text-white mt-1 break-words">
+          <p className="text-sm font-medium text-slate-500 dark:text-slate-400">{title}</p>
+          <p className="mt-1 break-words text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl dark:text-white">
             {loading ? (
               <span className="animate-pulse">...</span>
             ) : (
@@ -104,9 +104,7 @@ export function StatCard({
           </p>
         </div>
         <motion.div 
-          className={`w-12 h-12 sm:w-14 sm:h-14 shrink-0 bg-gradient-to-br ${gradient} rounded-xl sm:rounded-2xl flex items-center justify-center shadow-lg group-hover:shadow-neon transition-all`}
-          whileHover={{ rotate: 360, scale: 1.1 }}
-          transition={{ duration: 0.5 }}
+          className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br sm:h-12 sm:w-12 ${gradient}`}
         >
           {icon}
         </motion.div>

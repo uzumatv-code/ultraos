@@ -62,7 +62,7 @@ export function Perfil() {
   }
 
   return (
-    <div className="min-h-screen overflow-x-hidden dark:bg-gray-900">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
       <div className="mx-auto w-full max-w-4xl px-3 py-6 sm:px-6 lg:px-8 sm:py-8">
         <div className="mb-8 flex items-center gap-3 sm:gap-4">
           <button
@@ -71,7 +71,7 @@ export function Perfil() {
           >
             <ArrowLeft className="w-6 h-6 text-gray-600 dark:text-gray-400" />
           </button>
-          <h1 className="text-xl sm:text-2xl font-bold bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent">
+          <h1 className="text-2xl font-semibold tracking-tight text-slate-950 dark:text-white sm:text-3xl">
             Perfil e Configurações
           </h1>
         </div>

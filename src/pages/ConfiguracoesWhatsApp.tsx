@@ -176,13 +176,13 @@ export function ConfiguracoesWhatsApp() {
   }
 
   return (
-    <div className="min-h-screen overflow-x-hidden bg-gradient-to-br from-purple-50 via-blue-50 to-indigo-100">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
       <div className="mx-auto w-full max-w-4xl px-3 py-4 sm:px-6 lg:px-8 sm:py-6">
         <div className="mb-6 flex items-center gap-3">
           <div className="h-11 w-11 sm:h-12 sm:w-12 shrink-0 bg-gradient-to-br from-green-600 to-blue-600 rounded-xl flex items-center justify-center">
             <Webhook className="w-6 h-6 text-white" />
           </div>
-          <h1 className="text-2xl font-bold bg-gradient-to-r from-green-600 to-blue-600 bg-clip-text text-transparent">
+          <h1 className="text-2xl font-semibold tracking-tight text-slate-950 dark:text-white sm:text-3xl">
             Configurações WhatsApp
           </h1>
         </div>

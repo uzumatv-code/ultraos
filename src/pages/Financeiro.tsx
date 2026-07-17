@@ -438,7 +438,7 @@ export function Financeiro() {
   }
 
   return (
-    <div className="min-h-screen overflow-x-hidden bg-gray-50 dark:bg-gray-950">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
       <div className="responsive-page">
         <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>

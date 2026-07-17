@@ -291,7 +291,7 @@ export function NotasFiscais() {
   };
 
   return (
-    <div className="min-h-screen overflow-x-hidden bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-100 dark:from-gray-900 dark:via-blue-900/20 dark:to-purple-900/20">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
       <div className="responsive-page">
         {/* Header Animado */}
         <motion.div
@@ -306,7 +306,7 @@ export function NotasFiscais() {
                 <FileText className="w-8 h-8 text-white" />
               </div>
               <div className="min-w-0">
-                <h1 className="responsive-heading bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 dark:from-blue-400 dark:via-indigo-400 dark:to-purple-400 bg-clip-text text-transparent">
+                <h1 className="responsive-heading text-slate-950 dark:text-white">
                   Notas Fiscais (NFS-e)
                 </h1>
                 <p className="text-gray-600 dark:text-gray-400 mt-1">

@@ -112,7 +112,7 @@ export function Transacoes() {
   const totalPaginas = Math.ceil(totalTransacoes / itensPorPagina);
 
   return (
-    <div className="min-h-screen overflow-x-hidden bg-gradient-to-br from-purple-50 via-violet-50 to-indigo-100 dark:from-gray-900 dark:via-purple-900/20 dark:to-indigo-900/20">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
       <div className="responsive-page">
         {/* Cabeçalho Animado */}
         <motion.div
@@ -126,7 +126,7 @@ export function Transacoes() {
               <DollarSign className="w-8 h-8 text-white" />
             </div>
             <div className="min-w-0">
-              <h1 className="responsive-heading bg-gradient-to-r from-purple-600 via-violet-600 to-indigo-600 dark:from-purple-400 dark:via-violet-400 dark:to-indigo-400 bg-clip-text text-transparent">
+              <h1 className="responsive-heading text-slate-950 dark:text-white">
                 Transações
               </h1>
               <p className="text-gray-600 dark:text-gray-400 mt-1">

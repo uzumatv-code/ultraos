@@ -14,7 +14,7 @@ export function ConfiguracoesCompletas() {
   const [showTemplatesModal, setShowTemplatesModal] = useState(false);
 
   return (
-    <div className="min-h-screen overflow-x-hidden bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
       <div className="mx-auto w-full max-w-4xl p-3 sm:p-6">
         {/* Header */}
         <motion.div

@@ -4,6 +4,9 @@ export default {
   content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
   theme: {
     extend: {
+      fontFamily: {
+        sans: ['Inter Variable', 'Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+      },
       colors: {
         primary: {
           50: '#f5f3ff',
@@ -70,10 +73,10 @@ export default {
         xs: '2px',
       },
       boxShadow: {
-        'glass': '0 8px 32px 0 rgba(31, 38, 135, 0.15)',
-        'glass-lg': '0 10px 40px 0 rgba(31, 38, 135, 0.2)',
+        'glass': '0 1px 2px rgba(15, 23, 42, 0.05), 0 8px 24px rgba(15, 23, 42, 0.06)',
+        'glass-lg': '0 1px 3px rgba(15, 23, 42, 0.08), 0 18px 48px rgba(15, 23, 42, 0.10)',
         'inner-lg': 'inset 0 2px 4px 0 rgba(0, 0, 0, 0.06)',
-        'neon': '0 0 5px theme(colors.primary.400), 0 0 20px theme(colors.primary.600)',
+        'neon': '0 8px 24px rgba(124, 58, 237, 0.18)',
       },
     },
   },

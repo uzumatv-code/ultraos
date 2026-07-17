@@ -270,9 +270,9 @@ export function Header() {
     <>
       <div className="fixed inset-y-0 left-0 z-40 hidden w-64 lg:block">{sidebar}</div>
 
-      <header className="fixed inset-x-0 top-0 z-40 border-b border-gray-200 bg-white/90 backdrop-blur lg:hidden">
+      <header className="fixed inset-x-0 top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur lg:hidden dark:border-slate-800 dark:bg-slate-950/95">
         <div className="flex h-16 items-center justify-between px-4">
-          <button type="button" onClick={() => setMobileOpen(true)} className="rounded-lg p-2 text-gray-700 hover:bg-gray-100">
+          <button type="button" onClick={() => setMobileOpen(true)} className="app-icon-button" aria-label="Abrir menu principal">
             <Menu className="h-6 w-6" />
           </button>
           <div className="flex min-w-0 items-center gap-2">
@@ -282,7 +282,7 @@ export function Header() {
             <span className="truncate text-sm font-semibold text-gray-950">{siteTitle}</span>
           </div>
           <div className="relative">
-            <button type="button" onClick={() => setShowNotifications((value) => !value)} className="relative rounded-lg p-2 text-gray-700 hover:bg-gray-100">
+            <button type="button" onClick={() => setShowNotifications((value) => !value)} className="app-icon-button relative" aria-label="Abrir notificações">
               <Bell className="h-5 w-5" />
               {!loading && notificationCount > 0 && (
                 <span className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-xs font-bold text-white">{notificationCount}</span>
@@ -304,7 +304,7 @@ export function Header() {
           <>
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 bg-black/40 lg:hidden" onClick={() => setMobileOpen(false)} />
             <motion.div initial={{ x: '-100%' }} animate={{ x: 0 }} exit={{ x: '-100%' }} transition={{ type: 'spring', damping: 28, stiffness: 260 }} className="fixed inset-y-0 left-0 z-50 w-72 lg:hidden">
-              <button type="button" onClick={() => setMobileOpen(false)} className="absolute right-3 top-3 rounded-lg p-2 text-slate-300 hover:bg-white/10">
+              <button type="button" onClick={() => setMobileOpen(false)} className="absolute right-3 top-3 flex h-11 w-11 items-center justify-center rounded-lg text-slate-300 hover:bg-white/10" aria-label="Fechar menu principal">
                 <X className="h-5 w-5" />
               </button>
               {sidebar}
@@ -313,9 +313,11 @@ export function Header() {
         )}
       </AnimatePresence>
 
-      <div className="fixed right-4 top-4 z-50 hidden items-center gap-2 lg:flex">
+      <header className="fixed left-64 right-0 top-0 z-30 hidden h-16 items-center justify-between border-b border-slate-200 bg-white/95 px-6 backdrop-blur lg:flex dark:border-slate-800 dark:bg-slate-950/95">
+        <p className="truncate text-sm font-semibold text-slate-900 dark:text-white">{siteTitle}</p>
+        <div className="flex items-center gap-2">
         <div className="relative">
-          <button type="button" onClick={() => setShowNotifications((value) => !value)} className="relative rounded-lg border border-gray-200 bg-white p-2 text-gray-600 shadow-sm hover:bg-gray-50">
+          <button type="button" onClick={() => setShowNotifications((value) => !value)} className="app-icon-button relative border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900" aria-label="Abrir notificações">
             <Bell className="h-5 w-5" />
             {!loading && notificationCount > 0 && (
               <span className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-xs font-bold text-white">{notificationCount}</span>
@@ -330,8 +332,11 @@ export function Header() {
           </AnimatePresence>
         </div>
         <div className="relative">
-          <button type="button" onClick={() => setShowProfileMenu((value) => !value)} className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50">
-            Perfil
+          <button type="button" onClick={() => setShowProfileMenu((value) => !value)} className="flex min-h-11 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
+            <span className="flex h-7 w-7 items-center justify-center overflow-hidden rounded-full bg-slate-100 text-xs font-semibold dark:bg-slate-800">
+              {avatarUrl ? <img src={avatarUrl} alt="" className="h-full w-full object-cover" /> : displayInitial}
+            </span>
+            <span className="max-w-36 truncate">{displayName}</span>
             <ChevronDown className="h-4 w-4" />
           </button>
           <AnimatePresence>
@@ -344,7 +349,8 @@ export function Header() {
             )}
           </AnimatePresence>
         </div>
-      </div>
+        </div>
+      </header>
     </>
   );
 }

@@ -71,6 +71,7 @@ ehthumbs.db
 *.temp
 temp/
 tmp/
+.codex-run/
 test-*.html
 debug-*.js
 debug-*.html

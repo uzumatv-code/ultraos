@@ -415,7 +415,7 @@ export function Ordens() {
   }
 
   return (
-    <div className="min-h-screen overflow-x-hidden bg-gradient-to-br from-indigo-50/50 via-purple-50/30 to-violet-50/50 dark:from-transparent dark:via-transparent dark:to-transparent">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
       <div className="responsive-page">
         <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <motion.div 
@@ -429,7 +429,7 @@ export function Ordens() {
             >
               <Tool className="w-6 h-6 text-white" />
             </motion.div>
-            <h1 className="responsive-heading bg-gradient-to-r from-indigo-600 to-violet-600 dark:from-indigo-400 dark:to-violet-400 bg-clip-text text-transparent">
+            <h1 className="responsive-heading text-slate-950 dark:text-white">
               Ordens de Serviço
             </h1>
           </motion.div>

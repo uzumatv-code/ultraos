@@ -154,8 +154,15 @@ export function Dashboard() {
   };
 
   return (
-      <main className="responsive-page overflow-x-hidden">
-        {/* Cards de Estatísticas com design aprimorado */}
+      <main className="responsive-page">
+        <header className="mb-6">
+          <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Visão operacional</p>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl dark:text-white">Painel</h1>
+          <p className="mt-1 max-w-2xl text-sm text-slate-600 dark:text-slate-400">
+            Acompanhe clientes, ordens, faturamento e a agenda de entregas.
+          </p>
+        </header>
+        {/* Cards de Estatísticas */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 lg:gap-6 mb-6 sm:mb-8">
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -181,9 +188,7 @@ export function Dashboard() {
                 </p>
               </div>
               <motion.div 
-                className="w-12 h-12 sm:w-14 sm:h-14 shrink-0 bg-gradient-to-br from-purple-100 to-purple-200 dark:from-purple-900/40 dark:to-purple-800/40 rounded-xl sm:rounded-2xl flex items-center justify-center shadow-lg group-hover:shadow-neon transition-all"
-                whileHover={{ rotate: 360, scale: 1.1 }}
-                transition={{ duration: 0.5 }}
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-violet-50 sm:h-12 sm:w-12 dark:bg-violet-950/40"
               >
                 <Users className="w-7 h-7 text-purple-600 dark:text-purple-400" />
               </motion.div>
@@ -214,9 +219,7 @@ export function Dashboard() {
                 </p>
               </div>
               <motion.div 
-                className="w-12 h-12 sm:w-14 sm:h-14 shrink-0 bg-gradient-to-br from-blue-100 to-blue-200 dark:from-blue-900/40 dark:to-blue-800/40 rounded-xl sm:rounded-2xl flex items-center justify-center shadow-lg group-hover:shadow-neon transition-all"
-                whileHover={{ rotate: 360, scale: 1.1 }}
-                transition={{ duration: 0.5 }}
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-blue-50 sm:h-12 sm:w-12 dark:bg-blue-950/40"
               >
                 <Tool className="w-7 h-7 text-blue-600 dark:text-blue-400" />
               </motion.div>
@@ -247,9 +250,7 @@ export function Dashboard() {
                 </p>
               </div>
               <motion.div 
-                className="w-12 h-12 sm:w-14 sm:h-14 shrink-0 bg-gradient-to-br from-green-100 to-green-200 dark:from-green-900/40 dark:to-green-800/40 rounded-xl sm:rounded-2xl flex items-center justify-center shadow-lg group-hover:shadow-neon transition-all"
-                whileHover={{ rotate: 360, scale: 1.1 }}
-                transition={{ duration: 0.5 }}
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-emerald-50 sm:h-12 sm:w-12 dark:bg-emerald-950/40"
               >
                 <CheckCircle className="w-7 h-7 text-green-600 dark:text-green-400" />
               </motion.div>
@@ -283,10 +284,8 @@ export function Dashboard() {
                 </p>
               </div>
               <motion.button
-                className="w-12 h-12 sm:w-14 sm:h-14 shrink-0 bg-gradient-to-br from-yellow-100 to-yellow-200 dark:from-yellow-900/40 dark:to-yellow-800/40 rounded-xl sm:rounded-2xl flex items-center justify-center shadow-lg hover:shadow-neon transition-all"
-                whileHover={{ rotate: 360, scale: 1.1 }}
-                whileTap={{ scale: 0.95 }}
-                transition={{ duration: 0.5 }}
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-amber-50 transition-colors hover:bg-amber-100 sm:h-12 sm:w-12 dark:bg-amber-950/40 dark:hover:bg-amber-950/60"
+                whileTap={{ scale: 0.97 }}
               >
                 <DollarSign className="w-7 h-7 text-yellow-600 dark:text-yellow-400" />
               </motion.button>
@@ -304,7 +303,7 @@ export function Dashboard() {
           transition={{ delay: 0.5 }}
           className="mt-8"
         >
-          <div className="glass dark:glass-dark rounded-xl sm:rounded-3xl p-4 sm:p-6 shadow-glass">
+          <div className="glass dark:glass-dark rounded-xl p-4 sm:p-6">
             <div className="flex flex-col items-stretch justify-between gap-4 mb-6 sm:flex-row sm:items-center">
               <div className="flex min-w-0 items-center gap-3">
                 <div className="w-12 h-12 rounded-xl gradient-primary flex items-center justify-center shadow-md">

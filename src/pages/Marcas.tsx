@@ -73,7 +73,7 @@ export function Marcas() {
 
   return (
     <>
-      <div className="min-h-screen overflow-x-hidden bg-gradient-to-br from-purple-50/50 via-blue-50/30 to-indigo-50/50 dark:from-transparent dark:via-transparent dark:to-transparent">
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
         <div className="responsive-page">
           <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <motion.div 
@@ -87,7 +87,7 @@ export function Marcas() {
               >
                 <Bookmark className="w-6 h-6 text-white" />
               </motion.div>
-              <h1 className="responsive-heading bg-gradient-to-r from-orange-600 to-pink-600 dark:from-orange-400 dark:to-pink-400 bg-clip-text text-transparent">
+              <h1 className="responsive-heading text-slate-950 dark:text-white">
                 Marcas
               </h1>
             </motion.div>
