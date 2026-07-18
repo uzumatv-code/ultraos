@@ -399,6 +399,20 @@ async function normalizeRows(table, rows, select, accountId) {
   return out;
 }
 
+async function removeOrphanedReceivables(conn, userId) {
+  const [result] = await conn.query(
+    `DELETE cr
+       FROM contas_receber cr
+       LEFT JOIN ordens_servico o
+         ON o.id = cr.ordem_servico_id AND o.user_id = cr.user_id
+      WHERE cr.user_id = ?
+        AND cr.ordem_servico_id IS NOT NULL
+        AND o.id IS NULL`,
+    [userId],
+  );
+  return Number(result.affectedRows || 0);
+}
+
 function normalizeRow(table, row) {
   const copy = { ...row };
 
@@ -805,6 +819,12 @@ app.post('/api/query', requireAuth, async (req, res) => {
     }
 
     if (action === 'select') {
+      // Remove registros legados deixados por exclusoes de OS anteriores a
+      // sincronizacao transacional implementada abaixo.
+      if (physicalTable === 'contas_receber') {
+        await removeOrphanedReceivables(pool, req.user.id);
+      }
+
       const where = [];
       const params = [];
       // O tenant sempre vem da sessao. Ignorar user_id enviado pelo cliente evita
@@ -909,7 +929,34 @@ app.post('/api/query', requireAuth, async (req, res) => {
       if (!where.length) return res.status(400).json({ error: { message: 'Filtro obrigatorio para alteracao' } });
 
       if (action === 'delete') {
-        const [result] = await pool.query(`DELETE FROM \`${physicalTable}\` WHERE ${where.join(' AND ')}`, params);
+        let result;
+        if (physicalTable === 'ordens_servico') {
+          const conn = await pool.getConnection();
+          try {
+            await conn.beginTransaction();
+            const [orders] = await conn.query(
+              `SELECT id FROM \`${physicalTable}\` WHERE ${where.join(' AND ')} FOR UPDATE`,
+              params,
+            );
+            const orderIds = orders.map((order) => order.id);
+            if (orderIds.length) {
+              await conn.query(
+                `DELETE FROM contas_receber
+                  WHERE user_id = ? AND ordem_servico_id IN (${orderIds.map(() => '?').join(',')})`,
+                [req.user.id, ...orderIds],
+              );
+            }
+            [result] = await conn.query(`DELETE FROM \`${physicalTable}\` WHERE ${where.join(' AND ')}`, params);
+            await conn.commit();
+          } catch (error) {
+            await conn.rollback();
+            throw error;
+          } finally {
+            conn.release();
+          }
+        } else {
+          [result] = await pool.query(`DELETE FROM \`${physicalTable}\` WHERE ${where.join(' AND ')}`, params);
+        }
         await writeAudit(req, { action: 'registro.excluir', resource: physicalTable, details: { filters, affected: Number(result.affectedRows || 0) } });
         return res.json({ data: null, count: Number(result.affectedRows || 0), error: null });
       }
