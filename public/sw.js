@@ -1,4 +1,4 @@
-const CACHE_NAME = 'sistema-os-v5';
+const CACHE_NAME = 'sistema-os-v6';
 const APP_SHELL = ['/index.html', '/manifest.json', '/icon-192.svg'];
 const NETWORK_FIRST_TYPES = new Set(['document', 'script', 'style', 'worker']);
 
@@ -54,7 +54,7 @@ async function networkFirst(request, fallbackUrl) {
   } catch {
     return (await caches.match(request))
       || (fallbackUrl ? await caches.match(fallbackUrl) : null)
-      || new Response('Offline', { status: 503 });
+      || Response.error();
   }
 }
 
@@ -70,7 +70,7 @@ async function cacheFirst(request) {
     }
     return response;
   } catch {
-    return cached || new Response('Offline', { status: 503, statusText: 'Offline' });
+    return cached || Response.error();
   }
 }
 

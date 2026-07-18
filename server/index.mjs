@@ -33,6 +33,7 @@ const uploadsDir = path.join(rootDir, 'uploads');
 const EVALUATION_JOB_ENABLED = process.env.EVALUATION_JOB_ENABLED !== 'false';
 const EVALUATION_JOB_INTERVAL_MS = Number(process.env.EVALUATION_JOB_INTERVAL_MS || 60_000);
 const EVALUATION_TIMEZONE = process.env.EVALUATION_TIMEZONE || 'America/Sao_Paulo';
+const DB_CONNECT_TIMEOUT_MS = Math.max(5_000, Number(process.env.DB_CONNECT_TIMEOUT_MS || 20_000));
 const EVALUATION_DEFAULTS = {
   enabled: true,
   daysAfterCompletion: 7,
@@ -92,6 +93,9 @@ const pool = mysql.createPool({
   uri: DATABASE_URL,
   waitForConnections: true,
   connectionLimit: Number(process.env.DB_CONNECTION_LIMIT || 10),
+  connectTimeout: DB_CONNECT_TIMEOUT_MS,
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 0,
   decimalNumbers: true,
   timezone: 'Z',
 });
@@ -3609,8 +3613,22 @@ if (fs.existsSync(distDir)) {
   });
 }
 
-app.listen(PORT, HOST, () => {
-  console.log(`Sistema OS API rodando em ${HOST}:${PORT}`);
-  startWhatsAppReconciliationJob();
-  startEvaluationBackendJob();
-});
+async function startServer() {
+  const databaseWarmupStartedAt = Date.now();
+  try {
+    await pool.query('SELECT 1');
+    console.log(`[startup] MySQL pronto em ${Date.now() - databaseWarmupStartedAt}ms.`);
+  } catch (error) {
+    console.error('[startup] Nao foi possivel conectar ao MySQL:', error.code || error.message);
+    process.exitCode = 1;
+    return;
+  }
+
+  app.listen(PORT, HOST, () => {
+    console.log(`Sistema OS API rodando em ${HOST}:${PORT}`);
+    startWhatsAppReconciliationJob();
+    startEvaluationBackendJob();
+  });
+}
+
+void startServer();
