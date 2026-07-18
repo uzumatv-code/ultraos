@@ -31,6 +31,7 @@ import { toast } from '../components/ToastCustom';
 import { formatCurrency } from '../utils/formatters';
 import { addDaysToDateOnly, formatLocalDate, parseLocalDate, toDateOnly, todayLocalDate } from '../utils/dates';
 import { WhatsAppService } from '../utils/whatsapp-service';
+import { getUserObservations } from '../utils/template-service';
 import type { Cliente, Instrumento, Marca, OrdemServico, Problema, Servico } from '../types/database';
 
 type FormaPagamento = 'credito' | 'debito' | 'pix';
@@ -285,7 +286,7 @@ export function NovaOrdem() {
       setValorServicos(Number(data.valor_servicos || 0));
       setDesconto(Number(data.desconto || 0));
       setFormaPagamento(data.forma_pagamento || 'pix');
-      setObservacoes(data.observacoes || '');
+      setObservacoes(getUserObservations(data.observacoes));
       setDataPrevisao(data.data_previsao ? dateForDatabase(data.data_previsao) : '');
     } catch (error) {
       console.error('Erro ao carregar ordem:', error);
@@ -356,12 +357,6 @@ export function NovaOrdem() {
         numero = Number(nextNumber);
       }
 
-      const formattedObservations = `Problemas:
-${buildProblemsText() || 'Nenhum problema registrado.'}
-
-Solução / Serviços:
-${buildServicesText() || 'Nenhum serviço registrado.'}`;
-
       const ordemData = {
         ...(id && { id }),
         ...(!id && { numero, status: 'pendente' as const, data_entrada: todayForDatabase() }),
@@ -380,7 +375,7 @@ ${buildServicesText() || 'Nenhum serviço registrado.'}`;
         desconto: Number(desconto || 0),
         valor_total: total,
         forma_pagamento: formaPagamento,
-        observacoes: [observacoes?.trim(), formattedObservations].filter(Boolean).join('\n\n'),
+        observacoes: getUserObservations(observacoes),
         data_previsao: dateForDatabase(dataPrevisao),
         user_id: user.id,
       };

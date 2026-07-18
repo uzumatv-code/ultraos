@@ -60,15 +60,16 @@ function serviceDescription(data: Record<string, unknown>): string {
   return String(data.servico_descricao || data.servicos_necessarios || '').trim() || 'Diagnóstico e orçamento';
 }
 
-function cleanObservations(content: string, data: Record<string, unknown>): string {
-  let observations = String(data.observacoes || '').trim();
-  if (!observations) return '';
+export function getUserObservations(value: unknown): string {
+  return String(value || '')
+    .trim()
+    .replace(/(?:^|\r?\n)[\t ]*Problemas(?:\s+Reportados)?:[^\r\n]*(?:\r?\n[\s\S]*)?$/i, '')
+    .trim();
+}
 
-  // NovaOrdem persiste problemas/serviços também dentro de observações. Quando o
-  // template já possui essas variáveis, manter somente a observação escrita pelo usuário.
-  if (content.includes('{problemas}') || content.includes('{servicos}')) {
-    observations = observations.replace(/(?:^|\n\n)Problemas:\s*[\s\S]*$/i, '').trim();
-  }
+function cleanObservations(_content: string, data: Record<string, unknown>): string {
+  const observations = getUserObservations(data.observacoes);
+  if (!observations) return '';
   return observations ? `📝 Observações: ${observations}` : '';
 }
 
