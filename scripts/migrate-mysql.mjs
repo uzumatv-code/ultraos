@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import mysql from 'mysql2/promise';
+import { connectMysqlWithRetry } from './mysql-connection.mjs';
 
 const DATABASE_URL = process.env.DATABASE_URL || process.env.MYSQL_URL;
 
@@ -984,7 +984,7 @@ async function syncFinancialStatus(conn) {
   `, [nowSql()]));
 }
 
-const conn = await mysql.createConnection(DATABASE_URL);
+const conn = await connectMysqlWithRetry(DATABASE_URL);
 
 try {
   await conn.query('SET NAMES utf8mb4');
