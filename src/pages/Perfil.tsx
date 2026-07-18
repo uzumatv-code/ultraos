@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Moon, Sun, Bell, Mail, Key, UserPlus, ArrowLeft, Edit, Monitor, User, Building2 } from 'lucide-react';
+import { Bell, Mail, Key, UserPlus, ArrowLeft, Edit, User, Building2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { toast } from '../components/ToastCustom';
@@ -8,7 +8,6 @@ import { AlterarSenhaModal } from '../components/AlterarSenhaModal';
 import { NovoUsuarioModal } from '../components/NovoUsuarioModal';
 import { EditarPerfilModal } from '../components/EditarPerfilModal';
 import ConfiguracaoFiscalModal from '../components/ConfiguracaoFiscalModal';
-import { Theme, setTheme } from '../lib/theme';
 import { useAuth } from '../contexts/AuthContext';
 
 export function Perfil() {
@@ -23,12 +22,9 @@ export function Perfil() {
   const [email, setEmail] = useState('');
   const [notificacoesEmail, setNotificacoesEmail] = useState(true);
   const [notificacoesWhatsApp, setNotificacoesWhatsApp] = useState(true);
-  const [currentTheme, setCurrentTheme] = useState<Theme>('light');
 
   useEffect(() => {
     loadUserData();
-    const theme = localStorage.getItem('theme') as Theme || 'light';
-    setCurrentTheme(theme);
   }, []);
 
   async function loadUserData() {
@@ -41,11 +37,6 @@ export function Perfil() {
     } catch (error) {
       console.error('Erro ao carregar dados do usuário:', error);
     }
-  }
-
-  function handleThemeChange(theme: Theme) {
-    setTheme(theme);
-    setCurrentTheme(theme);
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -190,73 +181,6 @@ export function Perfil() {
                       Receber notificações por WhatsApp
                     </span>
                   </label>
-                </div>
-              </div>
-
-              <div>
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center space-x-2">
-                    <Monitor className="w-5 h-5 text-purple-600" />
-                    <h2 className="text-lg font-semibold text-gray-800 dark:text-white">
-                      Aparência
-                    </h2>
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <button
-                    type="button"
-                    onClick={() => handleThemeChange('light')}
-                    className={`w-full px-4 py-3 border rounded-lg transition-colors flex items-center justify-between ${
-                      currentTheme === 'light'
-                        ? 'bg-purple-50 border-purple-200 text-purple-700'
-                        : 'bg-white dark:bg-gray-700 border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-600'
-                    }`}
-                  >
-                    <div className="flex items-center space-x-2">
-                      <Sun className="w-5 h-5" />
-                      <span>Tema Claro</span>
-                    </div>
-                    {currentTheme === 'light' && (
-                      <div className="w-2 h-2 rounded-full bg-purple-500" />
-                    )}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => handleThemeChange('dark')}
-                    className={`w-full px-4 py-3 border rounded-lg transition-colors flex items-center justify-between ${
-                      currentTheme === 'dark'
-                        ? 'bg-purple-50 border-purple-200 text-purple-700'
-                        : 'bg-white dark:bg-gray-700 border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-600'
-                    }`}
-                  >
-                    <div className="flex items-center space-x-2">
-                      <Moon className="w-5 h-5" />
-                      <span>Tema Escuro</span>
-                    </div>
-                    {currentTheme === 'dark' && (
-                      <div className="w-2 h-2 rounded-full bg-purple-500" />
-                    )}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => handleThemeChange('dark-tech')}
-                    className={`w-full px-4 py-3 border rounded-lg transition-colors flex items-center justify-between ${
-                      currentTheme === 'dark-tech'
-                        ? 'bg-purple-50 border-purple-200 text-purple-700'
-                        : 'bg-white dark:bg-gray-700 border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-600'
-                    }`}
-                  >
-                    <div className="flex items-center space-x-2">
-                      <Monitor className="w-5 h-5" />
-                      <span>Dark Tech Theme</span>
-                    </div>
-                    {currentTheme === 'dark-tech' && (
-                      <div className="w-2 h-2 rounded-full bg-purple-500" />
-                    )}
-                  </button>
                 </div>
               </div>
 

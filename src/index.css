@@ -32,6 +32,79 @@ html.dark {
   --app-shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 12px 32px rgb(0 0 0 / 0.24);
 }
 
+html,
+body {
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+/*
+ * Compatibilidade para telas antigas que ainda usam cores claras fixas.
+ * Mantém modais, menus e formulários legíveis enquanto o tema é alternado.
+ */
+html.dark [class~='bg-white'] {
+  background-color: rgb(var(--app-surface));
+}
+
+html.dark [class~='bg-gray-50'],
+html.dark [class~='bg-gray-100'],
+html.dark [class~='bg-gray-200'] {
+  background-color: rgb(var(--app-surface-muted));
+}
+
+html.dark [class~='text-gray-950'],
+html.dark [class~='text-gray-900'],
+html.dark [class~='text-gray-800'],
+html.dark [class~='text-gray-700'] {
+  color: rgb(var(--app-text));
+}
+
+html.dark [class~='text-gray-600'],
+html.dark [class~='text-gray-500'],
+html.dark [class~='text-gray-400'] {
+  color: rgb(var(--app-text-muted));
+}
+
+html.dark [class~='border-gray-100'],
+html.dark [class~='border-gray-200'],
+html.dark [class~='border-gray-300'] {
+  border-color: rgb(var(--app-border));
+}
+
+html.dark [class~='bg-purple-50'] {
+  background-color: rgb(76 29 149 / 0.24);
+}
+
+html.dark [class~='border-purple-200'],
+html.dark [class~='border-purple-300'] {
+  border-color: rgb(139 92 246 / 0.45);
+}
+
+html.dark [class~='text-purple-700'],
+html.dark [class~='text-purple-800'] {
+  color: rgb(196 181 253);
+}
+
+html.dark :where(input, select, textarea):not([type='checkbox']):not([type='radio']) {
+  border-color: rgb(var(--app-border));
+  background-color: rgb(9 14 25);
+  color: rgb(var(--app-text));
+}
+
+html.dark :where(input, textarea)::placeholder {
+  color: rgb(var(--app-text-muted));
+}
+
+html.dark option {
+  background-color: rgb(var(--app-surface));
+  color: rgb(var(--app-text));
+}
+
+html.dark [class~='hover:bg-gray-50']:hover,
+html.dark [class~='hover:bg-gray-100']:hover,
+html.dark [class~='hover:bg-gray-200']:hover {
+  background-color: rgb(51 65 85);
+}
+
 @layer base {
   html {
     min-height: 100%;

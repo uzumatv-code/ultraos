@@ -26,6 +26,7 @@ import { toast } from './ToastCustom';
 import { addDaysToDateOnly, todayLocalDate } from '../utils/dates';
 import type { ContaPagar, OrdemServico } from '../types/database';
 import { Permission, useAuth } from '../contexts/AuthContext';
+import { ThemeToggle } from './ThemeToggle';
 
 const mainItems: Array<{ path: string; icon: typeof Home; label: string; permission?: Permission }> = [
   { path: '/dashboard', icon: Home, label: 'Dashboard' },
@@ -289,6 +290,8 @@ export function Header() {
             </div>
             <span className="truncate text-sm font-semibold text-gray-950">{siteTitle}</span>
           </div>
+          <div className="flex items-center gap-1">
+            <ThemeToggle />
           <div className="relative">
             <button type="button" onClick={() => setShowNotifications((value) => !value)} className="app-icon-button relative" aria-label="Abrir notificações">
               <Bell className="h-5 w-5" />
@@ -303,6 +306,7 @@ export function Header() {
                 </motion.div>
               )}
             </AnimatePresence>
+          </div>
           </div>
         </div>
       </header>
@@ -324,6 +328,7 @@ export function Header() {
       <header className="fixed left-64 right-0 top-0 z-30 hidden h-16 items-center justify-between border-b border-slate-200 bg-white/95 px-6 backdrop-blur lg:flex dark:border-slate-800 dark:bg-slate-950/95">
         <p className="truncate text-sm font-semibold text-slate-900 dark:text-white">{siteTitle}</p>
         <div className="flex items-center gap-2">
+        <ThemeToggle />
         <div className="relative">
           <button type="button" onClick={() => setShowNotifications((value) => !value)} className="app-icon-button relative border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900" aria-label="Abrir notificações">
             <Bell className="h-5 w-5" />

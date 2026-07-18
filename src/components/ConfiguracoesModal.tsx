@@ -12,7 +12,6 @@ export function ConfiguracoesModal({ isOpen, onClose }: ConfiguracoesModalProps)
   const [loading, setLoading] = useState(false);
   const [notificacoesEmail, setNotificacoesEmail] = useState(true);
   const [notificacoesWhatsApp, setNotificacoesWhatsApp] = useState(true);
-  const [temaEscuro, setTemaEscuro] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -81,23 +80,6 @@ export function ConfiguracoesModal({ isOpen, onClose }: ConfiguracoesModalProps)
                       />
                       <span className="ml-2 text-sm text-gray-700">
                         Receber notificações por WhatsApp
-                      </span>
-                    </label>
-                  </div>
-                </div>
-
-                <div className="space-y-4">
-                  <h3 className="text-sm font-medium text-gray-700">Aparência</h3>
-                  <div className="space-y-2">
-                    <label className="flex items-center">
-                      <input
-                        type="checkbox"
-                        checked={temaEscuro}
-                        onChange={(e) => setTemaEscuro(e.target.checked)}
-                        className="w-4 h-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"
-                      />
-                      <span className="ml-2 text-sm text-gray-700">
-                        Tema escuro
                       </span>
                     </label>
                   </div>
