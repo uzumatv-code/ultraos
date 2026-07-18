@@ -23,6 +23,9 @@ const APP_URL = String(process.env.APP_URL || '').replace(/\/$/, '');
 const GMAIL_USER = process.env.GMAIL_USER;
 const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD;
 const MAIL_FROM = process.env.MAIL_FROM || GMAIL_USER;
+const EVOLUTION_API_URL = String(process.env.EVOLUTION_API_URL || '').replace(/\/$/, '');
+const EVOLUTION_API_KEY = process.env.EVOLUTION_API_KEY || '';
+const EVOLUTION_WEBHOOK_SECRET = process.env.EVOLUTION_WEBHOOK_SECRET || '';
 const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000;
 const uploadsDir = path.join(rootDir, 'uploads');
 const EVALUATION_JOB_ENABLED = process.env.EVALUATION_JOB_ENABLED !== 'false';
@@ -258,6 +261,19 @@ function encryptSecret(value) {
   return `enc:v1:${Buffer.concat([iv, tag, encrypted]).toString('base64')}`;
 }
 
+function decryptSecret(value) {
+  const text = String(value || '');
+  if (!text.startsWith('enc:v1:')) return text;
+
+  const payload = Buffer.from(text.slice(7), 'base64');
+  const iv = payload.subarray(0, 12);
+  const tag = payload.subarray(12, 28);
+  const encrypted = payload.subarray(28);
+  const decipher = crypto.createDecipheriv('aes-256-gcm', encryptionKey(), iv);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
+}
+
 function resolveUploadPath(bucket, filePath) {
   const safeBucket = String(bucket || '').replace(/[^a-zA-Z0-9_-]/g, '');
   const cleanPath = String(filePath || '').replace(/^[/\\]+/, '');
@@ -382,6 +398,10 @@ async function filterDataToColumns(table, data) {
       mappedValue = encryptSecret(mappedValue);
     }
 
+    if (table === 'configuracoes_whatsapp' && ['api_key', 'webhook_url', 'instance_name'].includes(mappedKey)) {
+      continue;
+    }
+
     if (!cols.has(mappedKey)) continue;
     if (Array.isArray(mappedValue) || (mappedValue && typeof mappedValue === 'object' && !(mappedValue instanceof Date))) {
       mappedValue = JSON.stringify(mappedValue);
@@ -429,6 +449,13 @@ function normalizeRow(table, row) {
     copy.template_name = copy.template_name || copy.nome || copy.tipo;
     copy.variables = copy.variables || [];
     copy.is_active = Boolean(copy.ativo);
+  }
+
+
+  if (table === 'configuracoes_whatsapp') {
+    delete copy.api_key;
+    delete copy.webhook_url;
+    delete copy.instance_name;
   }
 
   return copy;
@@ -742,6 +769,240 @@ app.patch('/api/admin/usuarios/:id', requireAuth, requireAdmin, async (req, res)
     res.json({ data: { id: targetId, updated: true } });
   } catch (error) {
     res.status(500).json({ error: { message: error.message } });
+  }
+});
+
+function requireEvolutionConfig() {
+  if (!EVOLUTION_API_URL || !EVOLUTION_API_KEY || !EVOLUTION_WEBHOOK_SECRET || !APP_URL) {
+    throw new Error('Integração WhatsApp gerenciada ainda não foi configurada no servidor');
+  }
+}
+
+function managedInstanceName(accountId) {
+  return `ultraos_${String(accountId).replace(/[^a-zA-Z0-9]/g, '').slice(0, 32)}`;
+}
+
+async function evolutionRequest(pathname, { method = 'GET', body } = {}) {
+  requireEvolutionConfig();
+  const response = await fetch(`${EVOLUTION_API_URL}${pathname}`, {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: EVOLUTION_API_KEY,
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const responseText = await response.text();
+  let data = null;
+  try { data = responseText ? JSON.parse(responseText) : null; } catch { data = responseText; }
+  if (!response.ok) {
+    const error = new Error(`Evolution API HTTP ${response.status}`);
+    error.status = response.status;
+    error.details = data;
+    throw error;
+  }
+  return data;
+}
+
+function connectionStateFromPayload(payload) {
+  return payload?.instance?.state || payload?.instance?.status || payload?.state || payload?.status || 'desconectado';
+}
+
+function publicConnectionStatus(state) {
+  if (state === 'open' || state === 'connected') return 'conectado';
+  if (state === 'connecting') return 'conectando';
+  if (state === 'created') return 'aguardando_qr';
+  if (state === 'close' || state === 'closed' || state === 'disconnected') return 'desconectado';
+  return state || 'nao_configurado';
+}
+
+function qrFromPayload(payload) {
+  const qr = payload?.qrcode || payload?.qr || payload || {};
+  let base64 = qr.base64 || payload?.base64 || null;
+  if (base64 && !String(base64).startsWith('data:')) base64 = `data:image/png;base64,${base64}`;
+  return {
+    base64,
+    code: qr.code || payload?.code || null,
+    pairingCode: qr.pairingCode || payload?.pairingCode || null,
+  };
+}
+
+async function managedWhatsAppRow(userId) {
+  const [rows] = await pool.query(
+    `SELECT id, user_id, instance_name, status, phone_number, profile_name, profile_picture_url,
+            connected_at, disconnected_at, last_event_at, last_error, created_at, updated_at
+       FROM configuracoes_whatsapp WHERE user_id = ? LIMIT 1`,
+    [userId],
+  );
+  return rows[0] || null;
+}
+
+async function saveManagedWhatsApp(userId, values = {}) {
+  const current = await managedWhatsAppRow(userId);
+  const data = {
+    id: current?.id || uuid(),
+    user_id: userId,
+    method: 'webhook',
+    provider: 'evolution',
+    instance_name: current?.instance_name || managedInstanceName(userId),
+    created_at: current?.created_at || now(),
+    updated_at: now(),
+    ...values,
+  };
+  const keys = Object.keys(data);
+  const updates = keys
+    .filter((key) => !['id', 'user_id', 'created_at'].includes(key))
+    .map((key) => `\`${key}\` = VALUES(\`${key}\`)`)
+    .join(', ');
+  await pool.query(
+    `INSERT INTO configuracoes_whatsapp (${keys.map((key) => `\`${key}\``).join(', ')})
+     VALUES (${keys.map(() => '?').join(', ')})
+     ON DUPLICATE KEY UPDATE ${updates}`,
+    Object.values(data),
+  );
+  return managedWhatsAppRow(userId);
+}
+
+function evolutionWebhookUrl() {
+  return `${APP_URL}/api/webhooks/evolution/${encodeURIComponent(EVOLUTION_WEBHOOK_SECRET)}`;
+}
+
+async function configureEvolutionWebhook(instanceName) {
+  const webhook = {
+    enabled: true,
+    url: evolutionWebhookUrl(),
+    webhookByEvents: false,
+    webhookBase64: true,
+    events: ['QRCODE_UPDATED', 'CONNECTION_UPDATE', 'MESSAGES_UPSERT', 'SEND_MESSAGE'],
+  };
+  try {
+    return await evolutionRequest(`/webhook/set/${encodeURIComponent(instanceName)}`, { method: 'POST', body: webhook });
+  } catch (error) {
+    if (error.status !== 400 && error.status !== 422) throw error;
+    return evolutionRequest(`/webhook/set/${encodeURIComponent(instanceName)}`, { method: 'POST', body: { webhook } });
+  }
+}
+
+async function liveEvolutionState(instanceName) {
+  try {
+    const payload = await evolutionRequest(`/instance/connectionState/${encodeURIComponent(instanceName)}`);
+    return { exists: true, state: publicConnectionStatus(connectionStateFromPayload(payload)), payload };
+  } catch (error) {
+    if (error.status === 404) return { exists: false, state: 'nao_configurado', payload: null };
+    throw error;
+  }
+}
+
+async function evolutionInstanceProfile(instanceName) {
+  try {
+    const payload = await evolutionRequest(`/instance/fetchInstances?instanceName=${encodeURIComponent(instanceName)}`);
+    const item = Array.isArray(payload) ? payload[0] : payload;
+    const instance = item?.instance || item || {};
+    return {
+      phone_number: String(instance.ownerJid || item?.ownerJid || '').split('@')[0] || null,
+      profile_name: instance.profileName || item?.profileName || null,
+      profile_picture_url: instance.profilePicUrl || item?.profilePicUrl || null,
+    };
+  } catch {
+    return { phone_number: null, profile_name: null, profile_picture_url: null };
+  }
+}
+
+app.get('/api/whatsapp/connection', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    requireEvolutionConfig();
+    let row = await managedWhatsAppRow(req.auth.accountId);
+    if (!row?.instance_name) return res.json({ data: { status: 'nao_configurado' } });
+
+    const live = await liveEvolutionState(row.instance_name);
+    const status = live.state;
+    const profile = status === 'conectado' ? await evolutionInstanceProfile(row.instance_name) : {};
+    if (status !== row.status || (status === 'conectado' && !row.phone_number)) {
+      row = await saveManagedWhatsApp(req.auth.accountId, {
+        status,
+        ...profile,
+        connected_at: status === 'conectado' ? row.connected_at || now() : row.connected_at,
+        disconnected_at: status === 'desconectado' ? now() : row.disconnected_at,
+        last_event_at: now(),
+        last_error: null,
+      });
+    }
+    return res.json({ data: { ...row, status, instance_name: undefined } });
+  } catch (error) {
+    return res.status(502).json({ error: { message: error.message } });
+  }
+});
+
+app.post('/api/whatsapp/connection', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    requireEvolutionConfig();
+    let row = await saveManagedWhatsApp(req.auth.accountId, { status: 'criando', last_error: null });
+    const instanceName = row.instance_name;
+    let live = await liveEvolutionState(instanceName);
+    let payload = null;
+
+    if (!live.exists) {
+      payload = await evolutionRequest('/instance/create', {
+        method: 'POST',
+        body: {
+          instanceName,
+          integration: 'WHATSAPP-BAILEYS',
+          qrcode: true,
+          rejectCall: true,
+          msgCall: 'Chamadas não são atendidas por este número. Envie uma mensagem.',
+          groupsIgnore: true,
+          alwaysOnline: false,
+          readMessages: false,
+          readStatus: false,
+          syncFullHistory: false,
+        },
+      });
+      live = { exists: true, state: 'aguardando_qr' };
+    }
+
+    await configureEvolutionWebhook(instanceName);
+    let qr = qrFromPayload(payload);
+    if (live.state !== 'conectado' && !qr.base64) {
+      payload = await evolutionRequest(`/instance/connect/${encodeURIComponent(instanceName)}`);
+      qr = qrFromPayload(payload);
+    }
+
+    const status = live.state === 'conectado' ? 'conectado' : 'aguardando_qr';
+    const profile = status === 'conectado' ? await evolutionInstanceProfile(instanceName) : {};
+    row = await saveManagedWhatsApp(req.auth.accountId, {
+      status,
+      ...profile,
+      connected_at: status === 'conectado' ? row.connected_at || now() : row.connected_at,
+      last_event_at: now(),
+      last_error: null,
+    });
+    await writeAudit(req, { action: 'whatsapp.conectar', resource: 'configuracoes_whatsapp', resourceId: row.id, details: { status } });
+    return res.json({ data: { ...row, instance_name: undefined, qr } });
+  } catch (error) {
+    await saveManagedWhatsApp(req.auth.accountId, { status: 'erro', last_error: error.message }).catch(() => {});
+    return res.status(502).json({ error: { message: error.message, details: error.details } });
+  }
+});
+
+app.delete('/api/whatsapp/connection', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const row = await managedWhatsAppRow(req.auth.accountId);
+    if (!row?.instance_name) return res.json({ data: { status: 'nao_configurado' } });
+    try {
+      await evolutionRequest(`/instance/logout/${encodeURIComponent(row.instance_name)}`, { method: 'DELETE' });
+    } catch (error) {
+      if (error.status !== 400 && error.status !== 404) throw error;
+    }
+    const updated = await saveManagedWhatsApp(req.auth.accountId, {
+      status: 'desconectado',
+      disconnected_at: now(),
+      last_event_at: now(),
+      last_error: null,
+    });
+    await writeAudit(req, { action: 'whatsapp.desconectar', resource: 'configuracoes_whatsapp', resourceId: updated.id });
+    return res.json({ data: { status: 'desconectado' } });
+  } catch (error) {
+    return res.status(502).json({ error: { message: error.message } });
   }
 });
 
@@ -2540,7 +2801,7 @@ app.post('/api/financeiro/contas-pagar/:id/pagar', requireAuth, requireAdmin, as
   }
 });
 
-app.post('/api/financeiro/ia/webhook', async (req, res) => {
+async function handleFinancialAiWebhook(req, res) {
   const webhookMessage = extractEvolutionWebhookMessage(req.body);
   const phone = webhookMessage.phone;
   let message = webhookMessage.text;
@@ -2580,7 +2841,7 @@ app.post('/api/financeiro/ia/webhook', async (req, res) => {
     const authorized = authorizedRows[0];
     if (!authorized) {
       await logFinancialAi({ user_id: 'unauthorized', telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, status: 'bloqueado', erro: 'Numero nao autorizado' }).catch(() => {});
-      return res.status(403).json({ reply: 'Numero nao autorizado para usar a IA do sistema.' });
+      return res.json({ ignored: true, reason: 'Numero nao autorizado para usar a IA do sistema' });
     }
 
     if (!message && audioUrl) message = await transcribeAudioFromUrl(audioUrl);
@@ -2662,7 +2923,56 @@ app.post('/api/financeiro/ia/webhook', async (req, res) => {
   } catch (error) {
     res.status(400).json({ reply: `Erro: ${error.message}`, error: { message: error.message } });
   }
-});
+}
+
+function safeSecretMatch(received, expected) {
+  const left = Buffer.from(String(received || ''));
+  const right = Buffer.from(String(expected || ''));
+  return left.length === right.length && left.length > 0 && crypto.timingSafeEqual(left, right);
+}
+
+async function handleEvolutionWebhook(req, res) {
+  if (!safeSecretMatch(req.params.secret, EVOLUTION_WEBHOOK_SECRET)) {
+    return res.status(401).json({ error: { message: 'Webhook não autorizado' } });
+  }
+
+  const instanceName = req.body?.instance || req.body?.data?.instance || req.body?.instanceName || null;
+  if (!instanceName) return res.status(400).json({ error: { message: 'Instância ausente no webhook' } });
+
+  const [rows] = await pool.query(
+    'SELECT * FROM configuracoes_whatsapp WHERE instance_name = ? LIMIT 1',
+    [instanceName],
+  );
+  const config = rows[0];
+  if (!config) return res.status(404).json({ error: { message: 'Instância não vinculada ao UltraOS' } });
+
+  const event = String(req.body?.event || '').replaceAll('.', '_').replaceAll('-', '_').toUpperCase();
+  if (event === 'CONNECTION_UPDATE') {
+    const rawState = req.body?.data?.state || req.body?.state || connectionStateFromPayload(req.body);
+    const status = publicConnectionStatus(rawState);
+    const phoneNumber = String(req.body?.data?.wuid || req.body?.data?.number || '').split('@')[0] || config.phone_number;
+    await saveManagedWhatsApp(config.user_id, {
+      status,
+      phone_number: phoneNumber || null,
+      connected_at: status === 'conectado' ? config.connected_at || now() : config.connected_at,
+      disconnected_at: status === 'desconectado' ? now() : config.disconnected_at,
+      last_event_at: now(),
+      last_error: null,
+    });
+    return res.json({ received: true, status });
+  }
+
+  if (event === 'QRCODE_UPDATED') {
+    await saveManagedWhatsApp(config.user_id, { status: 'aguardando_qr', last_event_at: now(), last_error: null });
+    return res.json({ received: true, status: 'aguardando_qr' });
+  }
+
+  if (event === 'MESSAGES_UPSERT') return handleFinancialAiWebhook(req, res);
+  return res.json({ received: true, event });
+}
+
+app.post('/api/financeiro/ia/webhook', handleFinancialAiWebhook);
+app.post('/api/webhooks/evolution/:secret', handleEvolutionWebhook);
 
 let evaluationJobRunning = false;
 
@@ -2775,7 +3085,12 @@ async function loadWhatsAppConfig(userId) {
     'SELECT method, webhook_url, api_key, instance_name FROM configuracoes_whatsapp WHERE user_id = ? LIMIT 1',
     [userId],
   );
-  return rows[0] || null;
+  const row = rows[0] || null;
+  if (!row) return null;
+  if (EVOLUTION_API_URL && EVOLUTION_API_KEY && row.instance_name) {
+    return { ...row, method: 'webhook', webhook_url: EVOLUTION_API_URL, api_key: EVOLUTION_API_KEY };
+  }
+  return { ...row, api_key: decryptSecret(row.api_key) };
 }
 
 async function reserveEvaluationProcessing(userId, today) {
