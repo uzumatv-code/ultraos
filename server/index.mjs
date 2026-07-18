@@ -33,6 +33,8 @@ const uploadsDir = path.join(rootDir, 'uploads');
 const EVALUATION_JOB_ENABLED = process.env.EVALUATION_JOB_ENABLED !== 'false';
 const EVALUATION_JOB_INTERVAL_MS = Number(process.env.EVALUATION_JOB_INTERVAL_MS || 60_000);
 const EVALUATION_TIMEZONE = process.env.EVALUATION_TIMEZONE || 'America/Sao_Paulo';
+const DB_CONNECT_TIMEOUT_MS = Math.max(2_000, Number(process.env.DB_CONNECT_TIMEOUT_MS || 5_000));
+const DB_AUTH_QUERY_TIMEOUT_MS = Math.max(2_000, Number(process.env.DB_AUTH_QUERY_TIMEOUT_MS || 5_000));
 const EVALUATION_DEFAULTS = {
   enabled: true,
   daysAfterCompletion: 7,
@@ -92,6 +94,9 @@ const pool = mysql.createPool({
   uri: DATABASE_URL,
   waitForConnections: true,
   connectionLimit: Number(process.env.DB_CONNECTION_LIMIT || 10),
+  connectTimeout: DB_CONNECT_TIMEOUT_MS,
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 0,
   decimalNumbers: true,
   timezone: 'Z',
 });
@@ -529,12 +534,18 @@ async function requireAuth(req, res, next) {
 }
 
 async function findUserByEmail(email) {
-  const [rows] = await pool.query('SELECT * FROM `usuarios` WHERE email = ? LIMIT 1', [email]);
+  const [rows] = await pool.query({
+    sql: 'SELECT * FROM `usuarios` WHERE email = ? LIMIT 1',
+    timeout: DB_AUTH_QUERY_TIMEOUT_MS,
+  }, [email]);
   return rows[0] || null;
 }
 
 async function findUserById(id) {
-  const [rows] = await pool.query('SELECT * FROM `usuarios` WHERE id = ? LIMIT 1', [id]);
+  const [rows] = await pool.query({
+    sql: 'SELECT * FROM `usuarios` WHERE id = ? LIMIT 1',
+    timeout: DB_AUTH_QUERY_TIMEOUT_MS,
+  }, [id]);
   return rows[0] || null;
 }
 
@@ -553,11 +564,18 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ error: { message: 'Invalid login credentials' } });
     }
 
-    await pool.query('UPDATE `usuarios` SET ultimo_login = ? WHERE id = ?', [new Date(), user.id]);
+    await pool.query({
+      sql: 'UPDATE `usuarios` SET ultimo_login = ? WHERE id = ?',
+      timeout: DB_AUTH_QUERY_TIMEOUT_MS,
+    }, [new Date(), user.id]);
     const token = signUser(user);
     res.json({ session: { access_token: token, token_type: 'bearer', user: publicUser(user) }, user: publicUser(user) });
   } catch (error) {
-    res.status(500).json({ error: { message: error.message } });
+    console.error('Falha no login:', error.code || error.message);
+    const unavailable = ['ETIMEDOUT', 'ER_NET_READ_INTERRUPTED', 'PROTOCOL_SEQUENCE_TIMEOUT', 'ECONNREFUSED'].includes(error.code);
+    res.status(unavailable ? 503 : 500).json({
+      error: { message: unavailable ? 'Banco de dados temporariamente indisponível. Tente novamente em alguns segundos.' : 'Não foi possível concluir o login.' },
+    });
   }
 });
 

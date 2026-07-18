@@ -2,6 +2,8 @@ import { toast } from '../components/ToastCustom';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 const STORAGE_KEY = 'mysql-auth-session';
+const API_REQUEST_TIMEOUT_MS = 12_000;
+const AUTH_REQUEST_TIMEOUT_MS = 8_000;
 
 type QueryFilter = {
   column: string;
@@ -39,7 +41,7 @@ function notify(event: string, session: Session | null) {
   listeners.forEach((listener) => listener(event, session));
 }
 
-async function request(path: string, options: RequestInit = {}) {
+async function request(path: string, options: RequestInit = {}, timeoutMs = API_REQUEST_TIMEOUT_MS) {
   const session = loadSession();
   const headers = new Headers(options.headers || {});
   if (!headers.has('Content-Type') && !(options.body instanceof FormData) && !(options.body instanceof Blob)) {
@@ -47,11 +49,23 @@ async function request(path: string, options: RequestInit = {}) {
   }
   if (session?.access_token) headers.set('Authorization', `Bearer ${session.access_token}`);
 
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
   let response: Response;
   try {
-    response = await fetch(`${API_BASE}${path}`, { ...options, headers, credentials: 'same-origin' });
+    response = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers,
+      credentials: 'same-origin',
+      signal: controller.signal,
+    });
   } catch (fetchError) {
+    if (fetchError instanceof DOMException && fetchError.name === 'AbortError') {
+      throw { message: 'A API demorou para responder. Tente novamente em alguns segundos.' };
+    }
     throw { message: 'Erro de comunicacao com a API', details: fetchError };
+  } finally {
+    window.clearTimeout(timeout);
   }
 
   const json = await response.json().catch(() => ({}));
@@ -177,7 +191,7 @@ export const supabase = {
         const data = await request('/api/auth/login', {
           method: 'POST',
           body: JSON.stringify({ email, password }),
-        });
+        }, AUTH_REQUEST_TIMEOUT_MS);
         saveSession(data.session);
         notify('SIGNED_IN', data.session);
         return { data, error: null };
@@ -222,7 +236,7 @@ export const supabase = {
       const local = loadSession();
       if (!local?.access_token) return { data: { session: null }, error: null };
       try {
-        const data = await request('/api/auth/session');
+        const data = await request('/api/auth/session', {}, AUTH_REQUEST_TIMEOUT_MS);
         saveSession(data.session);
         return { data: { session: data.session }, error: null };
       } catch (error) {
