@@ -1,7 +1,7 @@
 import { supabase } from '../lib/supabase';
 import { formatLocalDate } from './dates';
+import { MESSAGE_TEMPLATE_BY_TYPE } from './message-template-definitions';
 
-const TERMOS_DE_USO = `A Vibratho instrumentos não fornece serviços de luthieria. Os serviços executados e valores recebidos são de total responsabilidade da Serviços Prime Luthieria, CNPJ: 30.057.854/0001-75. A empresa funciona nas dependências da Vibratho, porém não tem vínculo algum; apenas compartilhamos o mesmo interesse, que é atender as demandas de nossos clientes.`;
 const HORARIO_FUNCIONAMENTO_PADRAO = '10h às 13h | 14h às 18h';
 const DIAS_FUNCIONAMENTO_PADRAO = 'Segunda a Sábado';
 
@@ -12,16 +12,133 @@ export interface MessageTemplate {
   template_content: string;
   variables: string[];
   is_active: boolean;
+  updated_at?: string;
+}
+
+function entityName(value: unknown, fallback: string): string {
+  if (typeof value === 'string') return value.trim() || fallback;
+  if (value && typeof value === 'object' && 'nome' in value) {
+    const name = String((value as { nome?: unknown }).nome || '').trim();
+    return name || fallback;
+  }
+  return fallback;
+}
+
+function formatCurrency(value: unknown, fallback: string): string {
+  if (value === null || value === undefined || value === '') return fallback;
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return fallback;
+  return amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
+function formatTemplateDate(value: unknown, fallback = 'Não informada'): string {
+  if (!value) return fallback;
+  try {
+    return formatLocalDate(String(value));
+  } catch {
+    return fallback;
+  }
+}
+
+function formatPaymentMethod(value: unknown): string {
+  const methods: Record<string, string> = {
+    credito: 'Cartão de Crédito',
+    debito: 'Cartão de Débito',
+    pix: 'PIX',
+    dinheiro: 'Dinheiro',
+    transferencia: 'Transferência Bancária',
+  };
+  const key = String(value || '').trim();
+  return methods[key] || key || 'A definir';
+}
+
+function serviceDescription(data: Record<string, unknown>): string {
+  if (Array.isArray(data.servicos)) {
+    const names = data.servicos.map((service) => entityName(service, '')).filter(Boolean);
+    if (names.length) return names.join(', ');
+  }
+  return String(data.servico_descricao || data.servicos_necessarios || '').trim() || 'Diagnóstico e orçamento';
+}
+
+function cleanObservations(content: string, data: Record<string, unknown>): string {
+  let observations = String(data.observacoes || '').trim();
+  if (!observations) return '';
+
+  // NovaOrdem persiste problemas/serviços também dentro de observações. Quando o
+  // template já possui essas variáveis, manter somente a observação escrita pelo usuário.
+  if (content.includes('{problemas}') || content.includes('{servicos}')) {
+    observations = observations.replace(/(?:^|\n\n)Problemas:\s*[\s\S]*$/i, '').trim();
+  }
+  return observations ? `📝 Observações: ${observations}` : '';
+}
+
+function templateValues(content: string, data: Record<string, unknown>, companyConfig?: Record<string, unknown> | null) {
+  const company = companyConfig || {};
+  const services = serviceDescription(data);
+  const problems = String(data.problema_descricao || data.problemas_encontrados || '').trim() || 'Não informado';
+
+  return {
+    cliente: entityName(data.cliente, 'Cliente'),
+    instrumento: entityName(data.instrumento, 'Instrumento'),
+    marca: entityName(data.marca, ''),
+    modelo: String(data.modelo || '').trim(),
+    numero: String(data.numero ?? '').trim(),
+    acessorios: String(data.acessorios || '').trim() || 'Nenhum acessório reportado',
+    servicos: services,
+    problemas: problems,
+    valor: formatCurrency(data.valor_total, 'A definir'),
+    forma_pagamento: formatPaymentMethod(data.forma_pagamento),
+    valor_servicos: formatCurrency(data.valor_servicos, 'R$ 0,00'),
+    desconto: formatCurrency(data.desconto, 'R$ 0,00'),
+    valor_pendente: formatCurrency(data.valor_pendente, 'R$ 0,00'),
+    valor_orcamento: formatCurrency(data.valor_orcamento ?? data.valor_total, 'A definir'),
+    data_criacao: formatTemplateDate(data.data_criacao || data.data_entrada || data.created_at),
+    previsao_entrega: formatTemplateDate(data.previsao_entrega || data.data_previsao),
+    observacoes: cleanObservations(content, data),
+    nome_empresa: String(company.nome_empresa || data.nome_empresa || '').trim() || 'Sua Empresa',
+    cnpj: String(company.cnpj || data.cnpj || '').trim(),
+    telefone_empresa: String(company.telefone_empresa || company.telefone || data.telefone_empresa || data.telefone || '').trim(),
+    endereco_empresa: String(company.endereco || data.endereco || '').trim(),
+    horario_funcionamento: String(company.horario_funcionamento || data.horario_funcionamento || '').trim() || HORARIO_FUNCIONAMENTO_PADRAO,
+    dias_funcionamento: String(company.dias_funcionamento || data.dias_funcionamento || '').trim() || DIAS_FUNCIONAMENTO_PADRAO,
+    termos_de_uso: String(company.termos_de_uso || data.termos_de_uso || '').trim(),
+    google_review_link: String(data.google_review_link || company.google_review_link || '').trim() || 'https://g.page/r/SEU_PERFIL_GOOGLE/review',
+    instagram_handle: String(data.instagram_handle || company.instagram_handle || '').trim() || '@sua_empresa',
+    ultimo_servico: String(data.ultimo_servico || data.servico_descricao || '').trim() || services,
+    meses_sem_manutencao: String(data.meses_sem_manutencao ?? '').trim() || '6',
+    dias_prontos: String(data.dias_prontos ?? '').trim() || '0',
+    problemas_encontrados: String(data.problemas_encontrados || data.problema_descricao || '').trim() || problems,
+    servicos_necessarios: String(data.servicos_necessarios || data.servico_descricao || '').trim() || services,
+  };
+}
+
+export function renderTemplateContent(
+  content: string,
+  data: Record<string, unknown>,
+  companyConfig?: Record<string, unknown> | null,
+): string {
+  const values = templateValues(content, data, companyConfig);
+  const unknownVariables = new Set<string>();
+  const rendered = content.replace(/\{([a-zA-Z0-9_]+)\}/g, (match, key: keyof typeof values) => {
+    if (!(key in values)) {
+      unknownVariables.add(match);
+      return match;
+    }
+    return values[key];
+  });
+
+  if (unknownVariables.size) {
+    throw new Error(`Variáveis não reconhecidas no template: ${[...unknownVariables].join(', ')}`);
+  }
+
+  return rendered.replace(/^[ \t]+$/gm, '').trim();
 }
 
 export class TemplateService {
   private static templates: Map<string, MessageTemplate> = new Map();
 
   static async loadTemplate(templateType: string): Promise<MessageTemplate | null> {
-    // Verificar cache primeiro
-    if (this.templates.has(templateType)) {
-      return this.templates.get(templateType)!;
-    }
+    if (this.templates.has(templateType)) return this.templates.get(templateType)!;
 
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -35,15 +152,9 @@ export class TemplateService {
         .eq('is_active', true)
         .single();
 
-      if (error || !data) {
-        // Retornar template padrão se não encontrar
-        return this.getDefaultTemplate(templateType);
-      }
-
-      // Cachear o template
-      this.templates.set(templateType, data);
-      return data;
-
+      const template = error || !data ? this.getDefaultTemplate(templateType) : data as MessageTemplate;
+      if (template) this.templates.set(templateType, template);
+      return template;
     } catch (error) {
       console.error('Erro ao carregar template:', error);
       return this.getDefaultTemplate(templateType);
@@ -51,324 +162,32 @@ export class TemplateService {
   }
 
   static getDefaultTemplate(templateType: string): MessageTemplate | null {
-    const defaults: Record<string, MessageTemplate> = {
-      nova_ordem: {
-        template_type: 'nova_ordem',
-        template_name: 'Nova Ordem Criada',
-        template_content: `Olá {cliente}! 😊
-
-Recebemos seu {instrumento} para reparo/manutenção.
-
-📋 *ORDEM DE SERVIÇO #{numero}*
-� Data de Entrada: {data_criacao}
-🎸 Instrumento: {instrumento} {marca} {modelo}
-📦 Acessórios: {acessorios}
-⚙️ Serviços: {servicos}
-� Problemas Reportados: {problemas}
-�💰 Valor: {valor}
-📅 Previsão de Entrega: {previsao_entrega}
-
-{observacoes}
-
-Manteremos você informado sobre o andamento!
-
-📍 {nome_empresa}
-📞 {telefone_empresa}
-⏰ {horario_funcionamento}
-📅 {dias_funcionamento}`,
-        variables: ['{cliente}', '{instrumento}', '{marca}', '{modelo}', '{numero}', '{acessorios}', '{servicos}', '{problemas}', '{valor}', '{forma_pagamento}', '{data_criacao}', '{previsao_entrega}', '{observacoes}', '{nome_empresa}', '{telefone_empresa}', '{endereco_empresa}', '{horario_funcionamento}', '{dias_funcionamento}'],
-        is_active: true
-      },
-      servico_finalizado: {
-        template_type: 'servico_finalizado',
-        template_name: 'Serviço Finalizado',
-        template_content: `Olá {cliente}, seu {instrumento} ficou pronto! 🎸
-
-Pode retirar entre:
-⏰ {horario_funcionamento}
-📅 {dias_funcionamento}
-
-📍 {nome_empresa}
-CNPJ: {cnpj}
-
-Ordem de Serviço: #{numero}`,
-        variables: ['{cliente}', '{instrumento}', '{numero}', '{nome_empresa}', '{cnpj}', '{horario_funcionamento}', '{dias_funcionamento}'],
-        is_active: true
-      },
-      servico_andamento: {
-        template_type: 'servico_andamento',
-        template_name: 'Serviço em Andamento',
-        template_content: `Olá {cliente}, informamos que seu {instrumento} está em andamento! 🔧
-
-📋 Ordem de Serviço: #{numero}
-⚙️ Nossos técnicos estão trabalhando no seu instrumento
-
-📍 {nome_empresa}
-📞 Entre em contato se tiver dúvidas
-
-Horário de atendimento:
-⏰ {horario_funcionamento}
-📅 {dias_funcionamento}`,
-        variables: ['{cliente}', '{instrumento}', '{numero}', '{nome_empresa}', '{horario_funcionamento}', '{dias_funcionamento}'],
-        is_active: true
-      },
-      servico_atraso: {
-        template_type: 'servico_atraso',
-        template_name: 'Contratempo/Atraso',
-        template_content: `Olá {cliente}, informamos sobre um contratempo no seu {instrumento} ⏰
-
-📋 Ordem de Serviço: #{numero}
-⚠️ Houve um pequeno atraso no cronograma
-
-Entraremos em contato em breve com nova previsão de entrega.
-
-📍 {nome_empresa}
-📞 Entre em contato se tiver dúvidas
-
-Horário de atendimento:
-⏰ {horario_funcionamento}
-📅 {dias_funcionamento}
-
-Pedimos desculpas pelo inconveniente.`,
-        variables: ['{cliente}', '{instrumento}', '{numero}', '{nome_empresa}', '{horario_funcionamento}', '{dias_funcionamento}'],
-        is_active: true
-      },
-      lembrete_manutencao: {
-        template_type: 'lembrete_manutencao',
-        template_name: 'Lembrete Manutenção Preventiva',
-        template_content: `Olá {cliente}! 👋
-
-Esperamos que você e seu {instrumento} estejam bem! 🎸
-
-Notamos que já faz {meses_sem_manutencao} meses desde sua última manutenção ({ultimo_servico}).
-
-🔧 Que tal agendar uma revisão preventiva?
-- Troca de cordas
-- Regulagem
-- Limpeza e hidratação
-- Verificação geral
-
-Uma manutenção regular mantém seu instrumento sempre em perfeito estado! 
-
-📍 {nome_empresa}
-📞 {telefone_empresa}
-⏰ {horario_funcionamento}
-📅 {dias_funcionamento}
-
-Entre em contato para agendar! 😊`,
-        variables: ['{cliente}', '{instrumento}', '{ultimo_servico}', '{meses_sem_manutencao}', '{nome_empresa}', '{telefone_empresa}', '{horario_funcionamento}', '{dias_funcionamento}'],
-        is_active: true
-      },
-      orcamento_aprovado: {
-        template_type: 'orcamento_aprovado',
-        template_name: 'Orçamento Aprovado',
-        template_content: `Olá {cliente}! ✅
-
-Orçamento aprovado para seu {instrumento}!
-
-📋 Ordem de Serviço: #{numero}
-⚙️ Serviços autorizados: {servicos}
-💰 Valor aprovado: {valor}
-📅 Nova previsão: {previsao_entrega}
-
-Iniciaremos os trabalhos imediatamente!
-
-📍 {nome_empresa}
-📞 {telefone_empresa}`,
-        variables: ['{cliente}', '{instrumento}', '{numero}', '{servicos}', '{valor}', '{previsao_entrega}', '{nome_empresa}', '{telefone_empresa}'],
-        is_active: true
-      },
-      diagnostico_concluido: {
-        template_type: 'diagnostico_concluido',
-        template_name: 'Diagnóstico Concluído',
-        template_content: `Olá {cliente}! 🔍
-
-Diagnóstico concluído para seu {instrumento}:
-
-📋 Ordem de Serviço: #{numero}
-🔧 Problemas encontrados: {problemas_encontrados}
-⚙️ Serviços necessários: {servicos_necessarios}
-💰 Orçamento: {valor_orcamento}
-
-Aguardamos sua aprovação para prosseguir!
-
-📍 {nome_empresa}
-📞 {telefone_empresa}`,
-        variables: ['{cliente}', '{instrumento}', '{numero}', '{problemas_encontrados}', '{servicos_necessarios}', '{valor_orcamento}', '{nome_empresa}', '{telefone_empresa}'],
-        is_active: true
-      },
-      lembrete_retirada: {
-        template_type: 'lembrete_retirada',
-        template_name: 'Lembrete de Retirada',
-        template_content: `Olá {cliente}! 👋
-
-Lembramos que seu {instrumento} está pronto há {dias_prontos} dias para retirada.
-
-📋 Ordem de Serviço: #{numero}
-⏰ {horario_funcionamento}
-📅 {dias_funcionamento}
-
-📍 {nome_empresa}
-
-Aguardamos você! 😊`,
-        variables: ['{cliente}', '{instrumento}', '{numero}', '{nome_empresa}', '{horario_funcionamento}', '{dias_funcionamento}', '{dias_prontos}'],
-        is_active: true
-      },
-      cobranca_pagamento: {
-        template_type: 'cobranca_pagamento',
-        template_name: 'Cobrança/Pagamento',
-        template_content: `Olá {cliente}! 💳
-
-Referente ao seu {instrumento}:
-
-📋 Ordem de Serviço: #{numero}
-💰 Valor total: {valor}
-💵 Pendente: {valor_pendente}
-
-Para finalizar, precisamos acertar o pagamento.
-
-📍 {nome_empresa}
-📞 Entre em contato para mais detalhes
-
-Obrigado! 😊`,
-        variables: ['{cliente}', '{instrumento}', '{numero}', '{valor}', '{valor_pendente}', '{forma_pagamento}', '{nome_empresa}'],
-        is_active: true
-      },
-      avaliacao_google_instagram: {
-        template_type: 'avaliacao_google_instagram',
-        template_name: 'Solicitação de Avaliação e Instagram',
-        template_content: `Olá {cliente}! 😊
-
-Esperamos que esteja satisfeito(a) com o reparo do seu {instrumento} {marca} {modelo}!
-
-🌟 *SUA OPINIÃO É MUITO IMPORTANTE*
-
-Poderia nos ajudar avaliando nosso trabalho no Google? Sua avaliação ajuda outros músicos a nos conhecerem!
-
-👍 Link para avaliar: {google_review_link}
-
-📱 *SIGA-NOS NO INSTAGRAM*
-Acompanhe dicas de manutenção, novos projetos e promoções: {instagram_handle}
-
-Muito obrigado pela confiança! 🎸
-
-📍 {nome_empresa}
-📞 {telefone_empresa}
-
-#Luthieria #ReparoInstrumentos #MúsicaBrasília`,
-        variables: ['{cliente}', '{instrumento}', '{marca}', '{modelo}', '{numero}', '{nome_empresa}', '{telefone_empresa}', '{google_review_link}', '{instagram_handle}'],
-        is_active: true
-      }
-    };
-
-    const template = defaults[templateType] || null;
-    if (!template || template.variables.includes('{termos_de_uso}')) return template;
-
+    const definition = MESSAGE_TEMPLATE_BY_TYPE[templateType];
+    if (!definition) return null;
     return {
-      ...template,
-      variables: [...template.variables, '{termos_de_uso}'],
+      template_type: definition.type,
+      template_name: definition.name,
+      template_content: definition.defaultContent,
+      variables: definition.variables,
+      is_active: true,
     };
   }
 
-  static async processTemplate(templateType: string, data: any, empresaConfig?: any): Promise<string> {
+  static async processTemplate(
+    templateType: string,
+    data: Record<string, unknown>,
+    companyConfig?: Record<string, unknown> | null,
+  ): Promise<string> {
     const template = await this.loadTemplate(templateType);
-    if (!template) {
-      throw new Error(`Template ${templateType} não encontrado`);
-    }
+    if (!template) throw new Error(`Template ${templateType} não encontrado`);
 
-    let message = template.template_content || (template as any).content;
-    if (typeof message !== 'string' || !message.trim()) {
-      const defaultTemplate = this.getDefaultTemplate(templateType);
-      message = defaultTemplate?.template_content;
-    }
-    if (typeof message !== 'string' || !message.trim()) {
-      throw new Error(`Template ${templateType} está sem conteúdo`);
-    }
-
-    // Substituir variáveis básicas da ordem
-    if (data.cliente) {
-      const clienteNome = typeof data.cliente === 'string' ? data.cliente : data.cliente.nome || 'Cliente';
-      message = message.replace(/{cliente}/g, clienteNome);
-    }
-    if (data.instrumento) {
-      const instrumentoNome = typeof data.instrumento === 'string' ? data.instrumento : data.instrumento.nome || 'Instrumento';
-      message = message.replace(/{instrumento}/g, instrumentoNome);
-    }
-    if (data.marca) {
-      const marcaNome = typeof data.marca === 'string' ? data.marca : data.marca.nome || '';
-      message = message.replace(/{marca}/g, marcaNome);
-    }
-    
-    message = message.replace(/{numero}/g, data.numero || '');
-    message = message.replace(/{modelo}/g, data.modelo || '');
-    message = message.replace(/{acessorios}/g, data.acessorios || 'Nenhum acessório reportado');
-    message = message.replace(/{valor}/g, data.valor_total ? `R$ ${data.valor_total.toFixed(2).replace('.', ',')}` : 'A definir');
-    
-    // Processar forma de pagamento
-    const formasPagamento = {
-      'credito': 'Cartão de Crédito',
-      'debito': 'Cartão de Débito', 
-      'pix': 'PIX',
-      'dinheiro': 'Dinheiro',
-      'transferencia': 'Transferência Bancária'
-    };
-    const formaPagamentoFormatada = data.forma_pagamento ? 
-      formasPagamento[data.forma_pagamento as keyof typeof formasPagamento] || data.forma_pagamento : 
-      'A definir';
-    message = message.replace(/{forma_pagamento}/g, formaPagamentoFormatada);
-
-    // Processar valores financeiros
-    message = message.replace(/{valor_servicos}/g, data.valor_servicos ? `R$ ${data.valor_servicos.toFixed(2).replace('.', ',')}` : 'R$ 0,00');
-    message = message.replace(/{desconto}/g, data.desconto ? `R$ ${data.desconto.toFixed(2).replace('.', ',')}` : 'R$ 0,00');
-    message = message.replace(/{valor_pendente}/g, data.valor_pendente ? `R$ ${data.valor_pendente.toFixed(2).replace('.', ',')}` : 'R$ 0,00');
-    message = message.replace(/{valor_orcamento}/g, data.valor_orcamento ? `R$ ${data.valor_orcamento.toFixed(2).replace('.', ',')}` : 'A definir');
-
-    // Substituir variáveis da empresa, mesmo quando ainda não há configuração salva.
-    const empresa = empresaConfig || {};
-    message = message.replace(/{nome_empresa}/g, empresa.nome_empresa || data.nome_empresa || 'Sua Empresa');
-    message = message.replace(/{cnpj}/g, empresa.cnpj || data.cnpj || '');
-    message = message.replace(/{horario_funcionamento}/g, empresa.horario_funcionamento || data.horario_funcionamento || HORARIO_FUNCIONAMENTO_PADRAO);
-    message = message.replace(/{dias_funcionamento}/g, empresa.dias_funcionamento || data.dias_funcionamento || DIAS_FUNCIONAMENTO_PADRAO);
-    message = message.replace(/{telefone_empresa}/g, empresa.telefone_empresa || empresa.telefone || data.telefone_empresa || data.telefone || '');
-    message = message.replace(/{endereco_empresa}/g, empresa.endereco || data.endereco || '');
-    message = message.replace(/[({]termos_de_uso\}/g, empresa.termos_de_uso || data.termos_de_uso || TERMOS_DE_USO);
-
-    // Substituir outras variáveis específicas
-    if (data.servicos && Array.isArray(data.servicos)) {
-      const servicosText = data.servicos.map((s: any) => s.nome || s).join(', ');
-      message = message.replace(/{servicos}/g, servicosText || 'Diagnóstico e orçamento');
-    } else {
-      message = message.replace(/{servicos}/g, 'Diagnóstico e orçamento');
-    }
-
-    // Processar problemas reportados
-    message = message.replace(/{problemas}/g, data.problema_descricao || 'Não informado');
-
-    // Processar observações
-    if (data.observacoes && data.observacoes.trim()) {
-      message = message.replace(/{observacoes}/g, `📝 Observações: ${data.observacoes}`);
-    } else {
-      message = message.replace(/{observacoes}/g, '');
-    }
-
-    if (data.data_criacao || data.data_entrada) {
-      const dataFormatada = formatLocalDate(data.data_criacao || data.data_entrada);
-      message = message.replace(/{data_criacao}/g, dataFormatada);
-    }
-
-    if (data.previsao_entrega || data.data_previsao) {
-      const previsaoFormatada = formatLocalDate(data.previsao_entrega || data.data_previsao);
-      message = message.replace(/{previsao_entrega}/g, previsaoFormatada);
-    }
-
-    // Processar variáveis específicas do template de avaliação
-    message = message.replace(/{google_review_link}/g, data.google_review_link || 'https://g.page/r/SEU_PERFIL_GOOGLE/review');
-    message = message.replace(/{instagram_handle}/g, data.instagram_handle || '@luthieriabrasilia');
-
-    return message;
+    const content = template.template_content || (template as MessageTemplate & { content?: string }).content;
+    if (typeof content !== 'string' || !content.trim()) throw new Error(`Template ${templateType} está sem conteúdo`);
+    return renderTemplateContent(content, data, companyConfig);
   }
 
-  static clearCache(): void {
-    this.templates.clear();
+  static clearCache(templateType?: string): void {
+    if (templateType) this.templates.delete(templateType);
+    else this.templates.clear();
   }
 }

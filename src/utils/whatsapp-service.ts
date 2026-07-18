@@ -5,8 +5,14 @@ const EMPRESA_CONFIG_DEFAULTS = {
   nome_empresa: 'Sua Empresa',
   telefone_empresa: '',
   horario_funcionamento: '10h às 13h | 14h às 18h',
-  dias_funcionamento: 'Segunda a Sábado'
+  dias_funcionamento: 'Segunda a Sábado',
+  termos_de_uso: '',
 };
+
+interface WhatsAppMessageMetadata {
+  template_type?: string;
+  ordem_id?: string;
+}
 
 export interface WhatsAppConfig {
   method: 'direct' | 'webhook'; // 'webhook' = Evolution API direta
@@ -81,7 +87,7 @@ export class WhatsAppService {
     }
   }
 
-  static async sendMessage(phoneNumber: string, message: string): Promise<boolean> {
+  static async sendMessage(phoneNumber: string, message: string, metadata: WhatsAppMessageMetadata = {}): Promise<boolean> {
     const session = JSON.parse(localStorage.getItem('mysql-auth-session') || 'null');
     const response = await fetch('/api/whatsapp/send', {
       method: 'POST',
@@ -89,7 +95,7 @@ export class WhatsAppService {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${session?.access_token || ''}`,
       },
-      body: JSON.stringify({ phone: phoneNumber, message }),
+      body: JSON.stringify({ phone: phoneNumber, message, ...metadata }),
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error?.message || 'Falha ao enviar mensagem');
@@ -105,7 +111,7 @@ export class WhatsAppService {
     const empresaConfig = await this.loadEmpresaConfig();
     const message = await TemplateService.processTemplate('nova_ordem', ordem, empresaConfig);
     
-    return this.sendMessage(ordem.cliente.telefone, message);
+    return this.sendMessage(ordem.cliente.telefone, message, { template_type: 'nova_ordem', ordem_id: ordem.id });
   }
 
   static async sendCompletionMessage(ordem: any): Promise<boolean> {
@@ -116,7 +122,7 @@ export class WhatsAppService {
     const empresaConfig = await this.loadEmpresaConfig();
     const message = await TemplateService.processTemplate('servico_finalizado', ordem, empresaConfig);
     
-    return this.sendMessage(ordem.cliente.telefone, message);
+    return this.sendMessage(ordem.cliente.telefone, message, { template_type: 'servico_finalizado', ordem_id: ordem.id });
   }
 
   static async sendProgressMessage(ordem: any): Promise<boolean> {
@@ -127,7 +133,7 @@ export class WhatsAppService {
     const empresaConfig = await this.loadEmpresaConfig();
     const message = await TemplateService.processTemplate('servico_andamento', ordem, empresaConfig);
     
-    return this.sendMessage(ordem.cliente.telefone, message);
+    return this.sendMessage(ordem.cliente.telefone, message, { template_type: 'servico_andamento', ordem_id: ordem.id });
   }
 
   static async sendDelayMessage(ordem: any): Promise<boolean> {
@@ -138,7 +144,7 @@ export class WhatsAppService {
     const empresaConfig = await this.loadEmpresaConfig();
     const message = await TemplateService.processTemplate('servico_atraso', ordem, empresaConfig);
     
-    return this.sendMessage(ordem.cliente.telefone, message);
+    return this.sendMessage(ordem.cliente.telefone, message, { template_type: 'servico_atraso', ordem_id: ordem.id });
   }
 
   private static async sendViaEvolutionAPI(phoneNumber: string, message: string, config: WhatsAppConfig): Promise<boolean> {
@@ -245,7 +251,10 @@ export class WhatsAppService {
       const message = await TemplateService.processTemplate('avaliacao_google_instagram', templateData, empresaConfig);
 
       // Enviar mensagem
-      await this.sendMessage(ordem.cliente?.telefone, message);
+      await this.sendMessage(ordem.cliente?.telefone, message, {
+        template_type: 'avaliacao_google_instagram',
+        ordem_id: ordem.id,
+      });
       
     } catch (error: any) {
       console.error('Erro ao enviar solicitação de avaliação:', error);

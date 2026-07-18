@@ -8,6 +8,7 @@ if (!DATABASE_URL) {
 }
 
 const nowSql = () => new Date().toISOString();
+const SERVICOS_PRIME_TERMS = 'A Vibratho instrumentos não fornece serviços de luthieria. Os serviços executados e valores recebidos são de total responsabilidade da Serviços Prime Luthieria, CNPJ: 30.057.854/0001-75. A empresa funciona nas dependências da Vibratho, porém não tem vínculo algum; apenas compartilhamos o mesmo interesse, que é atender as demandas de nossos clientes.';
 
 const createTables = [
   `CREATE TABLE IF NOT EXISTS usuarios (
@@ -347,6 +348,7 @@ const createTables = [
     dias_funcionamento varchar(100) DEFAULT NULL,
     logo_url varchar(500) DEFAULT NULL,
     endereco text DEFAULT NULL,
+    termos_de_uso text DEFAULT NULL,
     google_review_link varchar(500) DEFAULT NULL,
     instagram_handle varchar(100) DEFAULT NULL,
     avaliacoes_enabled tinyint(1) DEFAULT 1,
@@ -375,6 +377,9 @@ const createTables = [
     connected_at varchar(50) DEFAULT NULL,
     disconnected_at varchar(50) DEFAULT NULL,
     last_event_at varchar(50) DEFAULT NULL,
+    last_checked_at varchar(50) DEFAULT NULL,
+    disconnect_reason varchar(100) DEFAULT NULL,
+    connection_status_code int DEFAULT NULL,
     last_error text DEFAULT NULL,
     created_at varchar(50) DEFAULT NULL,
     updated_at varchar(50) DEFAULT NULL,
@@ -404,6 +409,28 @@ const createTables = [
     UNIQUE KEY unique_template_tipo_user (user_id, tipo),
     INDEX idx_templates_user (user_id),
     INDEX idx_templates_tipo (tipo)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  `CREATE TABLE IF NOT EXISTS whatsapp_mensagens_log (
+    id varchar(36) NOT NULL PRIMARY KEY,
+    user_id varchar(36) NOT NULL,
+    actor_user_id varchar(36) DEFAULT NULL,
+    ordem_servico_id varchar(36) DEFAULT NULL,
+    template_id varchar(36) DEFAULT NULL,
+    template_type varchar(50) DEFAULT NULL,
+    template_updated_at varchar(50) DEFAULT NULL,
+    telefone varchar(30) NOT NULL,
+    mensagem text NOT NULL,
+    status varchar(30) NOT NULL,
+    provider varchar(30) DEFAULT 'evolution',
+    provider_message_id varchar(255) DEFAULT NULL,
+    erro text DEFAULT NULL,
+    created_at varchar(50) NOT NULL,
+    updated_at varchar(50) NOT NULL,
+    INDEX idx_whatsapp_log_user (user_id),
+    INDEX idx_whatsapp_log_order (ordem_servico_id),
+    INDEX idx_whatsapp_log_template (template_type),
+    INDEX idx_whatsapp_log_created (created_at)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 
   `CREATE TABLE IF NOT EXISTS empresa_fiscal (
@@ -645,6 +672,9 @@ const requiredColumns = {
     connected_at: 'varchar(50) DEFAULT NULL',
     disconnected_at: 'varchar(50) DEFAULT NULL',
     last_event_at: 'varchar(50) DEFAULT NULL',
+    last_checked_at: 'varchar(50) DEFAULT NULL',
+    disconnect_reason: 'varchar(100) DEFAULT NULL',
+    connection_status_code: 'int DEFAULT NULL',
     last_error: 'text DEFAULT NULL',
   },
   configuracoes_empresa: {
@@ -654,6 +684,7 @@ const requiredColumns = {
     email: 'varchar(255) DEFAULT NULL',
     logo_url: 'varchar(500) DEFAULT NULL',
     endereco: 'text DEFAULT NULL',
+    termos_de_uso: 'text DEFAULT NULL',
     google_review_link: 'varchar(500) DEFAULT NULL',
     instagram_handle: 'varchar(100) DEFAULT NULL',
     avaliacoes_enabled: 'tinyint(1) DEFAULT 1',
@@ -801,6 +832,17 @@ async function normalizeExistingRows(conn) {
            data_entrada = COALESCE(NULLIF(data_entrada, ''), DATE_FORMAT(CURDATE(), '%Y-%m-%d')),
            updated_at = COALESCE(updated_at, created_at, ?)
   `, [nowSql()]));
+}
+
+async function backfillCompanyTerms(conn) {
+  await safeStep('preservar termos da conta Serviços Prime', () => conn.query(`
+    UPDATE configuracoes_empresa ce
+    JOIN usuarios u ON u.id = ce.user_id
+       SET ce.termos_de_uso = ?,
+           ce.updated_at = COALESCE(ce.updated_at, ?)
+     WHERE u.email = 'servicosprime.work@gmail.com'
+       AND COALESCE(NULLIF(ce.termos_de_uso, ''), '') = ''
+  `, [SERVICOS_PRIME_TERMS, nowSql()]));
 }
 
 async function backfillEvaluationReminders(conn) {
@@ -955,6 +997,7 @@ try {
   await modifyExistingColumns(conn);
   await addMissingIndexes(conn);
   await normalizeExistingRows(conn);
+  await backfillCompanyTerms(conn);
   await backfillEvaluationReminders(conn);
   await backfillReceivables(conn);
   await backfillPayments(conn);

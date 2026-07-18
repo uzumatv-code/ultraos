@@ -26,6 +26,8 @@ const MAIL_FROM = process.env.MAIL_FROM || GMAIL_USER;
 const EVOLUTION_API_URL = String(process.env.EVOLUTION_API_URL || '').replace(/\/$/, '');
 const EVOLUTION_API_KEY = process.env.EVOLUTION_API_KEY || '';
 const EVOLUTION_WEBHOOK_SECRET = process.env.EVOLUTION_WEBHOOK_SECRET || '';
+const WHATSAPP_RECONCILE_ENABLED = process.env.WHATSAPP_RECONCILE_ENABLED !== 'false';
+const WHATSAPP_RECONCILE_INTERVAL_MS = Math.max(30_000, Number(process.env.WHATSAPP_RECONCILE_INTERVAL_MS || 60_000));
 const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000;
 const uploadsDir = path.join(rootDir, 'uploads');
 const EVALUATION_JOB_ENABLED = process.env.EVALUATION_JOB_ENABLED !== 'false';
@@ -65,6 +67,18 @@ const SYSTEM_AI_QUERY_INTENTS = new Set([
   'listar_clientes_recentes',
 ]);
 const SERVICE_ORDER_STATUSES = new Set(['pendente', 'em_andamento', 'concluido', 'cancelado', 'atraso']);
+const MESSAGE_TEMPLATE_TYPES = new Set([
+  'nova_ordem',
+  'servico_finalizado',
+  'servico_andamento',
+  'servico_atraso',
+  'lembrete_retirada',
+  'cobranca_pagamento',
+  'lembrete_manutencao',
+  'orcamento_aprovado',
+  'diagnostico_concluido',
+  'avaliacao_google_instagram',
+]);
 
 if (!DATABASE_URL) {
   throw new Error('DATABASE_URL ou MYSQL_URL precisa estar configurado no backend');
@@ -809,11 +823,61 @@ function connectionStateFromPayload(payload) {
 }
 
 function publicConnectionStatus(state) {
-  if (state === 'open' || state === 'connected') return 'conectado';
-  if (state === 'connecting') return 'conectando';
-  if (state === 'created') return 'aguardando_qr';
-  if (state === 'close' || state === 'closed' || state === 'disconnected') return 'desconectado';
-  return state || 'nao_configurado';
+  const normalized = String(state || '').trim().toLowerCase().replace(/[.\s-]+/g, '_');
+  if (normalized === 'open' || normalized === 'connected') return 'conectado';
+  if (normalized === 'connecting') return 'conectando';
+  if (normalized === 'created' || normalized === 'qr' || normalized === 'qrcode') return 'aguardando_qr';
+  if (['close', 'closed', 'disconnected', 'logged_out', 'loggedout', 'logout', 'device_removed', 'unauthorized', 'removed'].includes(normalized)) {
+    return 'desconectado';
+  }
+  return normalized ? 'erro' : 'nao_configurado';
+}
+
+function disconnectDetailsFromPayload(payload, fallbackReason = null) {
+  const statusCode = Number(
+    payload?.data?.statusCode
+      || payload?.data?.lastDisconnect?.error?.output?.statusCode
+      || payload?.data?.lastDisconnect?.error?.statusCode
+      || payload?.lastDisconnect?.error?.output?.statusCode
+      || payload?.lastDisconnect?.error?.statusCode
+      || payload?.statusCode
+      || 0,
+  ) || null;
+  const reason = String(
+    payload?.data?.lastDisconnect?.error?.data
+      || payload?.data?.lastDisconnect?.error?.output?.payload?.message
+      || payload?.data?.reason
+      || payload?.lastDisconnect?.error?.data
+      || payload?.reason
+      || fallbackReason
+      || '',
+  ).trim().toLowerCase().replace(/[.\s-]+/g, '_') || null;
+  return { reason, statusCode };
+}
+
+function disconnectDetailsFromError(error) {
+  const serialized = JSON.stringify(error?.details || '').toLowerCase();
+  const statusCode = Number(error?.status || 0) || null;
+  const permanentReason = ['device_removed', 'logged_out', 'loggedout', 'unauthorized', 'instance_not_found']
+    .find((reason) => serialized.includes(reason));
+  if (permanentReason || statusCode === 401 || statusCode === 404) {
+    return {
+      disconnected: true,
+      reason: permanentReason || (statusCode === 401 ? 'unauthorized' : 'instance_not_found'),
+      statusCode,
+    };
+  }
+  return { disconnected: false, reason: null, statusCode };
+}
+
+function connectionStatusFromPayload(payload) {
+  const status = publicConnectionStatus(connectionStateFromPayload(payload));
+  if (status !== 'desconectado') return status;
+  const { statusCode } = disconnectDetailsFromPayload(payload);
+  // Códigos de perda temporária/reinício usados pelo Baileys. A instância pode
+  // se recuperar sozinha, então não exigimos novo QR nesses casos.
+  if ([408, 428, 515].includes(statusCode)) return 'conectando';
+  return status;
 }
 
 function qrFromPayload(payload) {
@@ -830,7 +894,8 @@ function qrFromPayload(payload) {
 async function managedWhatsAppRow(userId) {
   const [rows] = await pool.query(
     `SELECT id, user_id, instance_name, status, phone_number, profile_name, profile_picture_url,
-            connected_at, disconnected_at, last_event_at, last_error, created_at, updated_at
+            connected_at, disconnected_at, last_event_at, last_checked_at, disconnect_reason,
+            connection_status_code, last_error, created_at, updated_at
        FROM configuracoes_whatsapp WHERE user_id = ? LIMIT 1`,
     [userId],
   );
@@ -886,11 +951,54 @@ async function configureEvolutionWebhook(instanceName) {
 async function liveEvolutionState(instanceName) {
   try {
     const payload = await evolutionRequest(`/instance/connectionState/${encodeURIComponent(instanceName)}`);
-    return { exists: true, state: publicConnectionStatus(connectionStateFromPayload(payload)), payload };
+    const state = connectionStatusFromPayload(payload);
+    const details = disconnectDetailsFromPayload(payload, state === 'desconectado' ? 'connection_closed' : null);
+    return { exists: true, state, payload, ...details };
   } catch (error) {
-    if (error.status === 404) return { exists: false, state: 'nao_configurado', payload: null };
+    if (error.status === 404) {
+      return { exists: false, state: 'desconectado', payload: null, reason: 'instance_not_found', statusCode: 404 };
+    }
     throw error;
   }
+}
+
+async function synchronizeWhatsAppConnection(row) {
+  const live = await liveEvolutionState(row.instance_name);
+  const status = live.state;
+  const profile = status === 'conectado' && !row.phone_number ? await evolutionInstanceProfile(row.instance_name) : {};
+  const disconnected = status === 'desconectado';
+  return saveManagedWhatsApp(row.user_id, {
+    status,
+    ...profile,
+    connected_at: status === 'conectado' ? row.connected_at || now() : row.connected_at,
+    disconnected_at: disconnected
+      ? (row.status === 'desconectado' ? row.disconnected_at || now() : now())
+      : (status === 'erro' ? row.disconnected_at : null),
+    last_checked_at: now(),
+    disconnect_reason: disconnected ? live.reason || 'connection_closed' : (status === 'erro' ? row.disconnect_reason : null),
+    connection_status_code: disconnected ? live.statusCode : (status === 'erro' ? row.connection_status_code : null),
+    last_error: status === 'erro' ? `Estado de conexão não reconhecido: ${connectionStateFromPayload(live.payload)}` : null,
+  });
+}
+
+async function ensureWhatsAppConnected(userId) {
+  const row = await managedWhatsAppRow(userId);
+  if (!row?.instance_name) {
+    const error = new Error('WhatsApp não configurado. Conecte o número antes de enviar.');
+    error.status = 409;
+    throw error;
+  }
+  const synchronized = await synchronizeWhatsAppConnection(row);
+  if (synchronized.status !== 'conectado') {
+    const error = new Error('WhatsApp desconectado. Reconecte o número pelo QR Code antes de enviar.');
+    error.status = 409;
+    error.details = {
+      reason: synchronized.disconnect_reason,
+      statusCode: synchronized.connection_status_code,
+    };
+    throw error;
+  }
+  return synchronized;
 }
 
 async function evolutionInstanceProfile(instanceName) {
@@ -914,20 +1022,8 @@ app.get('/api/whatsapp/connection', requireAuth, requireAdmin, async (req, res) 
     let row = await managedWhatsAppRow(req.auth.accountId);
     if (!row?.instance_name) return res.json({ data: { status: 'nao_configurado' } });
 
-    const live = await liveEvolutionState(row.instance_name);
-    const status = live.state;
-    const profile = status === 'conectado' ? await evolutionInstanceProfile(row.instance_name) : {};
-    if (status !== row.status || (status === 'conectado' && !row.phone_number)) {
-      row = await saveManagedWhatsApp(req.auth.accountId, {
-        status,
-        ...profile,
-        connected_at: status === 'conectado' ? row.connected_at || now() : row.connected_at,
-        disconnected_at: status === 'desconectado' ? now() : row.disconnected_at,
-        last_event_at: now(),
-        last_error: null,
-      });
-    }
-    return res.json({ data: { ...row, status, instance_name: undefined } });
+    row = await synchronizeWhatsAppConnection(row);
+    return res.json({ data: { ...row, instance_name: undefined } });
   } catch (error) {
     return res.status(502).json({ error: { message: error.message } });
   }
@@ -936,7 +1032,13 @@ app.get('/api/whatsapp/connection', requireAuth, requireAdmin, async (req, res) 
 app.post('/api/whatsapp/connection', requireAuth, requireAdmin, async (req, res) => {
   try {
     requireEvolutionConfig();
-    let row = await saveManagedWhatsApp(req.auth.accountId, { status: 'criando', last_error: null });
+    let row = await saveManagedWhatsApp(req.auth.accountId, {
+      status: 'criando',
+      last_error: null,
+      disconnect_reason: null,
+      connection_status_code: null,
+      last_checked_at: now(),
+    });
     const instanceName = row.instance_name;
     let live = await liveEvolutionState(instanceName);
     let payload = null;
@@ -973,7 +1075,11 @@ app.post('/api/whatsapp/connection', requireAuth, requireAdmin, async (req, res)
       status,
       ...profile,
       connected_at: status === 'conectado' ? row.connected_at || now() : row.connected_at,
+      disconnected_at: status === 'conectado' ? null : row.disconnected_at,
       last_event_at: now(),
+      last_checked_at: now(),
+      disconnect_reason: null,
+      connection_status_code: null,
       last_error: null,
     });
     await writeAudit(req, { action: 'whatsapp.conectar', resource: 'configuracoes_whatsapp', resourceId: row.id, details: { status } });
@@ -997,6 +1103,9 @@ app.delete('/api/whatsapp/connection', requireAuth, requireAdmin, async (req, re
       status: 'desconectado',
       disconnected_at: now(),
       last_event_at: now(),
+      last_checked_at: now(),
+      disconnect_reason: 'user_requested',
+      connection_status_code: null,
       last_error: null,
     });
     await writeAudit(req, { action: 'whatsapp.desconectar', resource: 'configuracoes_whatsapp', resourceId: updated.id });
@@ -1006,24 +1115,110 @@ app.delete('/api/whatsapp/connection', requireAuth, requireAdmin, async (req, re
   }
 });
 
+async function createWhatsAppMessageLog(req, { phone, message, templateType, orderId }) {
+  let template = null;
+  if (templateType) {
+    const [templates] = await pool.query(
+      `SELECT id, updated_at FROM templates_mensagem
+        WHERE user_id = ? AND tipo = ? AND COALESCE(ativo, 1) = 1 LIMIT 1`,
+      [req.auth.accountId, templateType],
+    );
+    template = templates[0] || null;
+  }
+
+  if (orderId) {
+    const [orders] = await pool.query(
+      'SELECT id FROM ordens_servico WHERE id = ? AND user_id = ? LIMIT 1',
+      [orderId, req.auth.accountId],
+    );
+    if (!orders[0]) {
+      const error = new Error('Ordem de serviço inválida para este envio');
+      error.status = 400;
+      throw error;
+    }
+  }
+
+  const id = uuid();
+  const timestamp = now();
+  await pool.query(
+    `INSERT INTO whatsapp_mensagens_log
+      (id, user_id, actor_user_id, ordem_servico_id, template_id, template_type,
+       template_updated_at, telefone, mensagem, status, provider, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'processando', 'evolution', ?, ?)`,
+    [
+      id,
+      req.auth.accountId,
+      req.auth.userId,
+      orderId || null,
+      template?.id || null,
+      templateType || null,
+      template?.updated_at || null,
+      normalizePhone(phone),
+      message,
+      timestamp,
+      timestamp,
+    ],
+  );
+  return id;
+}
+
+async function updateWhatsAppMessageLog(id, values) {
+  const entries = Object.entries(values).filter(([, value]) => value !== undefined);
+  if (!entries.length) return;
+  await pool.query(
+    `UPDATE whatsapp_mensagens_log
+        SET ${entries.map(([key]) => `\`${key}\` = ?`).join(', ')}, updated_at = ?
+      WHERE id = ?`,
+    [...entries.map(([, value]) => value), now(), id],
+  );
+}
+
 app.post('/api/whatsapp/send', requireAuth, async (req, res) => {
+  let messageLogId = null;
   try {
     const phone = String(req.body.phone || '');
     const message = String(req.body.message || '').trim();
+    const templateType = String(req.body.template_type || '').trim() || null;
+    const orderId = String(req.body.ordem_id || '').trim() || null;
     if (!validatePhone(phone) || !message || message.length > 5000) {
       return res.status(400).json({ error: { message: 'Telefone ou mensagem inválidos' } });
     }
+    if (templateType && !MESSAGE_TEMPLATE_TYPES.has(templateType)) {
+      return res.status(400).json({ error: { message: 'Tipo de template inválido' } });
+    }
+
+    messageLogId = await createWhatsAppMessageLog(req, { phone, message, templateType, orderId });
     const config = await loadWhatsAppConfig(req.auth.accountId);
     if (config?.method === 'webhook' && config.webhook_url) {
-      await sendEvaluationViaEvolution(phone, message, config);
-      await writeAudit(req, { action: 'whatsapp.enviar', resource: 'mensagem', details: { phone: normalizePhone(phone), method: 'webhook' } });
-      return res.json({ data: { sent: true, method: 'webhook' } });
+      await ensureWhatsAppConnected(req.auth.accountId);
+      const providerResult = await sendEvaluationViaEvolution(phone, message, config);
+      await updateWhatsAppMessageLog(messageLogId, {
+        status: 'enviado',
+        provider_message_id: providerResult.providerMessageId,
+        erro: null,
+      });
+      await writeAudit(req, {
+        action: 'whatsapp.enviar',
+        resource: 'mensagem',
+        resourceId: messageLogId,
+        details: { phone: normalizePhone(phone), method: 'webhook', template_type: templateType, ordem_id: orderId },
+      });
+      return res.json({ data: { sent: true, method: 'webhook', log_id: messageLogId } });
     }
     const directUrl = `https://wa.me/${normalizePhone(phone)}?text=${encodeURIComponent(message)}`;
-    await writeAudit(req, { action: 'whatsapp.preparar', resource: 'mensagem', details: { phone: normalizePhone(phone), method: 'direct' } });
-    return res.json({ data: { sent: true, method: 'direct', direct_url: directUrl } });
+    await updateWhatsAppMessageLog(messageLogId, { status: 'preparado', provider: 'direct', erro: null });
+    await writeAudit(req, {
+      action: 'whatsapp.preparar',
+      resource: 'mensagem',
+      resourceId: messageLogId,
+      details: { phone: normalizePhone(phone), method: 'direct', template_type: templateType, ordem_id: orderId },
+    });
+    return res.json({ data: { sent: true, method: 'direct', direct_url: directUrl, log_id: messageLogId } });
   } catch (error) {
-    res.status(502).json({ error: { message: error.message || 'Falha ao enviar mensagem' } });
+    if (messageLogId) {
+      await updateWhatsAppMessageLog(messageLogId, { status: 'erro', erro: error.message }).catch(() => {});
+    }
+    res.status(error.status || 502).json({ error: { message: error.message || 'Falha ao enviar mensagem' } });
   }
 });
 
@@ -2947,23 +3142,48 @@ async function handleEvolutionWebhook(req, res) {
   if (!config) return res.status(404).json({ error: { message: 'Instância não vinculada ao UltraOS' } });
 
   const event = String(req.body?.event || '').replaceAll('.', '_').replaceAll('-', '_').toUpperCase();
+  if (event === 'LOGOUT_INSTANCE' || event === 'REMOVE_INSTANCE') {
+    const reason = event === 'REMOVE_INSTANCE' ? 'instance_removed' : 'logged_out';
+    await saveManagedWhatsApp(config.user_id, {
+      status: 'desconectado',
+      disconnected_at: now(),
+      last_event_at: now(),
+      last_checked_at: now(),
+      disconnect_reason: reason,
+      connection_status_code: null,
+      last_error: null,
+    });
+    return res.json({ received: true, status: 'desconectado', reason });
+  }
+
   if (event === 'CONNECTION_UPDATE') {
     const rawState = req.body?.data?.state || req.body?.state || connectionStateFromPayload(req.body);
-    const status = publicConnectionStatus(rawState);
+    const status = connectionStatusFromPayload({ ...req.body, state: rawState });
+    const disconnect = disconnectDetailsFromPayload(req.body, status === 'desconectado' ? rawState || 'connection_closed' : null);
     const phoneNumber = String(req.body?.data?.wuid || req.body?.data?.number || '').split('@')[0] || config.phone_number;
     await saveManagedWhatsApp(config.user_id, {
       status,
       phone_number: phoneNumber || null,
       connected_at: status === 'conectado' ? config.connected_at || now() : config.connected_at,
-      disconnected_at: status === 'desconectado' ? now() : config.disconnected_at,
+      disconnected_at: status === 'desconectado' ? now() : null,
       last_event_at: now(),
+      last_checked_at: now(),
+      disconnect_reason: status === 'desconectado' ? disconnect.reason || 'connection_closed' : null,
+      connection_status_code: status === 'desconectado' ? disconnect.statusCode : null,
       last_error: null,
     });
     return res.json({ received: true, status });
   }
 
   if (event === 'QRCODE_UPDATED') {
-    await saveManagedWhatsApp(config.user_id, { status: 'aguardando_qr', last_event_at: now(), last_error: null });
+    await saveManagedWhatsApp(config.user_id, {
+      status: 'aguardando_qr',
+      last_event_at: now(),
+      last_checked_at: now(),
+      disconnect_reason: null,
+      connection_status_code: null,
+      last_error: null,
+    });
     return res.json({ received: true, status: 'aguardando_qr' });
   }
 
@@ -2973,6 +3193,50 @@ async function handleEvolutionWebhook(req, res) {
 
 app.post('/api/financeiro/ia/webhook', handleFinancialAiWebhook);
 app.post('/api/webhooks/evolution/:secret', handleEvolutionWebhook);
+
+let whatsappReconciliationRunning = false;
+
+async function runWhatsAppReconciliation() {
+  if (whatsappReconciliationRunning || !EVOLUTION_API_URL || !EVOLUTION_API_KEY) return;
+  whatsappReconciliationRunning = true;
+  try {
+    const [rows] = await pool.query(
+      `SELECT id, user_id, instance_name, status, phone_number, profile_name, profile_picture_url,
+              connected_at, disconnected_at, last_event_at, last_checked_at, disconnect_reason,
+              connection_status_code, last_error, created_at, updated_at
+         FROM configuracoes_whatsapp
+        WHERE provider = 'evolution' AND COALESCE(NULLIF(instance_name, ''), '') <> ''`,
+    );
+    for (const row of rows) {
+      try {
+        await synchronizeWhatsAppConnection(row);
+      } catch (error) {
+        // Falha da infraestrutura não significa que o usuário deslogou. Mantemos
+        // o último estado conhecido e registramos somente a falha da verificação.
+        await pool.query(
+          'UPDATE configuracoes_whatsapp SET last_checked_at = ?, last_error = ?, updated_at = ? WHERE id = ?',
+          [now(), `Falha temporária ao verificar conexão: ${error.message}`, now(), row.id],
+        ).catch(() => {});
+      }
+    }
+  } catch (error) {
+    console.error('[whatsapp-reconcile] Erro no ciclo:', error.message);
+  } finally {
+    whatsappReconciliationRunning = false;
+  }
+}
+
+function startWhatsAppReconciliationJob() {
+  if (!WHATSAPP_RECONCILE_ENABLED) {
+    console.log('[whatsapp-reconcile] Desabilitado por WHATSAPP_RECONCILE_ENABLED=false');
+    return;
+  }
+  const initialTimer = setTimeout(() => void runWhatsAppReconciliation(), 15_000);
+  const interval = setInterval(() => void runWhatsAppReconciliation(), WHATSAPP_RECONCILE_INTERVAL_MS);
+  initialTimer.unref?.();
+  interval.unref?.();
+  console.log(`[whatsapp-reconcile] Ativo. Intervalo ${WHATSAPP_RECONCILE_INTERVAL_MS}ms.`);
+}
 
 let evaluationJobRunning = false;
 
@@ -3082,7 +3346,7 @@ async function loadEvaluationSettings(userId) {
 
 async function loadWhatsAppConfig(userId) {
   const [rows] = await pool.query(
-    'SELECT method, webhook_url, api_key, instance_name FROM configuracoes_whatsapp WHERE user_id = ? LIMIT 1',
+    'SELECT user_id, method, webhook_url, api_key, instance_name, status FROM configuracoes_whatsapp WHERE user_id = ? LIMIT 1',
     [userId],
   );
   const row = rows[0] || null;
@@ -3188,8 +3452,34 @@ async function sendEvaluationViaEvolution(phone, message, config) {
 
   const responseText = await response.text();
   if (!response.ok) {
-    throw new Error(`Evolution API HTTP ${response.status}: ${responseText}`);
+    let details = responseText;
+    try { details = JSON.parse(responseText); } catch {}
+    const error = new Error(`Evolution API HTTP ${response.status}`);
+    error.status = response.status;
+    error.details = details;
+    const disconnect = disconnectDetailsFromError(error);
+    if (disconnect.disconnected && config.user_id) {
+      await saveManagedWhatsApp(config.user_id, {
+        status: 'desconectado',
+        disconnected_at: now(),
+        last_checked_at: now(),
+        disconnect_reason: disconnect.reason,
+        connection_status_code: disconnect.statusCode,
+        last_error: 'Sessão do WhatsApp perdeu a autorização e precisa ser reconectada.',
+      }).catch(() => {});
+      error.status = 409;
+      error.message = 'WhatsApp desconectado pelo celular. Reconecte o número pelo QR Code antes de enviar.';
+    }
+    throw error;
   }
+
+  let responseData = null;
+  try {
+    responseData = JSON.parse(responseText);
+  } catch {}
+  return {
+    providerMessageId: responseData?.key?.id || responseData?.messageId || responseData?.id || null,
+  };
 }
 
 async function processEvaluationsForUser(userId) {
@@ -3321,5 +3611,6 @@ if (fs.existsSync(distDir)) {
 
 app.listen(PORT, HOST, () => {
   console.log(`Sistema OS API rodando em ${HOST}:${PORT}`);
+  startWhatsAppReconciliationJob();
   startEvaluationBackendJob();
 });

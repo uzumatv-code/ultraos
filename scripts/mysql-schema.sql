@@ -404,6 +404,7 @@ CREATE TABLE IF NOT EXISTS `configuracoes_empresa` (
   `dias_funcionamento` VARCHAR(100) NULL,
   `logo_url` VARCHAR(500) NULL,
   `endereco` TEXT NULL,
+  `termos_de_uso` TEXT NULL,
   `google_review_link` VARCHAR(500) NULL,
   `instagram_handle` VARCHAR(100) NULL,
   `avaliacoes_enabled` BOOLEAN DEFAULT TRUE,
@@ -435,6 +436,9 @@ CREATE TABLE IF NOT EXISTS `configuracoes_whatsapp` (
   `connected_at` VARCHAR(50) NULL,
   `disconnected_at` VARCHAR(50) NULL,
   `last_event_at` VARCHAR(50) NULL,
+  `last_checked_at` VARCHAR(50) NULL,
+  `disconnect_reason` VARCHAR(100) NULL,
+  `connection_status_code` INT NULL,
   `last_error` TEXT NULL,
   `created_at` VARCHAR(50) DEFAULT NULL,
   `updated_at` VARCHAR(50) DEFAULT NULL,
@@ -467,6 +471,33 @@ CREATE TABLE IF NOT EXISTS `templates_mensagem` (
   `created_at` VARCHAR(50) DEFAULT NULL,
   `updated_at` VARCHAR(50) DEFAULT NULL,
   UNIQUE KEY `unique_template_tipo_user` (`user_id`, `tipo`),
+  FOREIGN KEY (`user_id`) REFERENCES `usuarios`(`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ===========================================
+-- TABELA: whatsapp_mensagens_log
+-- Texto final e versão do template efetivamente enviados.
+-- ===========================================
+CREATE TABLE IF NOT EXISTS `whatsapp_mensagens_log` (
+  `id` VARCHAR(36) NOT NULL PRIMARY KEY,
+  `user_id` VARCHAR(36) NOT NULL,
+  `actor_user_id` VARCHAR(36) NULL,
+  `ordem_servico_id` VARCHAR(36) NULL,
+  `template_id` VARCHAR(36) NULL,
+  `template_type` VARCHAR(50) NULL,
+  `template_updated_at` VARCHAR(50) NULL,
+  `telefone` VARCHAR(30) NOT NULL,
+  `mensagem` TEXT NOT NULL,
+  `status` VARCHAR(30) NOT NULL,
+  `provider` VARCHAR(30) DEFAULT 'evolution',
+  `provider_message_id` VARCHAR(255) NULL,
+  `erro` TEXT NULL,
+  `created_at` VARCHAR(50) NOT NULL,
+  `updated_at` VARCHAR(50) NOT NULL,
+  INDEX `idx_whatsapp_log_user` (`user_id`),
+  INDEX `idx_whatsapp_log_order` (`ordem_servico_id`),
+  INDEX `idx_whatsapp_log_template` (`template_type`),
+  INDEX `idx_whatsapp_log_created` (`created_at`),
   FOREIGN KEY (`user_id`) REFERENCES `usuarios`(`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

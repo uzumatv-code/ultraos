@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import {
+  AlertTriangle,
   CheckCircle2,
   Clock3,
   Loader2,
@@ -31,6 +32,9 @@ interface ConnectionData {
   profile_picture_url?: string | null;
   connected_at?: string | null;
   last_event_at?: string | null;
+  last_checked_at?: string | null;
+  disconnect_reason?: string | null;
+  connection_status_code?: number | null;
   last_error?: string | null;
   qr?: {
     base64?: string | null;
@@ -76,6 +80,23 @@ function formatDate(value?: string | null) {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('pt-BR');
 }
 
+function disconnectMessage(reason?: string | null, statusCode?: number | null) {
+  const messages: Record<string, string> = {
+    device_removed: 'O aparelho foi removido pelo WhatsApp no celular.',
+    logged_out: 'A sessão foi encerrada pelo WhatsApp no celular.',
+    loggedout: 'A sessão foi encerrada pelo WhatsApp no celular.',
+    logout: 'A sessão foi encerrada pelo WhatsApp no celular.',
+    unauthorized: 'O WhatsApp revogou a autorização desta conexão.',
+    instance_not_found: 'A instância não existe mais na Evolution API.',
+    instance_removed: 'A instância foi removida da Evolution API.',
+    connection_closed: 'A conexão com o WhatsApp foi encerrada.',
+    close: 'A conexão com o WhatsApp foi encerrada.',
+    user_requested: 'A desconexão foi solicitada pelo administrador.',
+  };
+  const base = messages[reason || ''] || (reason ? `Conexão encerrada: ${reason.replace(/_/g, ' ')}.` : 'A conexão com o WhatsApp foi encerrada.');
+  return statusCode ? `${base} Código ${statusCode}.` : base;
+}
+
 export function ConfiguracoesWhatsApp() {
   const [connection, setConnection] = useState<ConnectionData>({ status: 'nao_configurado' });
   const [loading, setLoading] = useState(true);
@@ -99,8 +120,8 @@ export function ConfiguracoesWhatsApp() {
   }, [loadConnection]);
 
   useEffect(() => {
-    if (!['aguardando_qr', 'conectando', 'criando'].includes(connection.status)) return;
-    const timer = window.setInterval(() => void loadConnection(true), 5000);
+    const waiting = ['aguardando_qr', 'conectando', 'criando'].includes(connection.status);
+    const timer = window.setInterval(() => void loadConnection(true), waiting ? 5000 : 15000);
     return () => window.clearInterval(timer);
   }, [connection.status, loadConnection]);
 
@@ -182,7 +203,7 @@ export function ConfiguracoesWhatsApp() {
 
                   <div className="grid gap-3 sm:grid-cols-2">
                     <InfoCard label="Conectado em" value={formatDate(connection.connected_at)} />
-                    <InfoCard label="Última verificação" value={formatDate(connection.last_event_at)} />
+                    <InfoCard label="Última verificação" value={formatDate(connection.last_checked_at || connection.last_event_at)} />
                   </div>
 
                   <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/50 dark:text-emerald-200">
@@ -221,6 +242,16 @@ export function ConfiguracoesWhatsApp() {
                   </div>
                   <h2 className="text-2xl font-semibold text-slate-950 dark:text-white">Conecte o WhatsApp da empresa</h2>
                   <p className="mt-3 max-w-md text-slate-500 dark:text-slate-400">O UltraOS criará uma conexão segura e exclusiva. Você só precisa escanear o QR Code.</p>
+                  {connection.status === 'desconectado' && (
+                    <div className="mt-4 flex max-w-lg items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-left text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-200">
+                      <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+                      <div>
+                        <p className="font-semibold">WhatsApp desconectado</p>
+                        <p className="mt-1">{disconnectMessage(connection.disconnect_reason, connection.connection_status_code)}</p>
+                        <p className="mt-1 text-xs opacity-80">Última verificação: {formatDate(connection.last_checked_at)}</p>
+                      </div>
+                    </div>
+                  )}
                   {connection.last_error && <p className="mt-4 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:bg-rose-950 dark:text-rose-300">{connection.last_error}</p>}
                   <button onClick={connect} disabled={connecting} className="mt-6 inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 font-semibold text-white shadow-lg shadow-emerald-600/20 transition hover:bg-emerald-700 disabled:opacity-60">
                     {connecting ? <Loader2 className="h-5 w-5 animate-spin" /> : <QrCode className="h-5 w-5" />}

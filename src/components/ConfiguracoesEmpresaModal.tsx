@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { X, Building2, Clock, Calendar, FileText, Phone, Mail, MapPin, Save } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { toast } from './ToastCustom';
+import { WhatsAppService } from '../utils/whatsapp-service';
 
 interface ConfiguracoesEmpresaModalProps {
   isOpen: boolean;
@@ -17,19 +18,23 @@ interface EmpresaConfig {
   endereco: string;
   telefone: string;
   email: string;
+  termos_de_uso: string;
 }
+
+const DEFAULT_CONFIG: EmpresaConfig = {
+  nome_empresa: 'Sua Empresa',
+  cnpj: '',
+  horario_funcionamento: '10h às 13h | 14h às 18h',
+  dias_funcionamento: 'Segunda a Sábado',
+  endereco: '',
+  telefone: '',
+  email: '',
+  termos_de_uso: '',
+};
 
 export function ConfiguracoesEmpresaModal({ isOpen, onClose }: ConfiguracoesEmpresaModalProps) {
   const [loading, setLoading] = useState(false);
-  const [config, setConfig] = useState<EmpresaConfig>({
-    nome_empresa: 'Serviços prime Luthieria - Samuel Luthier',
-    cnpj: '30.057.854/0001-75',
-    horario_funcionamento: '10h às 13h | 14h às 18h',
-    dias_funcionamento: 'Segunda a Sábado',
-    endereco: '',
-    telefone: '',
-    email: ''
-  });
+  const [config, setConfig] = useState<EmpresaConfig>(DEFAULT_CONFIG);
 
   useEffect(() => {
     if (isOpen) {
@@ -53,7 +58,11 @@ export function ConfiguracoesEmpresaModal({ isOpen, onClose }: ConfiguracoesEmpr
       }
 
       if (data) {
-        setConfig(data);
+        setConfig(Object.fromEntries(
+          Object.entries(DEFAULT_CONFIG).map(([key, fallback]) => [key, data[key] ?? fallback]),
+        ) as unknown as EmpresaConfig);
+      } else {
+        setConfig(DEFAULT_CONFIG);
       }
     } catch (error) {
       console.error('Erro ao carregar configurações:', error);
@@ -82,6 +91,7 @@ export function ConfiguracoesEmpresaModal({ isOpen, onClose }: ConfiguracoesEmpr
 
       if (error) throw error;
 
+      WhatsAppService.clearCache();
       toast.success('Configurações salvas com sucesso!');
       onClose();
     } catch (error) {
@@ -215,6 +225,21 @@ export function ConfiguracoesEmpresaModal({ isOpen, onClose }: ConfiguracoesEmpr
                     rows={3}
                     placeholder="Rua, número, bairro, cidade - CEP"
                   />
+                </div>
+
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    <FileText className="w-4 h-4 inline mr-2" />
+                    Termos de uso nas mensagens
+                  </label>
+                  <textarea
+                    value={config.termos_de_uso}
+                    onChange={(e) => setConfig({ ...config, termos_de_uso: e.target.value })}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                    rows={5}
+                    placeholder="Informe os termos e responsabilidades da sua empresa. Use {termos_de_uso} nos templates para exibi-los."
+                  />
+                  <p className="mt-1 text-xs text-gray-500">Este texto pertence somente à sua conta e não é compartilhado com outros clientes.</p>
                 </div>
               </div>
 
