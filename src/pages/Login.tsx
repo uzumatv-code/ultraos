@@ -4,13 +4,11 @@ import { motion } from 'framer-motion';
 import { Eye, EyeOff, KeyRound, Mail, Music2, Loader2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { toast } from '../components/ToastCustom';
-import { useAuth } from '../contexts/AuthContext';
 
 const REMEMBERED_LOGIN_KEY = 'ultraos-remembered-login-email';
 
 export function Login() {
   const navigate = useNavigate();
-  const { authenticated, loading: authLoading } = useAuth();
   const [email, setEmail] = useState('');
   const [senha, setSenha] = useState('');
   const [mostrarSenha, setMostrarSenha] = useState(false);
@@ -26,11 +24,23 @@ export function Login() {
       setEmail(rememberedEmail);
       setMemorizarLogin(true);
     }
-  }, []);
+    checkUser();
+  }, [navigate]);
 
-  useEffect(() => {
-    if (!authLoading && authenticated) navigate('/dashboard', { replace: true });
-  }, [authLoading, authenticated, navigate]);
+  async function checkUser() {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token && session?.user?.aud) {
+        navigate('/dashboard');
+      }
+    } catch (error: any) {
+      if (error.message === 'Sessão inválida') {
+        await supabase.auth.signOut();
+      } else if (!error.message?.includes('Failed to fetch')) {
+        toast.error('Erro ao verificar sessão');
+      }
+    }
+  }
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();

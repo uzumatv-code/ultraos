@@ -774,32 +774,6 @@ async function columnExists(conn, table, column) {
   return Number(rows[0]?.total || 0) > 0;
 }
 
-function expectedColumnDefinition(definition) {
-  const type = definition.match(/^\s*([^\s]+)/)?.[1]?.toLowerCase() || '';
-  const nullable = !/\bNOT\s+NULL\b/i.test(definition);
-  const defaultMatch = definition.match(/\bDEFAULT\s+(NULL|'(?:''|[^'])*'|[^\s]+)/i);
-  let defaultValue = null;
-  if (defaultMatch && defaultMatch[1].toUpperCase() !== 'NULL') {
-    defaultValue = defaultMatch[1].replace(/^'|'$/g, '').replace(/''/g, "'");
-  }
-  return { type, nullable, defaultValue };
-}
-
-async function columnDefinitionMatches(conn, table, column, definition) {
-  const [rows] = await conn.query(
-    `SELECT COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT
-       FROM information_schema.COLUMNS
-      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
-    [table, column],
-  );
-  const current = rows[0];
-  if (!current) return false;
-  const expected = expectedColumnDefinition(definition);
-  return String(current.COLUMN_TYPE || '').toLowerCase() === expected.type
-    && (current.IS_NULLABLE === 'YES') === expected.nullable
-    && String(current.COLUMN_DEFAULT ?? '') === String(expected.defaultValue ?? '');
-}
-
 async function indexExists(conn, table, indexName) {
   const [rows] = await conn.query(
     `SELECT COUNT(*) AS total
@@ -823,7 +797,6 @@ async function addMissingColumns(conn) {
 async function modifyExistingColumns(conn) {
   for (const [table, column, definition] of modifyColumns) {
     if (!(await tableExists(conn, table)) || !(await columnExists(conn, table, column))) continue;
-    if (await columnDefinitionMatches(conn, table, column, definition)) continue;
     await safeStep(`normalizar tipo ${table}.${column}`, () => conn.query(`ALTER TABLE \`${table}\` MODIFY COLUMN \`${column}\` ${definition}`));
   }
 }
