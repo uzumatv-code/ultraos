@@ -23,6 +23,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { NotificacoesModal } from './NotificacoesModal';
 import { supabase } from '../lib/supabase';
 import { toast } from './ToastCustom';
+import { loadBrandLogoDataUrl } from '../utils/tenant-customization-service';
 import { addDaysToDateOnly, todayLocalDate } from '../utils/dates';
 import type { ContaPagar, OrdemServico } from '../types/database';
 import { Permission, useAuth } from '../contexts/AuthContext';
@@ -84,21 +85,21 @@ export function Header() {
       if (!user) return;
       atualizarPerfil(user);
 
-      const { data, error } = await supabase
-        .from('system_settings')
-        .select('*')
-        .eq('user_id', user.id)
-        .maybeSingle();
-
-      if (error && error.code !== 'PGRST116') throw error;
-      setLogoUrl(data?.logo_url || '');
-      setSiteTitle(data?.site_title || 'Sistema OS');
+      const [systemResult, companyResult, tenantLogo] = await Promise.all([
+        supabase.from('system_settings').select('*').maybeSingle(),
+        supabase.from('configuracoes_empresa').select('*').maybeSingle(),
+        loadBrandLogoDataUrl().catch(() => ''),
+      ]);
+      if (systemResult.error && systemResult.error.code !== 'PGRST116') throw systemResult.error;
+      if (companyResult.error && companyResult.error.code !== 'PGRST116') throw companyResult.error;
+      setLogoUrl(tenantLogo || systemResult.data?.logo_url || '');
+      setSiteTitle(companyResult.data?.nome_empresa || systemResult.data?.site_title || 'Sistema OS');
     } catch (error: any) {
       if (error?.message && !error.message.includes('Failed to fetch')) {
         toast.error('Erro ao carregar configurações do sistema');
       }
     }
-  }, []);
+  }, [atualizarPerfil]);
 
   async function buscarOrdensHoje() {
     try {
@@ -155,11 +156,17 @@ export function Header() {
     buscarContasHoje();
     carregarConfiguracoes();
 
+    const handleBrandingUpdate = () => carregarConfiguracoes();
+    window.addEventListener('tenant-branding-updated', handleBrandingUpdate);
+
     const interval = setInterval(() => {
       buscarOrdensHoje();
       buscarContasHoje();
     }, 15000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('tenant-branding-updated', handleBrandingUpdate);
+    };
   }, [carregarConfiguracoes]);
 
   useEffect(() => {
@@ -192,7 +199,7 @@ export function Header() {
         </div>
         <div className="min-w-0">
           <p className="truncate text-sm font-semibold">{siteTitle}</p>
-          <p className="truncate text-xs text-slate-400">Luthieria Brasília</p>
+          <p className="truncate text-xs text-slate-400">Gestão de serviços</p>
         </div>
       </div>
 

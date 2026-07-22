@@ -24,6 +24,7 @@ const Financeiro = lazy(() => import('./pages/Financeiro').then((module) => ({ d
 const FinanceiroIA = lazy(() => import('./pages/FinanceiroIA').then((module) => ({ default: module.FinanceiroIA })));
 const ConfiguracoesWhatsApp = lazy(() => import('./pages/ConfiguracoesWhatsApp').then((module) => ({ default: module.ConfiguracoesWhatsApp })));
 const ConfiguracoesCompletas = lazy(() => import('./pages/ConfiguracoesCompletas').then((module) => ({ default: module.ConfiguracoesCompletas })));
+const DocumentoOSDesigner = lazy(() => import('./pages/DocumentoOSDesigner').then((module) => ({ default: module.DocumentoOSDesigner })));
 const NotasFiscais = lazy(() => import('./pages/NotasFiscais').then((module) => ({ default: module.NotasFiscais })));
 const AvaliacoesLembretes = lazy(() => import('./pages/AvaliacoesLembretes').then((module) => ({ default: module.AvaliacoesLembretes })));
 
@@ -280,6 +281,16 @@ function App() {
             <ProtectedRoute>
               <RequirePermission permission="settings.manage">
                 <Layout><ConfiguracoesCompletas /></Layout>
+              </RequirePermission>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/configuracoes/documentos"
+          element={
+            <ProtectedRoute>
+              <RequirePermission permission="settings.manage">
+                <Layout><DocumentoOSDesigner /></Layout>
               </RequirePermission>
             </ProtectedRoute>
           }

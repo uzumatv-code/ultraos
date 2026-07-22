@@ -458,6 +458,38 @@ CREATE TABLE IF NOT EXISTS `system_settings` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ===========================================
+-- ATIVOS E MODELOS DE DOCUMENTOS POR EMPRESA
+-- ===========================================
+CREATE TABLE IF NOT EXISTS `tenant_assets` (
+  `id` VARCHAR(36) NOT NULL PRIMARY KEY,
+  `user_id` VARCHAR(36) NOT NULL,
+  `asset_key` VARCHAR(100) NOT NULL,
+  `mime_type` VARCHAR(100) NOT NULL,
+  `content` LONGBLOB NOT NULL,
+  `file_size` INT NOT NULL,
+  `created_at` VARCHAR(50) DEFAULT NULL,
+  `updated_at` VARCHAR(50) DEFAULT NULL,
+  UNIQUE KEY `unique_tenant_asset` (`user_id`, `asset_key`),
+  INDEX `idx_tenant_assets_user` (`user_id`),
+  FOREIGN KEY (`user_id`) REFERENCES `usuarios`(`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `document_templates` (
+  `id` VARCHAR(36) NOT NULL PRIMARY KEY,
+  `user_id` VARCHAR(36) NOT NULL,
+  `name` VARCHAR(120) NOT NULL,
+  `document_type` VARCHAR(50) NOT NULL DEFAULT 'service_order',
+  `config_json` JSON NOT NULL,
+  `is_default` BOOLEAN NOT NULL DEFAULT FALSE,
+  `version` INT NOT NULL DEFAULT 1,
+  `created_at` VARCHAR(50) DEFAULT NULL,
+  `updated_at` VARCHAR(50) DEFAULT NULL,
+  INDEX `idx_document_templates_user_type` (`user_id`, `document_type`),
+  INDEX `idx_document_templates_default` (`user_id`, `document_type`, `is_default`),
+  FOREIGN KEY (`user_id`) REFERENCES `usuarios`(`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ===========================================
 -- TABELA: templates_mensagem
 -- ===========================================
 CREATE TABLE IF NOT EXISTS `templates_mensagem` (

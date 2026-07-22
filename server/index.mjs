@@ -9,6 +9,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import mysql from 'mysql2/promise';
 import nodemailer from 'nodemailer';
+import { detectImageMime, normalizeDocumentConfig } from './document-customization.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -1584,6 +1585,163 @@ app.delete('/api/storage/:bucket', requireAuth, requireAdmin, async (req, res) =
     if (fs.existsSync(upload.target)) fs.rmSync(upload.target, { force: true });
   }
   res.json({ data: null, error: null });
+});
+
+app.get('/api/branding/logo', requireAuth, async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT mime_type, content, updated_at
+         FROM tenant_assets
+        WHERE user_id = ? AND asset_key = 'brand_logo'
+        LIMIT 1`,
+      [req.user.id],
+    );
+    if (!rows.length) return res.status(404).json({ error: { message: 'Logo nao cadastrada' } });
+    res.setHeader('Content-Type', rows[0].mime_type);
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    return res.send(rows[0].content);
+  } catch (error) {
+    return res.status(500).json({ error: { message: error.message } });
+  }
+});
+
+app.post('/api/branding/logo', requireAuth, requireAdmin, express.raw({ type: '*/*', limit: '2mb' }), async (req, res) => {
+  try {
+    const mimeType = detectImageMime(req.body);
+    if (!mimeType) {
+      return res.status(400).json({ error: { message: 'Envie uma imagem PNG, JPEG ou WebP valida' } });
+    }
+    const createdAt = now();
+    await pool.query(
+      `INSERT INTO tenant_assets
+       (id, user_id, asset_key, mime_type, content, file_size, created_at, updated_at)
+       VALUES (?, ?, 'brand_logo', ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE mime_type = VALUES(mime_type), content = VALUES(content),
+         file_size = VALUES(file_size), updated_at = VALUES(updated_at)`,
+      [uuid(), req.user.id, mimeType, req.body, req.body.length, createdAt, createdAt],
+    );
+    await writeAudit(req, { action: 'identidade.logo.atualizar', resource: 'tenant_assets', details: { mimeType, size: req.body.length } });
+    return res.json({ data: { mime_type: mimeType, file_size: req.body.length }, error: null });
+  } catch (error) {
+    return res.status(500).json({ error: { message: error.message } });
+  }
+});
+
+app.delete('/api/branding/logo', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const [result] = await pool.query(
+      `DELETE FROM tenant_assets WHERE user_id = ? AND asset_key = 'brand_logo'`,
+      [req.user.id],
+    );
+    await writeAudit(req, { action: 'identidade.logo.remover', resource: 'tenant_assets', details: { affected: Number(result.affectedRows || 0) } });
+    return res.json({ data: null, error: null });
+  } catch (error) {
+    return res.status(500).json({ error: { message: error.message } });
+  }
+});
+
+app.get('/api/document-templates', requireAuth, async (req, res) => {
+  try {
+    const documentType = String(req.query.type || 'service_order').slice(0, 50);
+    const [rows] = await pool.query(
+      `SELECT id, name, document_type, config_json, is_default, version, created_at, updated_at
+         FROM document_templates
+        WHERE user_id = ? AND document_type = ?
+        ORDER BY is_default DESC, updated_at DESC, name ASC`,
+      [req.user.id, documentType],
+    );
+    return res.json({
+      data: rows.map((row) => ({
+        ...row,
+        is_default: Boolean(row.is_default),
+        config_json: typeof row.config_json === 'string' ? JSON.parse(row.config_json) : row.config_json,
+      })),
+      error: null,
+    });
+  } catch (error) {
+    return res.status(500).json({ error: { message: error.message } });
+  }
+});
+
+app.post('/api/document-templates', requireAuth, requireAdmin, async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    const documentType = String(req.body?.document_type || 'service_order').slice(0, 50);
+    if (documentType !== 'service_order') {
+      return res.status(400).json({ error: { message: 'Tipo de documento nao suportado' } });
+    }
+    const name = String(req.body?.name || '').trim().slice(0, 120);
+    if (!name) return res.status(400).json({ error: { message: 'Informe o nome do modelo' } });
+    const config = normalizeDocumentConfig(req.body?.config_json);
+    const requestedId = String(req.body?.id || '').trim();
+    const isDefault = req.body?.is_default !== false;
+    const updatedAt = now();
+
+    await conn.beginTransaction();
+    let id = requestedId;
+    let version = 1;
+    if (requestedId) {
+      const [existing] = await conn.query(
+        'SELECT id, version FROM document_templates WHERE id = ? AND user_id = ? LIMIT 1 FOR UPDATE',
+        [requestedId, req.user.id],
+      );
+      if (!existing.length) {
+        await conn.rollback();
+        return res.status(404).json({ error: { message: 'Modelo nao encontrado nesta empresa' } });
+      }
+      version = Number(existing[0].version || 0) + 1;
+    } else {
+      id = uuid();
+    }
+
+    if (isDefault) {
+      await conn.query(
+        'UPDATE document_templates SET is_default = 0, updated_at = ? WHERE user_id = ? AND document_type = ?',
+        [updatedAt, req.user.id, documentType],
+      );
+    }
+
+    if (requestedId) {
+      await conn.query(
+        `UPDATE document_templates
+            SET name = ?, document_type = ?, config_json = ?, is_default = ?, version = ?, updated_at = ?
+          WHERE id = ? AND user_id = ?`,
+        [name, documentType, JSON.stringify(config), isDefault ? 1 : 0, version, updatedAt, id, req.user.id],
+      );
+    } else {
+      await conn.query(
+        `INSERT INTO document_templates
+         (id, user_id, name, document_type, config_json, is_default, version, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+        [id, req.user.id, name, documentType, JSON.stringify(config), isDefault ? 1 : 0, updatedAt, updatedAt],
+      );
+    }
+    await conn.commit();
+    await writeAudit(req, { action: requestedId ? 'documento.modelo.atualizar' : 'documento.modelo.criar', resource: 'document_templates', resourceId: id, details: { name, documentType, version, isDefault } });
+    return res.json({ data: { id, name, document_type: documentType, config_json: config, is_default: isDefault, version, updated_at: updatedAt }, error: null });
+  } catch (error) {
+    await conn.rollback().catch(() => {});
+    return res.status(500).json({ error: { message: error.message } });
+  } finally {
+    conn.release();
+  }
+});
+
+app.delete('/api/document-templates/:id', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      'SELECT is_default FROM document_templates WHERE id = ? AND user_id = ? LIMIT 1',
+      [req.params.id, req.user.id],
+    );
+    if (!rows.length) return res.status(404).json({ error: { message: 'Modelo nao encontrado nesta empresa' } });
+    if (rows[0].is_default) return res.status(400).json({ error: { message: 'Defina outro modelo como padrao antes de excluir este' } });
+    await pool.query('DELETE FROM document_templates WHERE id = ? AND user_id = ?', [req.params.id, req.user.id]);
+    await writeAudit(req, { action: 'documento.modelo.excluir', resource: 'document_templates', resourceId: req.params.id });
+    return res.json({ data: null, error: null });
+  } catch (error) {
+    return res.status(500).json({ error: { message: error.message } });
+  }
 });
 
 function money(value) {

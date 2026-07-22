@@ -8,6 +8,7 @@
     "api": "node server/index.mjs",
     "build": "vite build",
     "lint": "eslint .",
+    "test:documents": "node --test server/document-customization.test.mjs",
     "migrate:mysql": "node scripts/migrate-mysql.mjs",
     "import:supabase": "node scripts/import-supabase.mjs",
     "preview": "vite preview",

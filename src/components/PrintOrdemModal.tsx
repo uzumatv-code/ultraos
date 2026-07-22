@@ -1,9 +1,16 @@
-import React from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { X, Printer } from 'lucide-react';
-import { formatCurrency, formatDate } from '../utils/formatters';
-import { getOrderProblemAndServiceText } from '../utils/template-service';
+import { useEffect, useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
+import { Loader2, Printer, X } from 'lucide-react';
+import { supabase } from '../lib/supabase';
 import type { OrdemServico } from '../types/database';
+import {
+  buildOrderDocumentHtml,
+  DEFAULT_ORDER_DOCUMENT_CONFIG,
+  normalizeOrderDocumentConfig,
+  type CompanyDocumentConfig,
+  type OrderDocumentTemplateConfig,
+} from '../utils/order-document-template';
+import { listDocumentTemplates, loadBrandLogoDataUrl } from '../utils/tenant-customization-service';
 
 interface PrintOrdemModalProps {
   isOpen: boolean;
@@ -11,255 +18,90 @@ interface PrintOrdemModalProps {
   ordem: OrdemServico;
 }
 
-function escapeHtml(value: unknown) {
-  return String(value ?? '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#039;');
-}
-
 export function PrintOrdemModal({ isOpen, onClose, ordem }: PrintOrdemModalProps) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [company, setCompany] = useState<CompanyDocumentConfig>({});
+  const [logoDataUrl, setLogoDataUrl] = useState('');
+  const [templateName, setTemplateName] = useState('Padrão do sistema');
+  const [config, setConfig] = useState<OrderDocumentTemplateConfig>(DEFAULT_ORDER_DOCUMENT_CONFIG);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    let active = true;
+    setLoading(true);
+    setError('');
+    Promise.all([
+      supabase.from('configuracoes_empresa').select('*').maybeSingle(),
+      listDocumentTemplates<OrderDocumentTemplateConfig>(),
+      loadBrandLogoDataUrl().catch(() => ''),
+    ])
+      .then(([companyResult, templates, logo]) => {
+        if (!active) return;
+        if (companyResult.error && companyResult.error.code !== 'PGRST116') throw companyResult.error;
+        const selected = templates.find((template) => template.is_default) || templates[0];
+        setCompany(companyResult.data || {});
+        setLogoDataUrl(logo);
+        setTemplateName(selected?.name || 'Padrão do sistema');
+        setConfig(normalizeOrderDocumentConfig(selected?.config_json));
+      })
+      .catch((loadError) => {
+        if (!active) return;
+        setError(loadError?.message || 'Não foi possível carregar o modelo do documento.');
+        setConfig(DEFAULT_ORDER_DOCUMENT_CONFIG);
+      })
+      .finally(() => active && setLoading(false));
+    return () => { active = false; };
+  }, [isOpen]);
+
   function handlePrint() {
     const printWindow = window.open('', '_blank');
-    if (!printWindow) return;
-    const { problemas, servicos } = getOrderProblemAndServiceText(ordem as unknown as Record<string, unknown>);
-
-    const content = `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>Ordem de Serviço #${ordem.numero}</title>
-          <style>
-            body {
-              font-family: Arial, sans-serif;
-              line-height: 1.6;
-              margin: 0;
-              padding: 20px;
-            }
-            .container {
-              max-width: 800px;
-              margin: 0 auto;
-              border: 1px solid #ccc;
-              padding: 20px;
-            }
-            .header {
-              text-align: center;
-              border-bottom: 2px solid #000;
-              padding-bottom: 20px;
-              margin-bottom: 20px;
-            }
-            .title {
-              font-size: 24px;
-              font-weight: bold;
-              margin: 10px 0;
-            }
-            .subtitle {
-              font-size: 16px;
-              color: #666;
-            }
-            .section {
-              margin-bottom: 20px;
-              padding: 10px;
-              border: 1px solid #eee;
-            }
-            .section-title {
-              font-weight: bold;
-              margin-bottom: 10px;
-              background: #f5f5f5;
-              padding: 5px;
-            }
-            .row {
-              display: flex;
-              justify-content: space-between;
-              margin-bottom: 5px;
-            }
-            .label {
-              font-weight: bold;
-              margin-right: 10px;
-            }
-            .value {
-              flex: 1;
-            }
-            .footer {
-              margin-top: 40px;
-              text-align: center;
-              font-size: 12px;
-              color: #666;
-            }
-            .signature-line {
-              margin-top: 60px;
-              border-top: 1px solid #000;
-              width: 200px;
-              text-align: center;
-              padding-top: 5px;
-            }
-            @media print {
-              body { print-color-adjust: exact; }
-              .no-print { display: none; }
-            }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <div class="header">
-              <div class="title">ORDEM DE SERVIÇO Nº ${ordem.numero}</div>
-              <div class="subtitle">CNPJ: 30.057.854/0001-75</div>
-              <div class="subtitle">Samuel Silva - Luthier</div>
-            </div>
-
-            <div class="section">
-              <div class="section-title">INFORMAÇÕES DO CLIENTE</div>
-              <div class="row">
-                <span class="label">Nome:</span>
-                <span class="value">${ordem.cliente?.nome || ''}</span>
-              </div>
-              <div class="row">
-                <span class="label">Telefone:</span>
-                <span class="value">${ordem.cliente?.telefone || ''}</span>
-              </div>
-              <div class="row">
-                <span class="label">CPF/CNPJ:</span>
-                <span class="value">${ordem.cliente?.cpf_cnpj || ''}</span>
-              </div>
-            </div>
-
-            <div class="section">
-              <div class="section-title">INFORMAÇÕES DO EQUIPAMENTO</div>
-              <div class="row">
-                <span class="label">Equipamento:</span>
-                <span class="value">${ordem.instrumento?.nome || ''}</span>
-              </div>
-              <div class="row">
-                <span class="label">Marca:</span>
-                <span class="value">${ordem.marca?.nome || ''}</span>
-              </div>
-              <div class="row">
-                <span class="label">Modelo:</span>
-                <span class="value">${ordem.modelo || ''}</span>
-              </div>
-              <div class="row">
-                <span class="label">Acessórios:</span>
-                <span class="value">${ordem.acessorios || 'Nenhum'}</span>
-              </div>
-            </div>
-
-            <div class="section">
-              <div class="section-title">DIAGNÓSTICO E SOLUÇÃO</div>
-              <div style="margin-bottom: 12px;">
-                <div class="label">Problema:</div>
-                <div style="white-space: pre-wrap;">${escapeHtml(problemas)}</div>
-              </div>
-              <div>
-                <div class="label">Solução / serviços:</div>
-                <div style="white-space: pre-wrap;">${escapeHtml(servicos)}</div>
-              </div>
-            </div>
-
-            <div class="section">
-              <div class="section-title">SERVIÇOS E VALORES</div>
-              <div class="row">
-                <span class="label">Valor dos Serviços:</span>
-                <span class="value">${formatCurrency(ordem.valor_servicos)}</span>
-              </div>
-              <div class="row">
-                <span class="label">Desconto:</span>
-                <span class="value">${formatCurrency(ordem.desconto)}</span>
-              </div>
-              <div class="row">
-                <span class="label">Valor Total:</span>
-                <span class="value">${formatCurrency(ordem.valor_servicos - ordem.desconto)}</span>
-              </div>
-              <div class="row">
-                <span class="label">Forma de Pagamento:</span>
-                <span class="value">${ordem.forma_pagamento.toUpperCase()}</span>
-              </div>
-            </div>
-
-            <div class="section">
-              <div class="section-title">DATAS</div>
-              <div class="row">
-                <span class="label">Data de Entrada:</span>
-                <span class="value">${formatDate(ordem.data_entrada)}</span>
-              </div>
-              <div class="row">
-                <span class="label">Previsão de Entrega:</span>
-                <span class="value">${formatDate(ordem.data_previsao)}</span>
-              </div>
-            </div>
-
-            <div class="section">
-              <div class="section-title">OBSERVAÇÕES</div>
-              <div style="white-space: pre-wrap;">${ordem.observacoes}</div>
-            </div>
-
-            <div style="display: flex; justify-content: center;">
-              <div class="signature-line">
-                Assinatura do Cliente
-              </div>
-            </div>
-
-            <div class="footer">
-              <p>Este documento não tem valor fiscal - Apenas para controle interno</p>
-            </div>
-          </div>
-          <script>
-            window.onload = () => window.print();
-          </script>
-        </body>
-      </html>
-    `;
-
-    printWindow.document.write(content);
+    if (!printWindow) {
+      setError('O navegador bloqueou a janela de impressão. Autorize pop-ups para continuar.');
+      return;
+    }
+    printWindow.document.open();
+    printWindow.document.write(buildOrderDocumentHtml({ ordem, company, logoDataUrl, config, autoPrint: true }));
     printWindow.document.close();
   }
 
   return (
     <AnimatePresence>
       {isOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-2 sm:p-4 bg-black/50">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-2 sm:p-4">
           <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.95 }}
-            className="bg-white rounded-xl sm:rounded-2xl shadow-xl w-full max-w-lg max-h-[calc(100dvh-1rem)] relative overflow-y-auto"
+            className="relative max-h-[calc(100dvh-1rem)] w-full max-w-lg overflow-y-auto rounded-2xl bg-white shadow-xl"
           >
             <div className="p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-xl font-bold text-gray-800">
-                  Imprimir Ordem de Serviço
-                </h2>
-                <button
-                  onClick={onClose}
-                  className="text-gray-400 hover:text-gray-600 transition-colors"
-                >
-                  <X className="w-5 h-5" />
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-bold text-gray-800">Imprimir ordem de serviço</h2>
+                  <p className="mt-1 text-xs text-gray-500">Modelo: {templateName}</p>
+                </div>
+                <button onClick={onClose} className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600" aria-label="Fechar">
+                  <X className="h-5 w-5" />
                 </button>
               </div>
 
-              <div className="space-y-4">
-                <p className="text-gray-600">
-                  Deseja imprimir a ordem de serviço #{ordem.numero}?
-                </p>
-
-                <div className="flex justify-end space-x-3 pt-4">
-                  <button
-                    type="button"
-                    onClick={onClose}
-                    className="px-4 py-2 text-sm font-medium text-gray-700 hover:text-gray-800 transition-colors"
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    onClick={handlePrint}
-                    className="px-4 py-2 bg-purple-600 text-white font-medium rounded-lg hover:bg-purple-700 transition-colors flex items-center space-x-2"
-                  >
-                    <Printer className="w-4 h-4" />
-                    <span>Imprimir</span>
-                  </button>
+              {loading ? (
+                <div className="flex items-center justify-center gap-2 py-10 text-gray-600">
+                  <Loader2 className="h-5 w-5 animate-spin" /> Carregando identidade e modelo…
                 </div>
-              </div>
+              ) : (
+                <div className="space-y-4">
+                  <p className="text-gray-600">A ordem #{ordem.numero} será gerada com a identidade visual da sua empresa.</p>
+                  {error && <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+                  <div className="flex justify-end gap-3 border-t border-gray-100 pt-4">
+                    <button type="button" onClick={onClose} className="px-4 py-2 text-sm font-medium text-gray-700 hover:text-gray-900">Cancelar</button>
+                    <button onClick={handlePrint} className="flex items-center gap-2 rounded-lg bg-purple-600 px-4 py-2 font-medium text-white hover:bg-purple-700">
+                      <Printer className="h-4 w-4" /> Imprimir / salvar PDF
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </motion.div>
         </div>

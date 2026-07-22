@@ -5,7 +5,9 @@ import {
   MessageSquare, 
   Settings,
   ArrowLeft,
-  Phone
+  Phone,
+  Palette,
+  FileText,
 } from 'lucide-react';
 import { TemplatesModal } from '../components/TemplatesModal';
 
@@ -36,7 +38,7 @@ export function ConfiguracoesCompletas() {
                   ⚙️ Configurações
                 </h1>
                 <p className="text-gray-600 dark:text-gray-400 mt-1">
-                  Gerencie templates e configurações do WhatsApp
+                  Gerencie a identidade da empresa, documentos e integrações
                 </p>
               </div>
             </div>
@@ -45,6 +47,26 @@ export function ConfiguracoesCompletas() {
 
         {/* Configurações Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-4 sm:p-6 border border-gray-200 dark:border-gray-700"
+          >
+            <div className="flex items-center space-x-3 mb-4">
+              <div className="bg-indigo-100 dark:bg-indigo-900 p-2 rounded-lg"><Palette className="h-6 w-6 text-indigo-600 dark:text-indigo-400" /></div>
+              <div><h3 className="text-lg font-semibold text-gray-900 dark:text-white">Identidade e PDF da OS</h3><p className="text-gray-600 dark:text-gray-400 text-sm">Logo, cores, layout e modelos por empresa</p></div>
+            </div>
+            <div className="space-y-4">
+              <p className="text-gray-700 dark:text-gray-300">Personalize o sistema e monte o documento da ordem de serviço com prévia em tempo real.</p>
+              <ul className="space-y-2 text-sm text-gray-600 dark:text-gray-400">
+                <li className="flex items-center"><span className="w-2 h-2 bg-indigo-500 rounded-full mr-2" />Upload seguro da logo</li>
+                <li className="flex items-center"><span className="w-2 h-2 bg-indigo-500 rounded-full mr-2" />Cores, fontes e formato da página</li>
+                <li className="flex items-center"><span className="w-2 h-2 bg-indigo-500 rounded-full mr-2" />Posição, visibilidade e textos personalizados</li>
+              </ul>
+              <button onClick={() => navigate('/configuracoes/documentos')} className="w-full flex items-center justify-center px-4 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors font-medium"><FileText className="w-4 h-4 mr-2" />Personalizar documentos</button>
+            </div>
+          </motion.div>
+
           {/* Templates de Mensagens */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -169,11 +191,11 @@ export function ConfiguracoesCompletas() {
             </div>
             <div>
               <h4 className="text-sm font-medium text-blue-900 dark:text-blue-200 mb-1">
-                Configurações Simplificadas
+                Configurações protegidas por empresa
               </h4>
               <p className="text-sm text-blue-700 dark:text-blue-300">
-                Esta página foi simplificada para focar apenas nas configurações essenciais: 
-                templates de mensagens e integração com WhatsApp. Outras configurações foram removidas.
+                Identidade visual, modelos de documentos e integrações pertencem somente à conta da empresa.
+                Operadores utilizam o padrão definido, mas apenas administradores podem alterá-lo.
               </p>
             </div>
           </div>
