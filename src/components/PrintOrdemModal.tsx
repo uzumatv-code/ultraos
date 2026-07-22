@@ -2,6 +2,7 @@ import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Printer } from 'lucide-react';
 import { formatCurrency, formatDate } from '../utils/formatters';
+import { getOrderProblemAndServiceText } from '../utils/template-service';
 import type { OrdemServico } from '../types/database';
 
 interface PrintOrdemModalProps {
@@ -10,10 +11,20 @@ interface PrintOrdemModalProps {
   ordem: OrdemServico;
 }
 
+function escapeHtml(value: unknown) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
 export function PrintOrdemModal({ isOpen, onClose, ordem }: PrintOrdemModalProps) {
   function handlePrint() {
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
+    const { problemas, servicos } = getOrderProblemAndServiceText(ordem as unknown as Record<string, unknown>);
 
     const content = `
       <!DOCTYPE html>
@@ -131,6 +142,18 @@ export function PrintOrdemModal({ isOpen, onClose, ordem }: PrintOrdemModalProps
               <div class="row">
                 <span class="label">Acessórios:</span>
                 <span class="value">${ordem.acessorios || 'Nenhum'}</span>
+              </div>
+            </div>
+
+            <div class="section">
+              <div class="section-title">DIAGNÓSTICO E SOLUÇÃO</div>
+              <div style="margin-bottom: 12px;">
+                <div class="label">Problema:</div>
+                <div style="white-space: pre-wrap;">${escapeHtml(problemas)}</div>
+              </div>
+              <div>
+                <div class="label">Solução / serviços:</div>
+                <div style="white-space: pre-wrap;">${escapeHtml(servicos)}</div>
               </div>
             </div>
 

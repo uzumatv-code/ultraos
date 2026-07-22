@@ -60,6 +60,13 @@ function serviceDescription(data: Record<string, unknown>): string {
   return String(data.servico_descricao || data.servicos_necessarios || '').trim() || 'Diagnóstico e orçamento';
 }
 
+export function getOrderProblemAndServiceText(data: Record<string, unknown>) {
+  return {
+    problemas: String(data.problema_descricao || data.problemas_encontrados || '').trim() || 'Não informado',
+    servicos: serviceDescription(data),
+  };
+}
+
 export function getUserObservations(value: unknown): string {
   return String(value || '')
     .trim()
@@ -75,8 +82,7 @@ function cleanObservations(_content: string, data: Record<string, unknown>): str
 
 function templateValues(content: string, data: Record<string, unknown>, companyConfig?: Record<string, unknown> | null) {
   const company = companyConfig || {};
-  const services = serviceDescription(data);
-  const problems = String(data.problema_descricao || data.problemas_encontrados || '').trim() || 'Não informado';
+  const { problemas: problems, servicos: services } = getOrderProblemAndServiceText(data);
 
   return {
     cliente: entityName(data.cliente, 'Cliente'),
