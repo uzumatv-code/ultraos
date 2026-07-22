@@ -190,8 +190,11 @@ function renderBlock(
       return section(`<div class="pre-wrap">${escapeHtml(ordem.observacoes || 'Sem observações.')}</div>`);
     case 'custom_text':
       return section(`<div class="pre-wrap">${customText(block.content || '', ordem, company, problemas, servicos)}</div>`);
-    case 'signature':
-      return `<section class="signatures"><div><span></span>Assinatura do cliente</div><div><span></span>${escapeHtml(company.nome_empresa || 'Responsável')}</div></section>`;
+    case 'signature': {
+      const companyName = company.nome_empresa || 'Responsável pela empresa';
+      const companyCnpj = company.cnpj ? `<small>CNPJ: ${escapeHtml(company.cnpj)}</small>` : '';
+      return `<section class="signatures"><div><span></span>Assinatura do cliente</div><div><span></span><strong>${escapeHtml(companyName)}</strong>${companyCnpj}</div></section>`;
+    }
     case 'footer':
       return `<footer>${escapeHtml(config.footerText)}</footer>`;
     default:
@@ -242,6 +245,9 @@ export function buildOrderDocumentHtml(options: {
     .signatures { display: grid; grid-template-columns: 1fr 1fr; gap: 50px; margin: 48px 20px 20px; text-align: center; break-inside: avoid; }
     .signatures div { color: ${config.mutedColor}; }
     .signatures span { display: block; border-top: 1px solid ${config.textColor}; margin-bottom: 5px; }
+    .signatures strong, .signatures small { display: block; }
+    .signatures strong { color: ${config.textColor}; font-size: 11px; }
+    .signatures small { margin-top: 2px; font-size: 9px; }
     footer { margin-top: 16px; padding-top: 8px; border-top: 1px solid ${config.primaryColor}33; color: ${config.mutedColor}; text-align: center; font-size: 9px; white-space: pre-wrap; }
     @media print { body { background: white; print-color-adjust: exact; -webkit-print-color-adjust: exact; } .page { margin: 0; padding: 0; width: auto; min-height: auto; } }
   </style></head><body><main class="page">${content}</main>${options.autoPrint ? '<script>window.onload=()=>window.print();</script>' : ''}</body></html>`;

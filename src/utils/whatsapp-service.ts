@@ -1,5 +1,12 @@
 import { supabase } from '../lib/supabase';
 import { TemplateService } from './template-service';
+import { blobToBase64, generateOrderDocumentPdf } from './order-document-pdf';
+import {
+  DEFAULT_ORDER_DOCUMENT_CONFIG,
+  normalizeOrderDocumentConfig,
+  type OrderDocumentTemplateConfig,
+} from './order-document-template';
+import { listDocumentTemplates, loadBrandLogoDataUrl } from './tenant-customization-service';
 
 const EMPRESA_CONFIG_DEFAULTS = {
   nome_empresa: 'Sua Empresa',
@@ -12,6 +19,11 @@ const EMPRESA_CONFIG_DEFAULTS = {
 interface WhatsAppMessageMetadata {
   template_type?: string;
   ordem_id?: string;
+  attachment?: {
+    data_base64: string;
+    mime_type: 'application/pdf';
+    file_name: string;
+  };
 }
 
 export interface WhatsAppConfig {
@@ -99,7 +111,15 @@ export class WhatsAppService {
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error?.message || 'Falha ao enviar mensagem');
-    if (result.data?.direct_url) window.open(result.data.direct_url, '_blank', 'noopener,noreferrer');
+    if (result.data?.direct_url) {
+      if (metadata.attachment) {
+        const link = document.createElement('a');
+        link.href = `data:${metadata.attachment.mime_type};base64,${metadata.attachment.data_base64}`;
+        link.download = metadata.attachment.file_name;
+        link.click();
+      }
+      window.open(result.data.direct_url, '_blank', 'noopener,noreferrer');
+    }
     return true;
   }
 
@@ -110,8 +130,28 @@ export class WhatsAppService {
 
     const empresaConfig = await this.loadEmpresaConfig();
     const message = await TemplateService.processTemplate('nova_ordem', ordem, empresaConfig);
-    
-    return this.sendMessage(ordem.cliente.telefone, message, { template_type: 'nova_ordem', ordem_id: ordem.id });
+    const [templates, logoDataUrl] = await Promise.all([
+      listDocumentTemplates<OrderDocumentTemplateConfig>().catch(() => []),
+      loadBrandLogoDataUrl().catch(() => ''),
+    ]);
+    const selectedTemplate = templates.find((template) => template.is_default) || templates[0];
+    const pdf = await generateOrderDocumentPdf({
+      ordem,
+      company: empresaConfig,
+      logoDataUrl,
+      config: normalizeOrderDocumentConfig(selectedTemplate?.config_json || DEFAULT_ORDER_DOCUMENT_CONFIG),
+    });
+    const dataBase64 = await blobToBase64(pdf);
+
+    return this.sendMessage(ordem.cliente.telefone, message, {
+      template_type: 'nova_ordem',
+      ordem_id: ordem.id,
+      attachment: {
+        data_base64: dataBase64,
+        mime_type: 'application/pdf',
+        file_name: `OS-${ordem.numero || ordem.id}.pdf`,
+      },
+    });
   }
 
   static async sendCompletionMessage(ordem: any): Promise<boolean> {

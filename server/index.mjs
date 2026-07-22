@@ -1178,13 +1178,41 @@ async function updateWhatsAppMessageLog(id, values) {
   );
 }
 
+function normalizePdfAttachment(value) {
+  if (!value) return null;
+  const mimeType = String(value.mime_type || '').toLowerCase();
+  const fileName = String(value.file_name || 'ordem-de-servico.pdf')
+    .replace(/[^a-zA-Z0-9._ -]/g, '-')
+    .slice(0, 120);
+  const dataBase64 = String(value.data_base64 || '').replace(/^data:application\/pdf;base64,/i, '');
+  if (mimeType !== 'application/pdf' || !fileName.toLowerCase().endsWith('.pdf')) {
+    const error = new Error('O anexo da OS deve ser um arquivo PDF');
+    error.status = 400;
+    throw error;
+  }
+  if (!dataBase64 || dataBase64.length > 8 * 1024 * 1024 || !/^[a-zA-Z0-9+/]*={0,2}$/.test(dataBase64)) {
+    const error = new Error('PDF da OS inválido ou maior que o limite permitido');
+    error.status = 413;
+    throw error;
+  }
+  const bytes = Buffer.from(dataBase64, 'base64');
+  if (!bytes.subarray(0, 5).equals(Buffer.from('%PDF-')) || bytes.length > 6 * 1024 * 1024) {
+    const error = new Error('PDF da OS inválido ou maior que o limite permitido');
+    error.status = 400;
+    throw error;
+  }
+  return { dataBase64: bytes.toString('base64'), mimeType, fileName };
+}
+
 app.post('/api/whatsapp/send', requireAuth, async (req, res) => {
   let messageLogId = null;
+  let textSent = false;
   try {
     const phone = String(req.body.phone || '');
     const message = String(req.body.message || '').trim();
     const templateType = String(req.body.template_type || '').trim() || null;
     const orderId = String(req.body.ordem_id || '').trim() || null;
+    const attachment = normalizePdfAttachment(req.body.attachment);
     if (!validatePhone(phone) || !message || message.length > 5000) {
       return res.status(400).json({ error: { message: 'Telefone ou mensagem inválidos' } });
     }
@@ -1197,6 +1225,10 @@ app.post('/api/whatsapp/send', requireAuth, async (req, res) => {
     if (config?.method === 'webhook' && config.webhook_url) {
       await ensureWhatsAppConnected(req.auth.accountId);
       const providerResult = await sendEvaluationViaEvolution(phone, message, config);
+      textSent = true;
+      const attachmentResult = attachment
+        ? await sendMediaViaEvolution(phone, attachment, config)
+        : null;
       await updateWhatsAppMessageLog(messageLogId, {
         status: 'enviado',
         provider_message_id: providerResult.providerMessageId,
@@ -1206,9 +1238,9 @@ app.post('/api/whatsapp/send', requireAuth, async (req, res) => {
         action: 'whatsapp.enviar',
         resource: 'mensagem',
         resourceId: messageLogId,
-        details: { phone: normalizePhone(phone), method: 'webhook', template_type: templateType, ordem_id: orderId },
+        details: { phone: normalizePhone(phone), method: 'webhook', template_type: templateType, ordem_id: orderId, pdf: Boolean(attachment) },
       });
-      return res.json({ data: { sent: true, method: 'webhook', log_id: messageLogId } });
+      return res.json({ data: { sent: true, method: 'webhook', log_id: messageLogId, attachment_message_id: attachmentResult?.providerMessageId || null } });
     }
     const directUrl = `https://wa.me/${normalizePhone(phone)}?text=${encodeURIComponent(message)}`;
     await updateWhatsAppMessageLog(messageLogId, { status: 'preparado', provider: 'direct', erro: null });
@@ -1216,14 +1248,17 @@ app.post('/api/whatsapp/send', requireAuth, async (req, res) => {
       action: 'whatsapp.preparar',
       resource: 'mensagem',
       resourceId: messageLogId,
-      details: { phone: normalizePhone(phone), method: 'direct', template_type: templateType, ordem_id: orderId },
+      details: { phone: normalizePhone(phone), method: 'direct', template_type: templateType, ordem_id: orderId, pdf_download: Boolean(attachment) },
     });
-    return res.json({ data: { sent: true, method: 'direct', direct_url: directUrl, log_id: messageLogId } });
+    return res.json({ data: { sent: true, method: 'direct', direct_url: directUrl, log_id: messageLogId, attachment_download: Boolean(attachment) } });
   } catch (error) {
     if (messageLogId) {
       await updateWhatsAppMessageLog(messageLogId, { status: 'erro', erro: error.message }).catch(() => {});
     }
-    res.status(error.status || 502).json({ error: { message: error.message || 'Falha ao enviar mensagem' } });
+    const message = textSent
+      ? 'A mensagem foi enviada, mas não foi possível anexar o PDF da OS. Tente enviar o PDF novamente.'
+      : error.message || 'Falha ao enviar mensagem';
+    res.status(error.status || 502).json({ error: { message, partial_success: textSent } });
   }
 });
 
@@ -3642,6 +3677,40 @@ async function sendEvaluationViaEvolution(phone, message, config) {
   return {
     providerMessageId: responseData?.key?.id || responseData?.messageId || responseData?.id || null,
   };
+}
+
+async function sendMediaViaEvolution(phone, attachment, config) {
+  if (!config || config.method !== 'webhook' || !config.webhook_url) {
+    throw new Error('Backend exige WhatsApp por webhook/Evolution API para envio automatico');
+  }
+
+  const baseUrl = String(config.webhook_url).replace(/\/$/, '');
+  const instanceName = config.instance_name || 'default';
+  const response = await fetch(`${baseUrl}/message/sendMedia/${instanceName}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: config.api_key || '',
+    },
+    body: JSON.stringify({
+      number: normalizePhone(phone),
+      mediatype: 'document',
+      mimetype: attachment.mimeType,
+      caption: 'Ordem de serviço em PDF',
+      media: attachment.dataBase64,
+      fileName: attachment.fileName,
+    }),
+  });
+  const responseText = await response.text();
+  if (!response.ok) {
+    const error = new Error(`Evolution API (PDF) HTTP ${response.status}`);
+    error.status = response.status;
+    error.details = responseText;
+    throw error;
+  }
+  let responseData = null;
+  try { responseData = JSON.parse(responseText); } catch {}
+  return { providerMessageId: responseData?.key?.id || responseData?.messageId || responseData?.id || null };
 }
 
 async function processEvaluationsForUser(userId) {
