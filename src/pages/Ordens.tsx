@@ -21,12 +21,27 @@ import {
   ColumnDef,
 } from '@tanstack/react-table';
 
+type StatusFilter = '' | OrdemServico['status'];
+type FinancialStatus = 'pendente' | 'parcial' | 'pago' | 'cancelado';
+type FinancialFilter = '' | FinancialStatus;
+
+function getFinancialStatus(ordem: OrdemServico) {
+  const total = Number(ordem.valor_total ?? (Number(ordem.valor_servicos || 0) - Number(ordem.desconto || 0)));
+  const paid = Number(ordem.valor_pago || 0);
+  if (ordem.status === 'cancelado') return { value: 'cancelado' as const, label: 'Cancelado', className: 'bg-gray-100 text-gray-700', remaining: 0 };
+  if (paid >= total && total > 0) return { value: 'pago' as const, label: 'Pago', className: 'bg-green-100 text-green-800', remaining: 0 };
+  if (paid > 0) return { value: 'parcial' as const, label: 'Parcial', className: 'bg-blue-100 text-blue-800', remaining: Math.max(0, total - paid) };
+  return { value: 'pendente' as const, label: 'Pendente', className: 'bg-yellow-100 text-yellow-800', remaining: Math.max(0, total - paid) };
+}
+
 export function Ordens() {
   const { can } = useAuth();
   const navigate = useNavigate();
   const [ordens, setOrdens] = useState<OrdemServico[]>([]);
   const [loading, setLoading] = useState(true);
   const [globalFilter, setGlobalFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('');
+  const [financialFilter, setFinancialFilter] = useState<FinancialFilter>('');
   const [pagina, setPagina] = useState(0);
   const [showPrintModal, setShowPrintModal] = useState(false);
   const [ordemParaImprimir, setOrdemParaImprimir] = useState<OrdemServico | null>(null);
@@ -57,10 +72,15 @@ export function Ordens() {
     buscarOrdens();
   }, []);
 
-  // Filtro global client-side
+  // Filtros client-side, pois a tela já carrega todas as ordens do usuário.
   const filteredOrdens = useMemo(() => {
-    if (!globalFilter) return ordens;
+    const search = globalFilter.trim().toLowerCase();
+
     return ordens.filter(ordem => {
+      if (statusFilter && ordem.status !== statusFilter) return false;
+      if (financialFilter && getFinancialStatus(ordem).value !== financialFilter) return false;
+      if (!search) return true;
+
       const values = [
         ordem.numero,
         ordem.cliente?.nome,
@@ -71,9 +91,9 @@ export function Ordens() {
         ordem.observacoes,
         formatDate(ordem.data_previsao)
       ].join(' ').toLowerCase();
-      return values.includes(globalFilter.toLowerCase());
+      return values.includes(search);
     });
-  }, [ordens, globalFilter]);
+  }, [ordens, globalFilter, statusFilter, financialFilter]);
 
   // Paginação client-side
   const paginatedOrdens = useMemo(() => {
@@ -97,15 +117,6 @@ export function Ordens() {
     concluido: 'Concluído',
     cancelado: 'Cancelado'
   };
-
-  function getFinancialStatus(ordem: OrdemServico) {
-    const total = Number(ordem.valor_total ?? (Number(ordem.valor_servicos || 0) - Number(ordem.desconto || 0)));
-    const paid = Number(ordem.valor_pago || 0);
-    if (ordem.status === 'cancelado') return { label: 'Cancelado', className: 'bg-gray-100 text-gray-700', remaining: 0 };
-    if (paid >= total && total > 0) return { label: 'Pago', className: 'bg-green-100 text-green-800', remaining: 0 };
-    if (paid > 0) return { label: 'Parcial', className: 'bg-blue-100 text-blue-800', remaining: Math.max(0, total - paid) };
-    return { label: 'Pendente', className: 'bg-yellow-100 text-yellow-800', remaining: Math.max(0, total - paid) };
-  }
 
   function getAuthHeaders() {
     const sessionRaw = localStorage.getItem('mysql-auth-session');
@@ -447,10 +458,52 @@ export function Ordens() {
                   type="text"
                   placeholder="Buscar por qualquer campo..."
                   value={globalFilter}
-                  onChange={e => setGlobalFilter(e.target.value)}
+                  onChange={e => {
+                    setGlobalFilter(e.target.value);
+                    setPagina(0);
+                  }}
                   className="pl-10 pr-4 py-2 border border-gray-200 dark:border-purple-500/20 rounded-lg focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 focus:border-indigo-500 w-full bg-white/50 dark:bg-gray-900/50 backdrop-blur-lg transition-all duration-200 text-gray-900 dark:text-gray-100"
                 />
               </div>
+              <div className="min-w-40 flex-1 sm:flex-none">
+                <label htmlFor="status-filter" className="sr-only">Filtrar por status</label>
+                <select
+                  id="status-filter"
+                  value={statusFilter}
+                  onChange={e => {
+                    setStatusFilter(e.target.value as StatusFilter);
+                    setPagina(0);
+                  }}
+                  className="w-full rounded-lg border border-gray-200 bg-white/50 px-3 py-2 text-gray-900 backdrop-blur-lg transition-all duration-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 dark:border-purple-500/20 dark:bg-gray-900/50 dark:text-gray-100 dark:focus:ring-indigo-400"
+                >
+                  <option value="">Todos os status</option>
+                  <option value="pendente">Pendente</option>
+                  <option value="em_andamento">Em Andamento</option>
+                  <option value="concluido">Concluído</option>
+                  <option value="cancelado">Cancelado</option>
+                  <option value="atraso">Em atraso</option>
+                </select>
+              </div>
+              {can('financeiro.read') && (
+                <div className="min-w-40 flex-1 sm:flex-none">
+                  <label htmlFor="financial-filter" className="sr-only">Filtrar por situação financeira</label>
+                  <select
+                    id="financial-filter"
+                    value={financialFilter}
+                    onChange={e => {
+                      setFinancialFilter(e.target.value as FinancialFilter);
+                      setPagina(0);
+                    }}
+                    className="w-full rounded-lg border border-gray-200 bg-white/50 px-3 py-2 text-gray-900 backdrop-blur-lg transition-all duration-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 dark:border-purple-500/20 dark:bg-gray-900/50 dark:text-gray-100 dark:focus:ring-indigo-400"
+                  >
+                    <option value="">Todo o financeiro</option>
+                    <option value="pendente">Pendente</option>
+                    <option value="parcial">Parcial</option>
+                    <option value="pago">Pago</option>
+                    <option value="cancelado">Cancelado</option>
+                  </select>
+                </div>
+              )}
             </div>
             <div className="flex flex-col gap-2 sm:flex-row">
               <motion.button
