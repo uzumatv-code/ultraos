@@ -4572,7 +4572,7 @@ async function loadEvaluationSettings(userId) {
 
 async function loadWhatsAppConfig(userId) {
   const [rows] = await pool.query(
-    'SELECT user_id, method, webhook_url, api_key, instance_name, status FROM configuracoes_whatsapp WHERE user_id = ? LIMIT 1',
+    'SELECT user_id, method, provider, webhook_url, api_key, instance_name, status FROM configuracoes_whatsapp WHERE user_id = ? LIMIT 1',
     [userId],
   );
   const row = rows[0] || null;

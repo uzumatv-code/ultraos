@@ -179,11 +179,11 @@ export function Remarketing() {
 
   return (
     <PageContainer title="Manutenção preventiva" icon={Sparkles} iconGradient="from-emerald-500 to-teal-600">
-      <section className={`mb-5 rounded-2xl border p-5 ${overview?.provider.automaticAllowed ? 'border-emerald-200 bg-emerald-50/70' : 'border-amber-200 bg-amber-50/70'} dark:border-slate-800 dark:bg-slate-900`}>
+      <section className={`mb-5 rounded-2xl border p-5 ${overview?.provider.manualSingleAllowed || overview?.provider.automaticAllowed ? 'border-emerald-200 bg-emerald-50/70' : 'border-amber-200 bg-amber-50/70'} dark:border-slate-800 dark:bg-slate-900`}>
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-start gap-3">
-            <div className={`rounded-xl p-3 ${overview?.provider.automaticAllowed ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
-              {overview?.provider.automaticAllowed ? <ShieldCheck className="h-6 w-6" /> : <AlertCircle className="h-6 w-6" />}
+            <div className={`rounded-xl p-3 ${overview?.provider.manualSingleAllowed || overview?.provider.automaticAllowed ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+              {overview?.provider.manualSingleAllowed || overview?.provider.automaticAllowed ? <ShieldCheck className="h-6 w-6" /> : <AlertCircle className="h-6 w-6" />}
             </div>
             <div>
               <div className="flex flex-wrap items-center gap-2">
@@ -195,7 +195,8 @@ export function Remarketing() {
               <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
                 Instrumentos sem manutenção há {overview?.campaign.dias_sem_manutencao || 180}+ dias · envio com consentimento.
               </p>
-              {!overview?.provider.automaticAllowed && <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-400">Automação em massa bloqueada: o conector oficial de campanhas ainda não está habilitado. {overview?.provider.manualSingleAllowed ? 'Somente envios individuais e confirmados estão disponíveis na conexão atual.' : 'Configure o WhatsApp para habilitar os envios permitidos.'}</p>}
+              {overview?.provider.manualSingleAllowed && !overview.provider.automaticAllowed && <p className="mt-1 text-xs font-medium text-emerald-700 dark:text-emerald-400">Evolution conectada: envios individuais e confirmados estão disponíveis. A automação em massa permanece desativada até a configuração do conector oficial.</p>}
+              {!overview?.provider.manualSingleAllowed && !overview?.provider.automaticAllowed && <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-400">WhatsApp indisponível para envios. Verifique a conexão para habilitar os envios individuais.</p>}
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
