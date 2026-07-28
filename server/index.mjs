@@ -4061,6 +4061,7 @@ async function reserveEvaluationProcessing(userId, today) {
 async function getPendingEvaluationOrdersForUser(userId, settings) {
   const cutoffDate = dateDaysAgo(settings.daysAfterCompletion);
   const limit = settings.dailyLimit;
+  const candidateLimit = Math.max(100, limit * 5);
   const [rows] = await pool.query(
     `SELECT o.id AS ordem_id,
             o.numero AS ordem_numero,
@@ -4090,9 +4091,17 @@ async function getPendingEvaluationOrdersForUser(userId, settings) {
         AND NOT (COALESCE(o.solicita_avaliacao, 0) = 1 AND al.id IS NULL)
       ORDER BY DATE(COALESCE(NULLIF(o.data_entrega, ''), NULLIF(o.data_previsao, ''))) ASC
       LIMIT ?`,
-    [userId, cutoffDate, limit],
+    [userId, cutoffDate, candidateLimit],
   );
-  return rows;
+  const uniqueByClient = [];
+  const clientIds = new Set();
+  for (const row of rows) {
+    if (clientIds.has(row.cliente_id)) continue;
+    clientIds.add(row.cliente_id);
+    uniqueByClient.push(row);
+    if (uniqueByClient.length >= limit) break;
+  }
+  return uniqueByClient;
 }
 
 async function upsertEvaluationLog(userId, order, status, extra = {}) {

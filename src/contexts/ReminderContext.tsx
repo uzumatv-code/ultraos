@@ -9,8 +9,8 @@ interface ReminderContextType {
   pendingCount: number;
   sentToday: number;
   pendingOrders: PendingEvaluationOrder[];
-  enableAutomatic: () => void;
-  disableAutomatic: () => void;
+  enableAutomatic: () => Promise<void>;
+  disableAutomatic: () => Promise<void>;
   processNow: () => Promise<{ sent: number; errors: number }>;
   refreshPending: () => Promise<void>;
   sendSingle: (order: PendingEvaluationOrder) => Promise<boolean>;
@@ -95,16 +95,24 @@ export function ReminderProvider({ children }: { children: React.ReactNode }) {
     refreshStats();
   }, [refreshPending, refreshStats]);
 
-  const enableAutomatic = useCallback(() => {
+  const enableAutomatic = useCallback(async () => {
     setIsEnabled(true);
-    void EvaluationReminderService.saveSettings({ enabled: true })
-      .catch((error) => console.error('Erro ao habilitar avaliacoes automaticas:', error));
+    try {
+      await EvaluationReminderService.saveSettings({ enabled: true });
+    } catch (error) {
+      setIsEnabled(false);
+      throw error;
+    }
   }, []);
 
-  const disableAutomatic = useCallback(() => {
+  const disableAutomatic = useCallback(async () => {
     setIsEnabled(false);
-    void EvaluationReminderService.saveSettings({ enabled: false })
-      .catch((error) => console.error('Erro ao desabilitar avaliacoes automaticas:', error));
+    try {
+      await EvaluationReminderService.saveSettings({ enabled: false });
+    } catch (error) {
+      setIsEnabled(true);
+      throw error;
+    }
   }, []);
 
   const processNow = useCallback(async (): Promise<{ sent: number; errors: number }> => {

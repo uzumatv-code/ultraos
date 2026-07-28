@@ -92,6 +92,7 @@ export class EvaluationReminderService {
     });
 
     const pendingOrders: PendingEvaluationOrder[] = [];
+    const clientesIncluidos = new Set<string>();
 
     for (const ordem of ordens as any[]) {
       const cliente = ordem.cliente as any;
@@ -107,6 +108,9 @@ export class EvaluationReminderService {
       const completionDate = new Date(completionDateRaw);
       if (Number.isNaN(completionDate.getTime())) continue;
       if (completionDate > cutoffDate) continue;
+      // Um cliente deve receber apenas uma solicitação, mesmo que possua várias
+      // ordens concluídas elegíveis no mesmo momento.
+      if (clientesIncluidos.has(cliente.id)) continue;
 
       const diffTime = new Date().getTime() - completionDate.getTime();
       const diffDays = Math.max(0, Math.floor(diffTime / (1000 * 60 * 60 * 24)));
@@ -123,6 +127,7 @@ export class EvaluationReminderService {
         data_conclusao: completionDateRaw,
         dias_desde_conclusao: diffDays
       });
+      clientesIncluidos.add(cliente.id);
     }
 
     return pendingOrders;
@@ -219,6 +224,10 @@ Muito obrigado pela confiança!
 Forte abraço 🎸`;
   }
 
+  static buildEvaluationMessagePreview(order: PendingEvaluationOrder, settings: EvaluationSettings): string {
+    return this.buildEvaluationMessage(order, settings);
+  }
+
   static async processAutomaticEvaluations(): Promise<{ sent: number; errors: number; skipped: number }> {
     const result = { sent: 0, errors: 0, skipped: 0 };
     const settings = await this.getSettings();
@@ -251,6 +260,19 @@ Forte abraço 🎸`;
       else result.errors++;
     }
 
+    return result;
+  }
+
+  static async sendSelectedEvaluations(orders: PendingEvaluationOrder[]): Promise<{ sent: number; errors: number }> {
+    const result = { sent: 0, errors: 0 };
+    const settings = await this.getSettings();
+    const selected = orders.slice(0, settings.daily_limit);
+    for (let index = 0; index < selected.length; index++) {
+      if (index > 0) await this.delay(settings.min_interval_seconds * 1000);
+      const success = await this.sendEvaluationRequest(selected[index]);
+      if (success) result.sent++;
+      else result.errors++;
+    }
     return result;
   }
 
