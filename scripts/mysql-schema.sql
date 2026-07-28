@@ -219,6 +219,86 @@ CREATE TABLE IF NOT EXISTS `ordens_servico` (
   FOREIGN KEY (`marca_id`) REFERENCES `marcas`(`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Histórico técnico e comercial da OS. Registros aprovados não devem ser sobrescritos.
+CREATE TABLE IF NOT EXISTS `os_ocorrencias` (
+  `id` VARCHAR(36) NOT NULL PRIMARY KEY,
+  `user_id` VARCHAR(36) NOT NULL,
+  `ordem_servico_id` VARCHAR(36) NOT NULL,
+  `actor_user_id` VARCHAR(36) NULL,
+  `tipo` VARCHAR(50) DEFAULT 'novo_problema',
+  `titulo` VARCHAR(255) NOT NULL,
+  `descricao` TEXT NOT NULL,
+  `evidencias_json` JSON NULL,
+  `status` VARCHAR(30) DEFAULT 'aberta',
+  `created_at` VARCHAR(50) NOT NULL,
+  `updated_at` VARCHAR(50) NOT NULL,
+  INDEX `idx_os_ocorrencias_user` (`user_id`),
+  INDEX `idx_os_ocorrencias_ordem` (`ordem_servico_id`),
+  INDEX `idx_os_ocorrencias_created` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `os_aditivos` (
+  `id` VARCHAR(36) NOT NULL PRIMARY KEY,
+  `user_id` VARCHAR(36) NOT NULL,
+  `ordem_servico_id` VARCHAR(36) NOT NULL,
+  `ocorrencia_id` VARCHAR(36) NULL,
+  `numero` INT NOT NULL,
+  `versao` INT DEFAULT 1,
+  `titulo` VARCHAR(255) NOT NULL,
+  `justificativa` TEXT NOT NULL,
+  `valor_adicional` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  `valor_total_anterior` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  `valor_total_novo` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  `prazo_anterior` VARCHAR(50) NULL,
+  `prazo_novo` VARCHAR(50) NULL,
+  `status` VARCHAR(30) DEFAULT 'rascunho',
+  `mensagem_aprovacao` TEXT NULL,
+  `provider_message_id` VARCHAR(255) NULL,
+  `metodo_aprovacao` VARCHAR(50) NULL,
+  `aprovado_por_nome` VARCHAR(255) NULL,
+  `aprovado_por_telefone` VARCHAR(30) NULL,
+  `enviado_em` VARCHAR(50) NULL,
+  `aprovado_em` VARCHAR(50) NULL,
+  `recusado_em` VARCHAR(50) NULL,
+  `created_by` VARCHAR(36) NULL,
+  `created_at` VARCHAR(50) NOT NULL,
+  `updated_at` VARCHAR(50) NOT NULL,
+  UNIQUE KEY `unique_os_aditivo_numero` (`user_id`, `ordem_servico_id`, `numero`),
+  INDEX `idx_os_aditivos_user` (`user_id`),
+  INDEX `idx_os_aditivos_ordem` (`ordem_servico_id`),
+  INDEX `idx_os_aditivos_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `os_aditivo_itens` (
+  `id` VARCHAR(36) NOT NULL PRIMARY KEY,
+  `user_id` VARCHAR(36) NOT NULL,
+  `aditivo_id` VARCHAR(36) NOT NULL,
+  `tipo` VARCHAR(30) DEFAULT 'servico',
+  `descricao` VARCHAR(500) NOT NULL,
+  `quantidade` DECIMAL(10,2) NOT NULL DEFAULT 1.00,
+  `valor_unitario` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  `valor_total` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  `created_at` VARCHAR(50) NOT NULL,
+  INDEX `idx_os_aditivo_itens_user` (`user_id`),
+  INDEX `idx_os_aditivo_itens_aditivo` (`aditivo_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `os_historico` (
+  `id` VARCHAR(36) NOT NULL PRIMARY KEY,
+  `user_id` VARCHAR(36) NOT NULL,
+  `ordem_servico_id` VARCHAR(36) NOT NULL,
+  `actor_user_id` VARCHAR(36) NULL,
+  `evento` VARCHAR(80) NOT NULL,
+  `entidade` VARCHAR(50) NULL,
+  `entidade_id` VARCHAR(36) NULL,
+  `descricao` TEXT NOT NULL,
+  `dados_json` JSON NULL,
+  `created_at` VARCHAR(50) NOT NULL,
+  INDEX `idx_os_historico_user` (`user_id`),
+  INDEX `idx_os_historico_ordem` (`ordem_servico_id`),
+  INDEX `idx_os_historico_created` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- ===========================================
 -- TABELA: contas_pagar
 -- ===========================================
@@ -533,6 +613,85 @@ CREATE TABLE IF NOT EXISTS `whatsapp_mensagens_log` (
   FOREIGN KEY (`user_id`) REFERENCES `usuarios`(`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Caixa de entrada bidirecional do WhatsApp.
+CREATE TABLE IF NOT EXISTS `whatsapp_conversas` (
+  `id` VARCHAR(36) NOT NULL PRIMARY KEY,
+  `user_id` VARCHAR(36) NOT NULL,
+  `cliente_id` VARCHAR(36) NULL,
+  `ordem_servico_id` VARCHAR(36) NULL,
+  `telefone` VARCHAR(30) NOT NULL,
+  `remote_jid` VARCHAR(255) NULL,
+  `nome_contato` VARCHAR(255) NULL,
+  `status` VARCHAR(30) DEFAULT 'aberta',
+  `responsavel_user_id` VARCHAR(36) NULL,
+  `ultima_mensagem` TEXT NULL,
+  `ultima_mensagem_em` VARCHAR(50) NULL,
+  `nao_lidas` INT DEFAULT 0,
+  `created_at` VARCHAR(50) NOT NULL,
+  `updated_at` VARCHAR(50) NOT NULL,
+  UNIQUE KEY `unique_whatsapp_conversa_phone` (`user_id`, `telefone`),
+  INDEX `idx_whatsapp_conversas_user` (`user_id`),
+  INDEX `idx_whatsapp_conversas_cliente` (`cliente_id`),
+  INDEX `idx_whatsapp_conversas_ordem` (`ordem_servico_id`),
+  INDEX `idx_whatsapp_conversas_updated` (`updated_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `whatsapp_mensagens` (
+  `id` VARCHAR(36) NOT NULL PRIMARY KEY,
+  `user_id` VARCHAR(36) NOT NULL,
+  `conversa_id` VARCHAR(36) NOT NULL,
+  `cliente_id` VARCHAR(36) NULL,
+  `ordem_servico_id` VARCHAR(36) NULL,
+  `actor_user_id` VARCHAR(36) NULL,
+  `provider_message_id` VARCHAR(255) NULL,
+  `direcao` VARCHAR(20) NOT NULL,
+  `tipo` VARCHAR(30) DEFAULT 'texto',
+  `conteudo` TEXT NULL,
+  `status` VARCHAR(30) DEFAULT 'recebida',
+  `from_me` BOOLEAN DEFAULT FALSE,
+  `enviada_pelo_sistema` BOOLEAN DEFAULT FALSE,
+  `mensagem_referencia_id` VARCHAR(255) NULL,
+  `enviada_em` VARCHAR(50) NOT NULL,
+  `entregue_em` VARCHAR(50) NULL,
+  `lida_em` VARCHAR(50) NULL,
+  `apagada_em` VARCHAR(50) NULL,
+  `raw_payload` JSON NULL,
+  `created_at` VARCHAR(50) NOT NULL,
+  `updated_at` VARCHAR(50) NOT NULL,
+  UNIQUE KEY `unique_whatsapp_provider_message` (`user_id`, `provider_message_id`),
+  INDEX `idx_whatsapp_mensagens_user` (`user_id`),
+  INDEX `idx_whatsapp_mensagens_conversa` (`conversa_id`, `enviada_em`),
+  INDEX `idx_whatsapp_mensagens_ordem` (`ordem_servico_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `whatsapp_mensagem_eventos` (
+  `id` VARCHAR(36) NOT NULL PRIMARY KEY,
+  `user_id` VARCHAR(36) NOT NULL,
+  `mensagem_id` VARCHAR(36) NULL,
+  `provider_message_id` VARCHAR(255) NULL,
+  `evento` VARCHAR(50) NOT NULL,
+  `dados_json` JSON NULL,
+  `created_at` VARCHAR(50) NOT NULL,
+  INDEX `idx_whatsapp_eventos_user` (`user_id`),
+  INDEX `idx_whatsapp_eventos_mensagem` (`mensagem_id`),
+  INDEX `idx_whatsapp_eventos_provider` (`provider_message_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `whatsapp_anexos` (
+  `id` VARCHAR(36) NOT NULL PRIMARY KEY,
+  `user_id` VARCHAR(36) NOT NULL,
+  `mensagem_id` VARCHAR(36) NOT NULL,
+  `tipo_mime` VARCHAR(120) NULL,
+  `nome_arquivo` VARCHAR(255) NULL,
+  `tamanho_bytes` INT NULL,
+  `caminho` VARCHAR(500) NULL,
+  `conteudo` LONGBLOB NULL,
+  `sha256` VARCHAR(64) NULL,
+  `created_at` VARCHAR(50) NOT NULL,
+  INDEX `idx_whatsapp_anexos_user` (`user_id`),
+  INDEX `idx_whatsapp_anexos_mensagem` (`mensagem_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- ===========================================
 -- TABELA: empresa_fiscal (configurações NFS-e)
 -- ===========================================
@@ -577,6 +736,11 @@ CREATE TABLE IF NOT EXISTS `notas_fiscais` (
   `id` VARCHAR(36) NOT NULL PRIMARY KEY,
   `user_id` VARCHAR(36) NOT NULL,
   `ordem_servico_id` VARCHAR(36) NOT NULL,
+  `aditivo_id` VARCHAR(36) NULL,
+  `tipo_origem` VARCHAR(30) DEFAULT 'os_consolidada',
+  `nota_substituida_id` VARCHAR(36) NULL,
+  `tipo_evento_fiscal` VARCHAR(30) DEFAULT 'emissao',
+  `motivo_substituicao` TEXT NULL,
   `numero_nfse` VARCHAR(50) NULL,
   `codigo_verificacao` VARCHAR(50) NULL,
   `numero_rps` VARCHAR(20) NOT NULL,
@@ -616,6 +780,8 @@ CREATE TABLE IF NOT EXISTS `notas_fiscais` (
   `updated_at` VARCHAR(50) DEFAULT NULL,
   INDEX `idx_nf_user` (`user_id`),
   INDEX `idx_nf_ordem` (`ordem_servico_id`),
+  INDEX `idx_nf_aditivo` (`aditivo_id`),
+  INDEX `idx_nf_substituida` (`nota_substituida_id`),
   INDEX `idx_nf_status` (`status`),
   INDEX `idx_nf_numero` (`numero_nfse`),
   FOREIGN KEY (`user_id`) REFERENCES `usuarios`(`id`) ON DELETE CASCADE,

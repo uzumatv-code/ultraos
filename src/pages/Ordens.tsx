@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { PenTool as Tool, Search, Plus, Trash2, ChevronLeft, ChevronRight, Send, Edit, Printer, Star, FileText, DollarSign } from 'lucide-react';
+import { PenTool as Tool, Search, Plus, Trash2, ChevronLeft, ChevronRight, Send, Edit, Printer, Star, FileText, DollarSign, History } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { toast } from '../components/ToastCustom';
@@ -212,6 +212,7 @@ export function Ordens() {
         id: 'acoes',
         cell: info => (
           <div className="flex items-center justify-end gap-1">
+            <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => navigate(`/ordens/${info.row.original.id}/historico`)} className="p-1 text-amber-600 hover:bg-amber-50 rounded-lg transition-all duration-200" title="Histórico, ocorrências e aditivos"><History className="w-4 h-4" /></motion.button>
             <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => navigate(`/ordens/editar/${info.row.original.id}`)} className="p-1 text-purple-600 dark:text-purple-400 hover:text-purple-900 dark:hover:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded-lg transition-all duration-200" title="Editar ordem"><Edit className="w-4 h-4" /></motion.button>
             <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => { setOrdemParaImprimir(info.row.original); setShowPrintModal(true); }} className="p-1 text-purple-600 dark:text-purple-400 hover:text-purple-900 dark:hover:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded-lg transition-all duration-200" title="Imprimir ordem"><Printer className="w-4 h-4" /></motion.button>
             <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => handleWhatsAppShare(info.row.original)} className="p-1 text-green-600 dark:text-green-400 hover:text-green-900 dark:hover:text-green-300 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-lg transition-all duration-200" title="Enviar mensagem WhatsApp"><Send className="w-4 h-4" /></motion.button>

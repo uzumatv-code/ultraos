@@ -27,6 +27,8 @@ const ConfiguracoesCompletas = lazy(() => import('./pages/ConfiguracoesCompletas
 const DocumentoOSDesigner = lazy(() => import('./pages/DocumentoOSDesigner').then((module) => ({ default: module.DocumentoOSDesigner })));
 const NotasFiscais = lazy(() => import('./pages/NotasFiscais').then((module) => ({ default: module.NotasFiscais })));
 const AvaliacoesLembretes = lazy(() => import('./pages/AvaliacoesLembretes').then((module) => ({ default: module.AvaliacoesLembretes })));
+const OrdemHistorico = lazy(() => import('./pages/OrdemHistorico').then((module) => ({ default: module.OrdemHistorico })));
+const Conversas = lazy(() => import('./pages/Conversas').then((module) => ({ default: module.Conversas })));
 
 function RouteFallback() {
   return (
@@ -214,6 +216,14 @@ function App() {
               </Layout>
             </ProtectedRoute>
           }
+        />
+        <Route
+          path="/conversas"
+          element={<ProtectedRoute><Layout><Conversas /></Layout></ProtectedRoute>}
+        />
+        <Route
+          path="/ordens/:id/historico"
+          element={<ProtectedRoute><Layout><OrdemHistorico /></Layout></ProtectedRoute>}
         />
         <Route
           path="/contas"

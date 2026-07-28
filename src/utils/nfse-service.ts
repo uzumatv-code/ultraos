@@ -8,6 +8,8 @@ import { OrdemServico, Cliente, EmpresaFiscal, NotaFiscal } from '../types/datab
 import { formatCurrency } from './formatters';
 import { NFSeSOAPClient } from './nfse-soap-client';
 import { AssinaturaDigitalService } from './assinatura-digital';
+import { apiRequest } from '../lib/api-client';
+import type { OsAditivo } from '../types/database';
 
 export interface NFSeData {
   ordemServico: OrdemServico;
@@ -23,7 +25,7 @@ export class NFSeService {
   /**
    * Gera o XML da NFS-e baseado nos dados da ordem de serviço
    */
-  static async gerarNFSe(ordemServicoId: string): Promise<NotaFiscal> {
+  static async gerarNFSe(ordemServicoId: string, options: { aditivoId?: string } = {}): Promise<NotaFiscal> {
     try {
       // 1. Buscar dados necessários (incluindo serviços executados)
       const { data: ordemServico, error: osError } = await supabase
@@ -34,6 +36,24 @@ export class NFSeService {
 
       if (osError) throw osError;
       if (!ordemServico) throw new Error('Ordem de serviço não encontrada');
+
+      const historyData = await apiRequest<{ addenda: OsAditivo[] }>(`/api/ordens/${ordemServicoId}/historico`);
+      const { data: existingNotes, error: existingError } = await supabase
+        .from('notas_fiscais')
+        .select('*')
+        .eq('ordem_servico_id', ordemServicoId)
+        .order('data_emissao', { ascending: false });
+      if (existingError) throw existingError;
+
+      const activeNotes = (existingNotes || []).filter((note: NotaFiscal) => note.status !== 'cancelado');
+      let addendum: OsAditivo | undefined;
+      if (options.aditivoId) {
+        addendum = historyData.addenda.find((item) => item.id === options.aditivoId);
+        if (!addendum || addendum.status !== 'aprovado') throw new Error('Somente um aditivo aprovado pode gerar NFS-e adicional');
+        if (activeNotes.some((note: NotaFiscal) => note.aditivo_id === addendum!.id)) throw new Error('Este aditivo já possui uma NFS-e ativa');
+      } else if (activeNotes.some((note: NotaFiscal) => !note.aditivo_id)) {
+        throw new Error('Esta OS já possui NFS-e principal. Para novo serviço, emita pela opção do aditivo aprovado.');
+      }
 
       // Buscar serviços relacionados se existirem IDs
       if (ordemServico.servicos_ids && ordemServico.servicos_ids.length > 0) {
@@ -66,22 +86,27 @@ export class NFSeService {
       const numeroRps = rpsData.toString();
 
       // 3. Calcular valores
-      const valorServicos = ordemServico.valor_servicos;
-      const descontoIncondicionado = ordemServico.desconto || 0;
+      const valorServicos = addendum ? Number(addendum.valor_adicional) : Number(ordemServico.valor_servicos);
+      const descontoIncondicionado = addendum ? 0 : Number(ordemServico.desconto || 0);
       const baseCalculo = valorServicos - descontoIncondicionado;
       const valorIss = baseCalculo * (empresaFiscal.aliquota_iss / 100);
       const valorTotal = baseCalculo;
 
       // 4. Criar discriminação do serviço
-      const discriminacao = this.criarDiscriminacao(ordemServico);
+      const discriminacao = addendum
+        ? this.criarDiscriminacaoAditivo(ordemServico, addendum)
+        : this.criarDiscriminacaoConsolidada(ordemServico, historyData.addenda.filter((item) => item.status === 'aprovado'));
 
       // 5. Criar registro da nota fiscal
       const dataEmissao = new Date().toISOString();
-      const competencia = new Date().toISOString().split('T')[0];
+      const competencia = new Date().toISOString().slice(0, 7);
 
       const notaFiscal: Partial<NotaFiscal> = {
         user_id: ordemServico.user_id,
         ordem_servico_id: ordemServicoId,
+        aditivo_id: addendum?.id,
+        tipo_origem: addendum ? 'aditivo' : 'os_consolidada',
+        tipo_evento_fiscal: 'emissao',
         numero_rps: numeroRps,
         serie_rps: empresaFiscal.serie_rps,
         data_emissao: dataEmissao,
@@ -289,6 +314,25 @@ export class NFSeService {
     discriminacao += `VALOR TOTAL: ${formatCurrency(ordemServico.valor_total)}`;
 
     return discriminacao;
+  }
+
+  private static criarDiscriminacaoConsolidada(ordemServico: OrdemServico, addenda: OsAditivo[]): string {
+    let text = this.criarDiscriminacao(ordemServico);
+    if (!addenda.length) return text;
+    text += '\n\nADITIVOS APROVADOS INCLUÍDOS NESTA EMISSÃO:';
+    for (const addendum of addenda) {
+      text += `\nAditivo #${addendum.numero}: ${addendum.titulo} — ${formatCurrency(addendum.valor_adicional)}`;
+      for (const item of addendum.itens || []) text += `\n• ${item.descricao}`;
+    }
+    return text;
+  }
+
+  private static criarDiscriminacaoAditivo(ordemServico: OrdemServico, addendum: OsAditivo): string {
+    let text = `SERVIÇO ADICIONAL DA ORDEM DE SERVIÇO Nº ${ordemServico.numero}\n`;
+    text += `ADITIVO Nº ${addendum.numero} — ${addendum.titulo}\n\n${addendum.justificativa}\n\nSERVIÇOS ADICIONAIS EXECUTADOS:`;
+    for (const item of addendum.itens || []) text += `\n• ${item.descricao} — ${formatCurrency(Number(item.valor_total ?? item.quantidade * item.valor_unitario))}`;
+    text += `\n\nVALOR DESTA EMISSÃO: ${formatCurrency(addendum.valor_adicional)}`;
+    return text;
   }
 
   /**
@@ -586,9 +630,21 @@ export class NFSeService {
       .from('notas_fiscais')
       .select('*')
       .eq('ordem_servico_id', ordemServicoId)
-      .single();
+      .order('data_emissao', { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
     if (error && error.code !== 'PGRST116') throw error;
     return data;
+  }
+
+  static async listarPorOrdemServico(ordemServicoId: string): Promise<NotaFiscal[]> {
+    const { data, error } = await supabase
+      .from('notas_fiscais')
+      .select('*')
+      .eq('ordem_servico_id', ordemServicoId)
+      .order('data_emissao', { ascending: false });
+    if (error) throw error;
+    return data || [];
   }
 }

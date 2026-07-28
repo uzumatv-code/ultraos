@@ -937,19 +937,25 @@ function evolutionWebhookUrl() {
   return `${APP_URL}/api/webhooks/evolution/${encodeURIComponent(EVOLUTION_WEBHOOK_SECRET)}`;
 }
 
+const configuredEvolutionWebhooks = new Set();
+
 async function configureEvolutionWebhook(instanceName) {
   const webhook = {
     enabled: true,
     url: evolutionWebhookUrl(),
     webhookByEvents: false,
     webhookBase64: true,
-    events: ['QRCODE_UPDATED', 'CONNECTION_UPDATE', 'MESSAGES_UPSERT', 'SEND_MESSAGE'],
+    events: ['QRCODE_UPDATED', 'CONNECTION_UPDATE', 'MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'MESSAGES_DELETE', 'SEND_MESSAGE'],
   };
   try {
-    return await evolutionRequest(`/webhook/set/${encodeURIComponent(instanceName)}`, { method: 'POST', body: webhook });
+    const result = await evolutionRequest(`/webhook/set/${encodeURIComponent(instanceName)}`, { method: 'POST', body: webhook });
+    configuredEvolutionWebhooks.add(instanceName);
+    return result;
   } catch (error) {
     if (error.status !== 400 && error.status !== 422) throw error;
-    return evolutionRequest(`/webhook/set/${encodeURIComponent(instanceName)}`, { method: 'POST', body: { webhook } });
+    const result = await evolutionRequest(`/webhook/set/${encodeURIComponent(instanceName)}`, { method: 'POST', body: { webhook } });
+    configuredEvolutionWebhooks.add(instanceName);
+    return result;
   }
 }
 
@@ -1262,6 +1268,126 @@ app.post('/api/whatsapp/send', requireAuth, async (req, res) => {
   }
 });
 
+app.get('/api/whatsapp/conversations', requireAuth, async (req, res) => {
+  try {
+    const search = String(req.query.search || '').trim();
+    const params = [req.auth.accountId];
+    let searchSql = '';
+    if (search) {
+      searchSql = ' AND (c.nome LIKE ? OR wc.nome_contato LIKE ? OR wc.telefone LIKE ?)';
+      params.push(...Array(3).fill(`%${search}%`));
+    }
+    const [rows] = await pool.query(
+      `SELECT wc.*, c.nome AS cliente_nome, o.numero AS ordem_numero
+         FROM whatsapp_conversas wc
+         LEFT JOIN clientes c ON c.id=wc.cliente_id AND c.user_id=wc.user_id
+         LEFT JOIN ordens_servico o ON o.id=wc.ordem_servico_id AND o.user_id=wc.user_id
+        WHERE wc.user_id=?${searchSql}
+        ORDER BY COALESCE(wc.ultima_mensagem_em,wc.updated_at) DESC LIMIT 200`, params,
+    );
+    return res.json({ data: rows });
+  } catch (error) { return res.status(500).json({ error: { message: error.message } }); }
+});
+
+app.post('/api/whatsapp/conversations', requireAuth, async (req, res) => {
+  try {
+    const clientId = String(req.body.cliente_id || '').trim();
+    if (!clientId) return res.status(400).json({ error: { message: 'Selecione um cliente' } });
+    const [[client]] = await pool.query('SELECT id,nome,telefone FROM clientes WHERE id=? AND user_id=? LIMIT 1', [clientId, req.auth.accountId]);
+    if (!client || !validatePhone(client.telefone)) return res.status(400).json({ error: { message: 'Cliente sem telefone válido' } });
+    let orderId = String(req.body.ordem_servico_id || '').trim() || null;
+    if (orderId) {
+      const [[order]] = await pool.query('SELECT id FROM ordens_servico WHERE id=? AND cliente_id=? AND user_id=? LIMIT 1', [orderId, client.id, req.auth.accountId]);
+      if (!order) orderId = null;
+    }
+    const conversation = await ensureWhatsAppConversation(req.auth.accountId, { phone: client.telefone, pushName: client.nome, clientId: client.id, orderId });
+    return res.status(201).json({ data: conversation });
+  } catch (error) { return res.status(500).json({ error: { message: error.message } }); }
+});
+
+app.get('/api/whatsapp/conversations/:id/messages', requireAuth, async (req, res) => {
+  try {
+    const [[conversation]] = await pool.query('SELECT * FROM whatsapp_conversas WHERE id=? AND user_id=? LIMIT 1', [req.params.id, req.auth.accountId]);
+    if (!conversation) return res.status(404).json({ error: { message: 'Conversa não encontrada' } });
+    const before = String(req.query.before || '').trim();
+    const params = [req.auth.accountId, conversation.id];
+    let beforeSql = '';
+    if (before) { beforeSql = ' AND enviada_em < ?'; params.push(before); }
+    const [messages] = await pool.query(
+      `SELECT wm.id,wm.conversa_id,wm.cliente_id,wm.ordem_servico_id,wm.provider_message_id,wm.direcao,wm.tipo,wm.conteudo,wm.status,
+              wm.from_me,wm.enviada_pelo_sistema,wm.mensagem_referencia_id,wm.enviada_em,wm.entregue_em,wm.lida_em,wm.apagada_em,wm.created_at,
+              (SELECT wa.id FROM whatsapp_anexos wa WHERE wa.mensagem_id=wm.id AND wa.user_id=wm.user_id LIMIT 1) AS anexo_id,
+              (SELECT wa.nome_arquivo FROM whatsapp_anexos wa WHERE wa.mensagem_id=wm.id AND wa.user_id=wm.user_id LIMIT 1) AS anexo_nome
+         FROM whatsapp_mensagens wm WHERE wm.user_id=? AND wm.conversa_id=?${beforeSql.replaceAll('enviada_em', 'wm.enviada_em')}
+        ORDER BY wm.enviada_em DESC LIMIT 100`, params,
+    );
+    return res.json({ data: messages.reverse() });
+  } catch (error) { return res.status(500).json({ error: { message: error.message } }); }
+});
+
+app.get('/api/whatsapp/attachments/:id', requireAuth, async (req, res) => {
+  const [[attachment]] = await pool.query('SELECT tipo_mime,nome_arquivo,conteudo FROM whatsapp_anexos WHERE id=? AND user_id=? LIMIT 1', [req.params.id, req.auth.accountId]);
+  if (!attachment?.conteudo) return res.status(404).json({ error: { message: 'Anexo não encontrado ou não arquivado' } });
+  res.setHeader('Content-Type', attachment.tipo_mime || 'application/octet-stream');
+  res.setHeader('Content-Disposition', `inline; filename="${String(attachment.nome_arquivo || 'anexo').replace(/["\r\n]/g, '')}"`);
+  res.setHeader('Cache-Control', 'private, max-age=3600');
+  return res.send(attachment.conteudo);
+});
+
+app.post('/api/whatsapp/conversations/:id/messages', requireAuth, async (req, res) => {
+  const content = String(req.body.conteudo || '').trim();
+  if (!content || content.length > 5000) return res.status(400).json({ error: { message: 'Mensagem inválida' } });
+  let localId = null;
+  try {
+    const [[conversation]] = await pool.query('SELECT * FROM whatsapp_conversas WHERE id=? AND user_id=? LIMIT 1', [req.params.id, req.auth.accountId]);
+    if (!conversation) return res.status(404).json({ error: { message: 'Conversa não encontrada' } });
+    await ensureWhatsAppConnected(req.auth.accountId);
+    const config = await loadWhatsAppConfig(req.auth.accountId);
+    localId = uuid();
+    const timestamp = now();
+    await pool.query(
+      `INSERT INTO whatsapp_mensagens
+       (id,user_id,conversa_id,cliente_id,ordem_servico_id,direcao,tipo,conteudo,status,from_me,enviada_pelo_sistema,enviada_em,created_at,updated_at)
+       VALUES (?,?,?,?,?,'saida','texto',?,'processando',1,1,?,?,?)`,
+      [localId, req.auth.accountId, conversation.id, conversation.cliente_id, conversation.ordem_servico_id, content, timestamp, timestamp, timestamp],
+    );
+    const provider = await sendEvaluationViaEvolution(conversation.telefone, content, config);
+    try {
+      await pool.query("UPDATE whatsapp_mensagens SET provider_message_id=?,status='enviada',updated_at=? WHERE id=?", [provider.providerMessageId || null, now(), localId]);
+    } catch (error) {
+      if (error.code !== 'ER_DUP_ENTRY' || !provider.providerMessageId) throw error;
+      const [[archived]] = await pool.query('SELECT id FROM whatsapp_mensagens WHERE user_id=? AND provider_message_id=? LIMIT 1', [req.auth.accountId, provider.providerMessageId]);
+      if (!archived) throw error;
+      await pool.query('UPDATE whatsapp_mensagens SET actor_user_id=?,ordem_servico_id=?,enviada_pelo_sistema=1,status=\'enviada\',updated_at=? WHERE id=?', [req.auth.userId, conversation.ordem_servico_id, now(), archived.id]);
+      await pool.query('DELETE FROM whatsapp_mensagens WHERE id=? AND user_id=?', [localId, req.auth.accountId]);
+      localId = archived.id;
+    }
+    await pool.query('UPDATE whatsapp_conversas SET ultima_mensagem=?,ultima_mensagem_em=?,updated_at=? WHERE id=?', [content, timestamp, timestamp, conversation.id]);
+    await writeAudit(req, { action: 'whatsapp.conversa_enviar', resource: 'whatsapp_conversas', resourceId: conversation.id, details: { mensagem_id: localId, ordem_id: conversation.ordem_servico_id } });
+    return res.status(201).json({ data: { id: localId, conversa_id: conversation.id, conteudo: content, direcao: 'saida', tipo: 'texto', status: 'enviada', enviada_em: timestamp, enviada_pelo_sistema: 1 } });
+  } catch (error) {
+    if (localId) await pool.query("UPDATE whatsapp_mensagens SET status='erro',updated_at=? WHERE id=?", [now(), localId]).catch(() => {});
+    return res.status(error.status || 502).json({ error: { message: error.message } });
+  }
+});
+
+app.patch('/api/whatsapp/conversations/:id', requireAuth, async (req, res) => {
+  try {
+    const orderId = String(req.body.ordem_servico_id || '').trim() || null;
+    if (orderId) {
+      const [[order]] = await pool.query('SELECT id FROM ordens_servico WHERE id=? AND user_id=? LIMIT 1', [orderId, req.auth.accountId]);
+      if (!order) return res.status(400).json({ error: { message: 'Ordem de serviço inválida' } });
+    }
+    await pool.query('UPDATE whatsapp_conversas SET ordem_servico_id=?,status=?,updated_at=? WHERE id=? AND user_id=?', [orderId, req.body.status === 'fechada' ? 'fechada' : 'aberta', now(), req.params.id, req.auth.accountId]);
+    return res.json({ data: { updated: true } });
+  } catch (error) { return res.status(500).json({ error: { message: error.message } }); }
+});
+
+app.post('/api/whatsapp/conversations/:id/read', requireAuth, async (req, res) => {
+  await pool.query('UPDATE whatsapp_conversas SET nao_lidas=0,updated_at=? WHERE id=? AND user_id=?', [now(), req.params.id, req.auth.accountId]);
+  return res.json({ data: { read: true } });
+});
+
 function addFilter(where, params, cols, filter) {
   let { column, operator, value } = filter;
   if (column?.includes('.')) return;
@@ -1436,6 +1562,17 @@ app.post('/api/query', requireAuth, async (req, res) => {
             );
             const orderIds = orders.map((order) => order.id);
             if (orderIds.length) {
+              const placeholders = orderIds.map(() => '?').join(',');
+              const [[linkedHistory]] = await conn.query(
+                `SELECT
+                   (SELECT COUNT(*) FROM os_historico WHERE user_id=? AND ordem_servico_id IN (${placeholders})) +
+                   (SELECT COUNT(*) FROM notas_fiscais WHERE user_id=? AND ordem_servico_id IN (${placeholders})) +
+                   (SELECT COUNT(*) FROM whatsapp_mensagens WHERE user_id=? AND ordem_servico_id IN (${placeholders})) AS total`,
+                [req.user.id, ...orderIds, req.user.id, ...orderIds, req.user.id, ...orderIds],
+              );
+              if (Number(linkedHistory?.total || 0) > 0) {
+                throw Object.assign(new Error('Esta OS possui histórico, conversa ou documento fiscal e não pode ser excluída. Cancele a OS para preservar a rastreabilidade.'), { status: 409 });
+              }
               await conn.query(
                 `DELETE FROM contas_receber
                   WHERE user_id = ? AND ordem_servico_id IN (${orderIds.map(() => '?').join(',')})`,
@@ -1558,7 +1695,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
 
     res.status(400).json({ error: { message: `Acao nao suportada: ${action}` } });
   } catch (error) {
-    res.status(500).json({ data: null, count: null, error: { message: error.message, code: error.code } });
+    res.status(error.status || 500).json({ data: null, count: null, error: { message: error.message, code: error.code } });
   }
 });
 
@@ -2446,6 +2583,230 @@ async function ensureReceivableForOrder(conn, userId, order) {
   return syncReceivableForOrder(conn, userId, order.id);
 }
 
+async function appendOrderHistory(conn, { userId, orderId, actorUserId, event, entity, entityId, description, data }) {
+  await conn.query(
+    `INSERT INTO os_historico
+      (id, user_id, ordem_servico_id, actor_user_id, evento, entidade, entidade_id, descricao, dados_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [uuid(), userId, orderId, actorUserId || null, event, entity || null, entityId || null, description, data ? JSON.stringify(data) : null, now()],
+  );
+}
+
+app.get('/api/ordens/:id/historico', requireAuth, async (req, res) => {
+  try {
+    const userId = req.auth.accountId;
+    const [[order]] = await pool.query(
+      `SELECT o.*, c.nome AS cliente_nome, c.telefone AS cliente_telefone,
+              i.nome AS instrumento_nome, m.nome AS marca_nome
+         FROM ordens_servico o
+         JOIN clientes c ON c.id = o.cliente_id
+         LEFT JOIN instrumentos i ON i.id = o.instrumento_id
+         LEFT JOIN marcas m ON m.id = o.marca_id
+        WHERE o.id = ? AND o.user_id = ? LIMIT 1`,
+      [req.params.id, userId],
+    );
+    if (!order) return res.status(404).json({ error: { message: 'Ordem de serviço não encontrada' } });
+    const [occurrences] = await pool.query(
+      'SELECT * FROM os_ocorrencias WHERE user_id = ? AND ordem_servico_id = ? ORDER BY created_at DESC',
+      [userId, order.id],
+    );
+    const [addenda] = await pool.query(
+      'SELECT * FROM os_aditivos WHERE user_id = ? AND ordem_servico_id = ? ORDER BY numero DESC',
+      [userId, order.id],
+    );
+    const addendumIds = addenda.map((item) => item.id);
+    let items = [];
+    if (addendumIds.length) {
+      [items] = await pool.query(
+        `SELECT * FROM os_aditivo_itens WHERE user_id = ? AND aditivo_id IN (${addendumIds.map(() => '?').join(',')}) ORDER BY created_at`,
+        [userId, ...addendumIds],
+      );
+    }
+    const [history] = await pool.query(
+      'SELECT * FROM os_historico WHERE user_id = ? AND ordem_servico_id = ? ORDER BY created_at DESC',
+      [userId, order.id],
+    );
+    const [invoices] = await pool.query(
+      `SELECT id, aditivo_id, tipo_origem, nota_substituida_id, tipo_evento_fiscal, numero_nfse,
+              valor_servicos, status, data_emissao, url_nota
+         FROM notas_fiscais WHERE user_id = ? AND ordem_servico_id = ? ORDER BY data_emissao DESC`,
+      [userId, order.id],
+    );
+    return res.json({ data: {
+      order,
+      occurrences,
+      addenda: addenda.map((item) => ({ ...item, itens: items.filter((detail) => detail.aditivo_id === item.id) })),
+      history,
+      invoices,
+    } });
+  } catch (error) {
+    return res.status(500).json({ error: { message: error.message } });
+  }
+});
+
+app.post('/api/ordens/:id/ocorrencias', requireAuth, async (req, res) => {
+  const title = String(req.body.titulo || '').trim();
+  const description = String(req.body.descricao || '').trim();
+  if (!title || !description || title.length > 255 || description.length > 10000) {
+    return res.status(400).json({ error: { message: 'Informe título e descrição válidos para a ocorrência' } });
+  }
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [[order]] = await conn.query('SELECT id, numero FROM ordens_servico WHERE id = ? AND user_id = ? FOR UPDATE', [req.params.id, req.auth.accountId]);
+    if (!order) {
+      await conn.rollback();
+      return res.status(404).json({ error: { message: 'Ordem de serviço não encontrada' } });
+    }
+    const occurrence = {
+      id: uuid(), user_id: req.auth.accountId, ordem_servico_id: order.id, actor_user_id: req.auth.userId,
+      tipo: String(req.body.tipo || 'novo_problema').slice(0, 50), titulo: title, descricao: description,
+      status: 'aberta', created_at: now(), updated_at: now(),
+    };
+    await conn.query(
+      `INSERT INTO os_ocorrencias (id, user_id, ordem_servico_id, actor_user_id, tipo, titulo, descricao, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, Object.values(occurrence),
+    );
+    await appendOrderHistory(conn, { userId: req.auth.accountId, orderId: order.id, actorUserId: req.auth.userId, event: 'ocorrencia_criada', entity: 'ocorrencia', entityId: occurrence.id, description: title, data: { tipo: occurrence.tipo, descricao: description } });
+    await conn.commit();
+    await writeAudit(req, { action: 'ordem.ocorrencia_criar', resource: 'ordens_servico', resourceId: order.id, details: { ocorrencia_id: occurrence.id } });
+    return res.status(201).json({ data: occurrence });
+  } catch (error) {
+    await conn.rollback();
+    return res.status(500).json({ error: { message: error.message } });
+  } finally { conn.release(); }
+});
+
+app.post('/api/ordens/:id/aditivos', requireAuth, async (req, res) => {
+  const title = String(req.body.titulo || '').trim();
+  const justification = String(req.body.justificativa || '').trim();
+  const rawItems = Array.isArray(req.body.itens) ? req.body.itens : [];
+  const items = rawItems.map((item) => {
+    const quantity = money(item.quantidade || 1);
+    const unitValue = money(item.valor_unitario);
+    return { descricao: String(item.descricao || '').trim(), tipo: String(item.tipo || 'servico').slice(0, 30), quantidade: quantity, valor_unitario: unitValue, valor_total: money(quantity * unitValue) };
+  }).filter((item) => item.descricao && item.quantidade > 0 && item.valor_unitario >= 0);
+  const additionalValue = money(items.reduce((total, item) => total + item.valor_total, 0));
+  if (!title || !justification || !items.length || additionalValue <= 0) {
+    return res.status(400).json({ error: { message: 'Informe justificativa e ao menos um serviço adicional com valor positivo' } });
+  }
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [[order]] = await conn.query('SELECT * FROM ordens_servico WHERE id = ? AND user_id = ? FOR UPDATE', [req.params.id, req.auth.accountId]);
+    if (!order) throw Object.assign(new Error('Ordem de serviço não encontrada'), { status: 404 });
+    if (order.status === 'cancelado') throw Object.assign(new Error('Não é possível criar aditivo para uma OS cancelada'), { status: 409 });
+    const [[sequence]] = await conn.query('SELECT COALESCE(MAX(numero), 0) + 1 AS numero FROM os_aditivos WHERE user_id = ? AND ordem_servico_id = ?', [req.auth.accountId, order.id]);
+    const previousTotal = money(order.valor_total);
+    const addendum = {
+      id: uuid(), user_id: req.auth.accountId, ordem_servico_id: order.id, ocorrencia_id: req.body.ocorrencia_id || null,
+      numero: Number(sequence.numero), versao: 1, titulo: title, justificativa: justification, valor_adicional: additionalValue,
+      valor_total_anterior: previousTotal, valor_total_novo: money(previousTotal + additionalValue), prazo_anterior: order.data_previsao || null,
+      prazo_novo: req.body.prazo_novo || null, status: 'rascunho', created_by: req.auth.userId, created_at: now(), updated_at: now(),
+    };
+    await conn.query(
+      `INSERT INTO os_aditivos
+       (id,user_id,ordem_servico_id,ocorrencia_id,numero,versao,titulo,justificativa,valor_adicional,valor_total_anterior,valor_total_novo,prazo_anterior,prazo_novo,status,created_by,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, Object.values(addendum),
+    );
+    for (const item of items) {
+      await conn.query(
+        `INSERT INTO os_aditivo_itens (id,user_id,aditivo_id,tipo,descricao,quantidade,valor_unitario,valor_total,created_at)
+         VALUES (?,?,?,?,?,?,?,?,?)`,
+        [uuid(), req.auth.accountId, addendum.id, item.tipo, item.descricao, item.quantidade, item.valor_unitario, item.valor_total, now()],
+      );
+    }
+    await appendOrderHistory(conn, { userId: req.auth.accountId, orderId: order.id, actorUserId: req.auth.userId, event: 'aditivo_criado', entity: 'aditivo', entityId: addendum.id, description: `Aditivo #${addendum.numero}: ${title}`, data: { valor_adicional: additionalValue, itens: items } });
+    await conn.commit();
+    await writeAudit(req, { action: 'ordem.aditivo_criar', resource: 'ordens_servico', resourceId: order.id, details: { aditivo_id: addendum.id, valor_adicional: additionalValue } });
+    return res.status(201).json({ data: { ...addendum, itens: items } });
+  } catch (error) {
+    await conn.rollback();
+    return res.status(error.status || 500).json({ error: { message: error.message } });
+  } finally { conn.release(); }
+});
+
+app.post('/api/ordens/:id/aditivos/:aditivoId/aprovar', requireAuth, requireAdmin, async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [[order]] = await conn.query('SELECT * FROM ordens_servico WHERE id = ? AND user_id = ? FOR UPDATE', [req.params.id, req.auth.accountId]);
+    const [[addendum]] = await conn.query('SELECT * FROM os_aditivos WHERE id = ? AND ordem_servico_id = ? AND user_id = ? FOR UPDATE', [req.params.aditivoId, req.params.id, req.auth.accountId]);
+    if (!order || !addendum) throw Object.assign(new Error('OS ou aditivo não encontrado'), { status: 404 });
+    if (!['rascunho', 'enviado'].includes(addendum.status)) throw Object.assign(new Error('Este aditivo já foi decidido'), { status: 409 });
+    const newTotal = money(Number(order.valor_total || 0) + Number(addendum.valor_adicional || 0));
+    const timestamp = now();
+    await conn.query(
+      `UPDATE os_aditivos SET status='aprovado', valor_total_anterior=?, valor_total_novo=?, metodo_aprovacao=?,
+              aprovado_por_nome=?, aprovado_por_telefone=?, aprovado_em=?, updated_at=? WHERE id=?`,
+      [money(order.valor_total), newTotal, req.body.metodo_aprovacao || 'sistema', String(req.body.aprovado_por_nome || '').trim() || null, normalizePhone(req.body.aprovado_por_telefone || ''), timestamp, timestamp, addendum.id],
+    );
+    await conn.query('UPDATE ordens_servico SET valor_total = ?, valor_servicos = COALESCE(valor_servicos,0) + ?, data_previsao = COALESCE(?, data_previsao), updated_at = ? WHERE id = ?', [newTotal, addendum.valor_adicional, addendum.prazo_novo, timestamp, order.id]);
+    await ensureReceivableForOrder(conn, req.auth.accountId, { ...order, valor_total: newTotal });
+    await appendOrderHistory(conn, { userId: req.auth.accountId, orderId: order.id, actorUserId: req.auth.userId, event: 'aditivo_aprovado', entity: 'aditivo', entityId: addendum.id, description: `Aditivo #${addendum.numero} aprovado`, data: { valor_anterior: money(order.valor_total), valor_adicional: money(addendum.valor_adicional), valor_novo: newTotal } });
+    await conn.commit();
+    await writeAudit(req, { action: 'ordem.aditivo_aprovar', resource: 'ordens_servico', resourceId: order.id, details: { aditivo_id: addendum.id, valor_novo: newTotal } });
+    return res.json({ data: { approved: true, valor_total: newTotal } });
+  } catch (error) {
+    await conn.rollback();
+    return res.status(error.status || 500).json({ error: { message: error.message } });
+  } finally { conn.release(); }
+});
+
+app.post('/api/ordens/:id/aditivos/:aditivoId/enviar', requireAuth, async (req, res) => {
+  try {
+    const [[row]] = await pool.query(
+      `SELECT a.*,o.numero AS ordem_numero,o.cliente_id,c.nome AS cliente_nome,c.telefone
+         FROM os_aditivos a JOIN ordens_servico o ON o.id=a.ordem_servico_id
+         JOIN clientes c ON c.id=o.cliente_id
+        WHERE a.id=? AND a.ordem_servico_id=? AND a.user_id=? LIMIT 1`,
+      [req.params.aditivoId, req.params.id, req.auth.accountId],
+    );
+    if (!row) return res.status(404).json({ error: { message: 'Aditivo não encontrado' } });
+    if (!['rascunho', 'enviado'].includes(row.status)) return res.status(409).json({ error: { message: 'Somente aditivos pendentes podem ser enviados' } });
+    if (!validatePhone(row.telefone)) return res.status(400).json({ error: { message: 'Cliente sem telefone válido' } });
+    const [items] = await pool.query('SELECT descricao,quantidade,valor_total FROM os_aditivo_itens WHERE user_id=? AND aditivo_id=? ORDER BY created_at', [req.auth.accountId, row.id]);
+    const itemText = items.map((item) => `• ${item.descricao} (${Number(item.quantidade)}x): R$ ${Number(item.valor_total).toFixed(2).replace('.', ',')}`).join('\n');
+    const message = String(req.body.mensagem || `Olá, ${row.cliente_nome}. Durante a execução da OS #${row.ordem_numero}, identificamos uma necessidade adicional:\n\n${row.justificativa}\n\n${itemText}\n\nValor adicional: R$ ${Number(row.valor_adicional).toFixed(2).replace('.', ',')}\nNovo total da OS: R$ ${Number(row.valor_total_novo).toFixed(2).replace('.', ',')}${row.prazo_novo ? `\nNova previsão: ${row.prazo_novo}` : ''}\n\nPor favor, confirme se autoriza este serviço adicional.`).trim();
+    await ensureWhatsAppConnected(req.auth.accountId);
+    const config = await loadWhatsAppConfig(req.auth.accountId);
+    const provider = await sendEvaluationViaEvolution(row.telefone, message, config);
+    const conversation = await ensureWhatsAppConversation(req.auth.accountId, { phone: row.telefone, pushName: row.cliente_nome, clientId: row.cliente_id, orderId: row.ordem_servico_id });
+    const timestamp = now();
+    await pool.query(
+      `INSERT INTO whatsapp_mensagens
+       (id,user_id,conversa_id,cliente_id,ordem_servico_id,actor_user_id,provider_message_id,direcao,tipo,conteudo,status,from_me,enviada_pelo_sistema,enviada_em,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,'saida','texto',?,'enviada',1,1,?,?,?)
+       ON DUPLICATE KEY UPDATE enviada_pelo_sistema=1,ordem_servico_id=VALUES(ordem_servico_id),updated_at=VALUES(updated_at)`,
+      [uuid(), req.auth.accountId, conversation.id, row.cliente_id, row.ordem_servico_id, req.auth.userId, provider.providerMessageId || null, message, timestamp, timestamp, timestamp],
+    );
+    await pool.query("UPDATE os_aditivos SET status='enviado',mensagem_aprovacao=?,provider_message_id=?,enviado_em=?,updated_at=? WHERE id=?", [message, provider.providerMessageId || null, timestamp, timestamp, row.id]);
+    await pool.query('UPDATE whatsapp_conversas SET ultima_mensagem=?,ultima_mensagem_em=?,updated_at=? WHERE id=?', [message, timestamp, timestamp, conversation.id]);
+    await appendOrderHistory(pool, { userId: req.auth.accountId, orderId: row.ordem_servico_id, actorUserId: req.auth.userId, event: 'aditivo_enviado', entity: 'aditivo', entityId: row.id, description: `Aditivo #${row.numero} enviado ao cliente`, data: { provider_message_id: provider.providerMessageId || null } });
+    await writeAudit(req, { action: 'ordem.aditivo_enviar', resource: 'ordens_servico', resourceId: row.ordem_servico_id, details: { aditivo_id: row.id } });
+    return res.json({ data: { sent: true, conversation_id: conversation.id } });
+  } catch (error) {
+    return res.status(error.status || 502).json({ error: { message: error.message } });
+  }
+});
+
+app.post('/api/ordens/:id/aditivos/:aditivoId/recusar', requireAuth, async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [[addendum]] = await conn.query('SELECT * FROM os_aditivos WHERE id=? AND ordem_servico_id=? AND user_id=? FOR UPDATE', [req.params.aditivoId, req.params.id, req.auth.accountId]);
+    if (!addendum) throw Object.assign(new Error('Aditivo não encontrado'), { status: 404 });
+    if (!['rascunho', 'enviado'].includes(addendum.status)) throw Object.assign(new Error('Este aditivo já foi decidido'), { status: 409 });
+    await conn.query("UPDATE os_aditivos SET status='recusado', recusado_em=?, updated_at=? WHERE id=?", [now(), now(), addendum.id]);
+    await appendOrderHistory(conn, { userId: req.auth.accountId, orderId: req.params.id, actorUserId: req.auth.userId, event: 'aditivo_recusado', entity: 'aditivo', entityId: addendum.id, description: `Aditivo #${addendum.numero} recusado`, data: { motivo: String(req.body.motivo || '').slice(0, 1000) } });
+    await conn.commit();
+    return res.json({ data: { refused: true } });
+  } catch (error) {
+    await conn.rollback();
+    return res.status(error.status || 500).json({ error: { message: error.message } });
+  } finally { conn.release(); }
+});
+
 async function registerOrderPayment({ userId, ordemNumero, ordemId, valor, formaPagamento, origem = 'manual', observacoes = null }) {
   const conn = await pool.getConnection();
   try {
@@ -2977,11 +3338,28 @@ function extractEvolutionWebhookMessage(body = {}) {
     'data.audioBase64',
     'data.message.base64',
   ]);
-  const mimetype = audioNode.mimetype || body.mimetype || data.mimetype || 'audio/ogg';
+  const mediaBase64 = audioBase64 || getNestedValue(body, ['data.base64', 'data.message.base64', 'message.base64', 'base64']);
+  const mediaNode = messageNode.audioMessage || messageNode.imageMessage || messageNode.videoMessage || messageNode.documentMessage || {};
+  const mimetype = mediaNode.mimetype || body.mimetype || data.mimetype || null;
+  const fileName = mediaNode.fileName || data.fileName || body.fileName || null;
+  const providerMessageId = key.id || data.id || body.id || null;
+  const messageTimestamp = Number(data.messageTimestamp || body.messageTimestamp || data.timestamp || body.timestamp || 0);
+  const pushName = String(data.pushName || body.pushName || data.senderName || body.senderName || '').trim() || null;
+  const caption = getNestedValue(body, [
+    'data.message.imageMessage.caption', 'data.message.videoMessage.caption', 'data.message.documentMessage.caption',
+    'message.imageMessage.caption', 'message.videoMessage.caption', 'message.documentMessage.caption',
+  ]);
+  const messageType = messageNode.audioMessage ? 'audio'
+    : messageNode.imageMessage ? 'imagem'
+      : messageNode.videoMessage ? 'video'
+        : messageNode.documentMessage ? 'documento'
+          : messageNode.stickerMessage ? 'figurinha'
+            : messageNode.locationMessage ? 'localizacao'
+              : 'texto';
 
   return {
     phone,
-    text: String(text || '').trim(),
+    text: String(text || caption || '').trim(),
     audioUrl,
     audioBase64,
     mimetype,
@@ -2991,7 +3369,96 @@ function extractEvolutionWebhookMessage(body = {}) {
     remoteJid,
     messageKey: key.id ? { id: key.id, remoteJid: key.remoteJid, fromMe: key.fromMe, participant: key.participant } : null,
     hasAudioMessage: Boolean(messageNode.audioMessage || data.audioMessage || body.audioMessage),
+    providerMessageId,
+    messageTimestamp,
+    pushName,
+    messageType,
+    mediaBase64,
+    fileName,
   };
+}
+
+function safeWebhookJson(payload) {
+  const json = JSON.stringify(payload, (key, value) => {
+    const normalized = String(key).toLowerCase();
+    if (normalized.includes('base64') || normalized === 'apikey' || normalized.includes('token')) return '[omitido]';
+    return value;
+  });
+  if (json.length <= 250_000) return json;
+  return JSON.stringify({ truncated: true, event: payload?.event || null, instance: payload?.instance || null });
+}
+
+function providerTimestamp(value) {
+  if (!Number.isFinite(value) || value <= 0) return now();
+  const milliseconds = value > 10_000_000_000 ? value : value * 1000;
+  const date = new Date(milliseconds);
+  return Number.isNaN(date.valueOf()) ? now() : date.toISOString();
+}
+
+async function matchClientByWhatsAppPhone(userId, phone) {
+  const candidates = whatsappPhoneCandidates(phone);
+  if (!candidates.length) return null;
+  const [clients] = await pool.query('SELECT id, nome, telefone FROM clientes WHERE user_id = ? AND telefone IS NOT NULL', [userId]);
+  return clients.find((client) => {
+    const stored = normalizeWhatsappPhone(client.telefone);
+    return candidates.some((candidate) => stored === candidate || stored.endsWith(candidate) || candidate.endsWith(stored));
+  }) || null;
+}
+
+async function ensureWhatsAppConversation(userId, { phone, remoteJid, pushName, clientId = null, orderId = null }) {
+  const normalizedPhone = normalizeWhatsappPhone(phone);
+  const client = clientId ? null : await matchClientByWhatsAppPhone(userId, normalizedPhone);
+  const timestamp = now();
+  await pool.query(
+    `INSERT INTO whatsapp_conversas
+      (id,user_id,cliente_id,ordem_servico_id,telefone,remote_jid,nome_contato,status,nao_lidas,created_at,updated_at)
+     VALUES (?,?,?,?,?,?,?,'aberta',0,?,?)
+     ON DUPLICATE KEY UPDATE cliente_id=COALESCE(cliente_id,VALUES(cliente_id)),
+       ordem_servico_id=COALESCE(VALUES(ordem_servico_id),ordem_servico_id), remote_jid=COALESCE(VALUES(remote_jid),remote_jid),
+       nome_contato=COALESCE(NULLIF(VALUES(nome_contato),''),nome_contato), updated_at=VALUES(updated_at)`,
+    [uuid(), userId, clientId || client?.id || null, orderId || null, normalizedPhone, remoteJid || null, pushName || client?.nome || null, timestamp, timestamp],
+  );
+  const [[conversation]] = await pool.query('SELECT * FROM whatsapp_conversas WHERE user_id=? AND telefone=? LIMIT 1', [userId, normalizedPhone]);
+  return conversation;
+}
+
+async function archiveEvolutionMessage(userId, body) {
+  const parsed = extractEvolutionWebhookMessage(body);
+  if (!parsed.phone || String(parsed.remoteJid || '').includes('@g.us') || String(parsed.remoteJid || '').includes('status@broadcast')) return null;
+  const conversation = await ensureWhatsAppConversation(userId, parsed);
+  const providerId = parsed.providerMessageId || crypto.createHash('sha256').update(`${userId}|${parsed.phone}|${parsed.fromMe}|${parsed.messageTimestamp}|${parsed.text}`).digest('hex');
+  const messageId = uuid();
+  const sentAt = providerTimestamp(parsed.messageTimestamp);
+  const [result] = await pool.query(
+    `INSERT IGNORE INTO whatsapp_mensagens
+      (id,user_id,conversa_id,cliente_id,ordem_servico_id,provider_message_id,direcao,tipo,conteudo,status,from_me,enviada_pelo_sistema,enviada_em,raw_payload,created_at,updated_at)
+     VALUES (?,?,?,?,?,?,?, ?,?,?,?,0,?,?,?,?)`,
+    [messageId, userId, conversation.id, conversation.cliente_id, conversation.ordem_servico_id, providerId,
+      parsed.fromMe ? 'saida' : 'entrada', parsed.messageType, parsed.text || null, parsed.fromMe ? 'enviada' : 'recebida', parsed.fromMe ? 1 : 0,
+      sentAt, safeWebhookJson(body), now(), now()],
+  );
+  if (result.affectedRows > 0) {
+    const preview = parsed.text || `[${parsed.messageType}]`;
+    await pool.query(
+      `UPDATE whatsapp_conversas SET ultima_mensagem=?, ultima_mensagem_em=?,
+              nao_lidas=nao_lidas + ?, updated_at=? WHERE id=? AND user_id=?`,
+      [preview.slice(0, 1000), sentAt, parsed.fromMe ? 0 : 1, now(), conversation.id, userId],
+    );
+    if (parsed.messageType !== 'texto' && parsed.mediaBase64) {
+      const cleanBase64 = String(parsed.mediaBase64).replace(/^data:[^;]+;base64,/, '');
+      if (/^[a-zA-Z0-9+/]*={0,2}$/.test(cleanBase64) && cleanBase64.length <= 11_200_000) {
+        const content = Buffer.from(cleanBase64, 'base64');
+        if (content.length <= 8 * 1024 * 1024) {
+          await pool.query(
+            `INSERT INTO whatsapp_anexos (id,user_id,mensagem_id,tipo_mime,nome_arquivo,tamanho_bytes,conteudo,sha256,created_at)
+             VALUES (?,?,?,?,?,?,?,?,?)`,
+            [uuid(), userId, messageId, parsed.mimetype || 'application/octet-stream', String(parsed.fileName || `${parsed.messageType}-${providerId}`).slice(0, 255), content.length, content, crypto.createHash('sha256').update(content).digest('hex'), now()],
+          );
+        }
+      }
+    }
+  }
+  return { ...parsed, conversationId: conversation.id, messageId, inserted: result.affectedRows > 0 };
 }
 
 async function sendFinancialAiReply(userId, phone, reply) {
@@ -3384,7 +3851,32 @@ async function handleEvolutionWebhook(req, res) {
     return res.json({ received: true, status: 'aguardando_qr' });
   }
 
-  if (event === 'MESSAGES_UPSERT') return handleFinancialAiWebhook(req, res);
+  if (event === 'MESSAGES_UPSERT' || event === 'SEND_MESSAGE') {
+    const archived = await archiveEvolutionMessage(config.user_id, req.body);
+    if (!archived || archived.fromMe || event === 'SEND_MESSAGE') {
+      return res.json({ received: true, archived: Boolean(archived?.inserted), event });
+    }
+    return handleFinancialAiWebhook(req, res);
+  }
+  if (event === 'MESSAGES_UPDATE' || event === 'MESSAGES_DELETE') {
+    const parsed = extractEvolutionWebhookMessage(req.body);
+    const providerId = parsed.providerMessageId;
+    if (providerId) {
+      const status = event === 'MESSAGES_DELETE' ? 'apagada' : String(req.body?.data?.status || req.body?.status || 'atualizada').toLowerCase();
+      const [[message]] = await pool.query('SELECT id FROM whatsapp_mensagens WHERE user_id=? AND provider_message_id=? LIMIT 1', [config.user_id, providerId]);
+      await pool.query(
+        `UPDATE whatsapp_mensagens SET status=?,apagada_em=?,entregue_em=CASE WHEN ? IN ('delivery_ack','entregue') THEN ? ELSE entregue_em END,
+                lida_em=CASE WHEN ? IN ('read','played','lida') THEN ? ELSE lida_em END,updated_at=?
+          WHERE user_id=? AND provider_message_id=?`,
+        [status, event === 'MESSAGES_DELETE' ? now() : null, status, now(), status, now(), now(), config.user_id, providerId],
+      );
+      await pool.query(
+        'INSERT INTO whatsapp_mensagem_eventos (id,user_id,mensagem_id,provider_message_id,evento,dados_json,created_at) VALUES (?,?,?,?,?,?,?)',
+        [uuid(), config.user_id, message?.id || null, providerId, event.toLowerCase(), safeWebhookJson(req.body), now()],
+      );
+    }
+    return res.json({ received: true, event });
+  }
   return res.json({ received: true, event });
 }
 
@@ -3406,6 +3898,7 @@ async function runWhatsAppReconciliation() {
     );
     for (const row of rows) {
       try {
+        if (!configuredEvolutionWebhooks.has(row.instance_name)) await configureEvolutionWebhook(row.instance_name);
         await synchronizeWhatsAppConnection(row);
       } catch (error) {
         // Falha da infraestrutura não significa que o usuário deslogou. Mantemos

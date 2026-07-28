@@ -186,6 +186,42 @@ const createTables = [
     INDEX idx_ordens_data_entrada (data_entrada)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 
+  `CREATE TABLE IF NOT EXISTS os_ocorrencias (
+    id varchar(36) NOT NULL PRIMARY KEY, user_id varchar(36) NOT NULL, ordem_servico_id varchar(36) NOT NULL,
+    actor_user_id varchar(36) DEFAULT NULL, tipo varchar(50) DEFAULT 'novo_problema', titulo varchar(255) NOT NULL,
+    descricao text NOT NULL, evidencias_json json DEFAULT NULL, status varchar(30) DEFAULT 'aberta',
+    created_at varchar(50) NOT NULL, updated_at varchar(50) NOT NULL,
+    INDEX idx_os_ocorrencias_user (user_id), INDEX idx_os_ocorrencias_ordem (ordem_servico_id), INDEX idx_os_ocorrencias_created (created_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  `CREATE TABLE IF NOT EXISTS os_aditivos (
+    id varchar(36) NOT NULL PRIMARY KEY, user_id varchar(36) NOT NULL, ordem_servico_id varchar(36) NOT NULL,
+    ocorrencia_id varchar(36) DEFAULT NULL, numero int NOT NULL, versao int DEFAULT 1, titulo varchar(255) NOT NULL,
+    justificativa text NOT NULL, valor_adicional decimal(10,2) NOT NULL DEFAULT 0.00,
+    valor_total_anterior decimal(10,2) NOT NULL DEFAULT 0.00, valor_total_novo decimal(10,2) NOT NULL DEFAULT 0.00,
+    prazo_anterior varchar(50) DEFAULT NULL, prazo_novo varchar(50) DEFAULT NULL, status varchar(30) DEFAULT 'rascunho',
+    mensagem_aprovacao text DEFAULT NULL, provider_message_id varchar(255) DEFAULT NULL, metodo_aprovacao varchar(50) DEFAULT NULL,
+    aprovado_por_nome varchar(255) DEFAULT NULL, aprovado_por_telefone varchar(30) DEFAULT NULL,
+    enviado_em varchar(50) DEFAULT NULL, aprovado_em varchar(50) DEFAULT NULL, recusado_em varchar(50) DEFAULT NULL,
+    created_by varchar(36) DEFAULT NULL, created_at varchar(50) NOT NULL, updated_at varchar(50) NOT NULL,
+    UNIQUE KEY unique_os_aditivo_numero (user_id, ordem_servico_id, numero),
+    INDEX idx_os_aditivos_user (user_id), INDEX idx_os_aditivos_ordem (ordem_servico_id), INDEX idx_os_aditivos_status (status)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  `CREATE TABLE IF NOT EXISTS os_aditivo_itens (
+    id varchar(36) NOT NULL PRIMARY KEY, user_id varchar(36) NOT NULL, aditivo_id varchar(36) NOT NULL,
+    tipo varchar(30) DEFAULT 'servico', descricao varchar(500) NOT NULL, quantidade decimal(10,2) NOT NULL DEFAULT 1.00,
+    valor_unitario decimal(10,2) NOT NULL DEFAULT 0.00, valor_total decimal(10,2) NOT NULL DEFAULT 0.00,
+    created_at varchar(50) NOT NULL, INDEX idx_os_aditivo_itens_user (user_id), INDEX idx_os_aditivo_itens_aditivo (aditivo_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  `CREATE TABLE IF NOT EXISTS os_historico (
+    id varchar(36) NOT NULL PRIMARY KEY, user_id varchar(36) NOT NULL, ordem_servico_id varchar(36) NOT NULL,
+    actor_user_id varchar(36) DEFAULT NULL, evento varchar(80) NOT NULL, entidade varchar(50) DEFAULT NULL,
+    entidade_id varchar(36) DEFAULT NULL, descricao text NOT NULL, dados_json json DEFAULT NULL, created_at varchar(50) NOT NULL,
+    INDEX idx_os_historico_user (user_id), INDEX idx_os_historico_ordem (ordem_servico_id), INDEX idx_os_historico_created (created_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
   `CREATE TABLE IF NOT EXISTS contas_pagar (
     id varchar(36) NOT NULL PRIMARY KEY,
     user_id varchar(36) NOT NULL,
@@ -460,6 +496,41 @@ const createTables = [
     INDEX idx_whatsapp_log_created (created_at)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 
+  `CREATE TABLE IF NOT EXISTS whatsapp_conversas (
+    id varchar(36) NOT NULL PRIMARY KEY, user_id varchar(36) NOT NULL, cliente_id varchar(36) DEFAULT NULL,
+    ordem_servico_id varchar(36) DEFAULT NULL,
+    telefone varchar(30) NOT NULL, remote_jid varchar(255) DEFAULT NULL, nome_contato varchar(255) DEFAULT NULL,
+    status varchar(30) DEFAULT 'aberta', responsavel_user_id varchar(36) DEFAULT NULL, ultima_mensagem text DEFAULT NULL,
+    ultima_mensagem_em varchar(50) DEFAULT NULL, nao_lidas int DEFAULT 0, created_at varchar(50) NOT NULL, updated_at varchar(50) NOT NULL,
+    UNIQUE KEY unique_whatsapp_conversa_phone (user_id, telefone), INDEX idx_whatsapp_conversas_user (user_id),
+    INDEX idx_whatsapp_conversas_cliente (cliente_id), INDEX idx_whatsapp_conversas_ordem (ordem_servico_id), INDEX idx_whatsapp_conversas_updated (updated_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  `CREATE TABLE IF NOT EXISTS whatsapp_mensagens (
+    id varchar(36) NOT NULL PRIMARY KEY, user_id varchar(36) NOT NULL, conversa_id varchar(36) NOT NULL,
+    cliente_id varchar(36) DEFAULT NULL, ordem_servico_id varchar(36) DEFAULT NULL, actor_user_id varchar(36) DEFAULT NULL,
+    provider_message_id varchar(255) DEFAULT NULL, direcao varchar(20) NOT NULL, tipo varchar(30) DEFAULT 'texto', conteudo text DEFAULT NULL,
+    status varchar(30) DEFAULT 'recebida', from_me tinyint(1) DEFAULT 0, enviada_pelo_sistema tinyint(1) DEFAULT 0,
+    mensagem_referencia_id varchar(255) DEFAULT NULL, enviada_em varchar(50) NOT NULL, entregue_em varchar(50) DEFAULT NULL,
+    lida_em varchar(50) DEFAULT NULL, apagada_em varchar(50) DEFAULT NULL, raw_payload json DEFAULT NULL,
+    created_at varchar(50) NOT NULL, updated_at varchar(50) NOT NULL,
+    UNIQUE KEY unique_whatsapp_provider_message (user_id, provider_message_id), INDEX idx_whatsapp_mensagens_user (user_id),
+    INDEX idx_whatsapp_mensagens_conversa (conversa_id, enviada_em), INDEX idx_whatsapp_mensagens_ordem (ordem_servico_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  `CREATE TABLE IF NOT EXISTS whatsapp_mensagem_eventos (
+    id varchar(36) NOT NULL PRIMARY KEY, user_id varchar(36) NOT NULL, mensagem_id varchar(36) DEFAULT NULL,
+    provider_message_id varchar(255) DEFAULT NULL, evento varchar(50) NOT NULL, dados_json json DEFAULT NULL, created_at varchar(50) NOT NULL,
+    INDEX idx_whatsapp_eventos_user (user_id), INDEX idx_whatsapp_eventos_mensagem (mensagem_id), INDEX idx_whatsapp_eventos_provider (provider_message_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  `CREATE TABLE IF NOT EXISTS whatsapp_anexos (
+    id varchar(36) NOT NULL PRIMARY KEY, user_id varchar(36) NOT NULL, mensagem_id varchar(36) NOT NULL,
+    tipo_mime varchar(120) DEFAULT NULL, nome_arquivo varchar(255) DEFAULT NULL, tamanho_bytes int DEFAULT NULL,
+    caminho varchar(500) DEFAULT NULL, conteudo longblob DEFAULT NULL, sha256 varchar(64) DEFAULT NULL, created_at varchar(50) NOT NULL,
+    INDEX idx_whatsapp_anexos_user (user_id), INDEX idx_whatsapp_anexos_mensagem (mensagem_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
   `CREATE TABLE IF NOT EXISTS empresa_fiscal (
     id varchar(36) NOT NULL PRIMARY KEY,
     user_id varchar(36) NOT NULL,
@@ -498,6 +569,11 @@ const createTables = [
     id varchar(36) NOT NULL PRIMARY KEY,
     user_id varchar(36) NOT NULL,
     ordem_servico_id varchar(36) NOT NULL,
+    aditivo_id varchar(36) DEFAULT NULL,
+    tipo_origem varchar(30) DEFAULT 'os_consolidada',
+    nota_substituida_id varchar(36) DEFAULT NULL,
+    tipo_evento_fiscal varchar(30) DEFAULT 'emissao',
+    motivo_substituicao text DEFAULT NULL,
     numero_nfse varchar(50) DEFAULT NULL,
     codigo_verificacao varchar(50) DEFAULT NULL,
     numero_rps varchar(20) NOT NULL,
@@ -537,6 +613,8 @@ const createTables = [
     updated_at varchar(50) DEFAULT NULL,
     INDEX idx_nf_user (user_id),
     INDEX idx_nf_ordem (ordem_servico_id),
+    INDEX idx_nf_aditivo (aditivo_id),
+    INDEX idx_nf_substituida (nota_substituida_id),
     INDEX idx_nf_status (status),
     INDEX idx_nf_numero (numero_nfse)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
@@ -734,6 +812,19 @@ const requiredColumns = {
     tentativas: 'int DEFAULT 0',
     updated_at: 'varchar(50) DEFAULT NULL',
   },
+  whatsapp_conversas: {
+    ordem_servico_id: 'varchar(36) DEFAULT NULL',
+  },
+  whatsapp_anexos: {
+    conteudo: 'longblob DEFAULT NULL',
+  },
+  notas_fiscais: {
+    aditivo_id: 'varchar(36) DEFAULT NULL',
+    tipo_origem: "varchar(30) DEFAULT 'os_consolidada'",
+    nota_substituida_id: 'varchar(36) DEFAULT NULL',
+    tipo_evento_fiscal: "varchar(30) DEFAULT 'emissao'",
+    motivo_substituicao: 'text DEFAULT NULL',
+  },
 };
 
 const modifyColumns = [
@@ -768,6 +859,9 @@ const indexes = [
   ['configuracoes_whatsapp', 'unique_config_whatsapp_user', 'ALTER TABLE configuracoes_whatsapp ADD UNIQUE KEY unique_config_whatsapp_user (user_id)'],
   ['system_settings', 'unique_system_settings_user', 'ALTER TABLE system_settings ADD UNIQUE KEY unique_system_settings_user (user_id)'],
   ['templates_mensagem', 'unique_template_tipo_user', 'ALTER TABLE templates_mensagem ADD UNIQUE KEY unique_template_tipo_user (user_id, tipo)'],
+  ['whatsapp_conversas', 'idx_whatsapp_conversas_ordem', 'ALTER TABLE whatsapp_conversas ADD INDEX idx_whatsapp_conversas_ordem (ordem_servico_id)'],
+  ['notas_fiscais', 'idx_nf_aditivo', 'ALTER TABLE notas_fiscais ADD INDEX idx_nf_aditivo (aditivo_id)'],
+  ['notas_fiscais', 'idx_nf_substituida', 'ALTER TABLE notas_fiscais ADD INDEX idx_nf_substituida (nota_substituida_id)'],
 ];
 
 async function safeStep(label, fn, { warnOnly = true } = {}) {

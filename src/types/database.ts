@@ -129,6 +129,72 @@ export interface TransacaoFinanceira {
   conta_pagar?: ContaPagar;
 }
 
+export interface OsOcorrencia {
+  id: string;
+  ordem_servico_id: string;
+  tipo: string;
+  titulo: string;
+  descricao: string;
+  status: 'aberta' | 'resolvida';
+  created_at: string;
+}
+
+export interface OsAditivoItem {
+  id?: string;
+  descricao: string;
+  tipo?: string;
+  quantidade: number;
+  valor_unitario: number;
+  valor_total?: number;
+}
+
+export interface OsAditivo {
+  id: string;
+  ordem_servico_id: string;
+  ocorrencia_id?: string;
+  numero: number;
+  titulo: string;
+  justificativa: string;
+  valor_adicional: number;
+  valor_total_anterior: number;
+  valor_total_novo: number;
+  prazo_novo?: string;
+  status: 'rascunho' | 'enviado' | 'aprovado' | 'recusado';
+  enviado_em?: string;
+  aprovado_em?: string;
+  recusado_em?: string;
+  itens: OsAditivoItem[];
+  created_at: string;
+}
+
+export interface WhatsAppConversa {
+  id: string;
+  cliente_id?: string;
+  ordem_servico_id?: string;
+  telefone: string;
+  nome_contato?: string;
+  cliente_nome?: string;
+  ordem_numero?: number;
+  status: 'aberta' | 'fechada';
+  ultima_mensagem?: string;
+  ultima_mensagem_em?: string;
+  nao_lidas: number;
+}
+
+export interface WhatsAppMensagem {
+  id: string;
+  conversa_id: string;
+  ordem_servico_id?: string;
+  direcao: 'entrada' | 'saida';
+  tipo: string;
+  conteudo?: string;
+  status: string;
+  enviada_em: string;
+  enviada_pelo_sistema?: boolean;
+  anexo_id?: string;
+  anexo_nome?: string;
+}
+
 export interface ContaReceber {
   id: string;
   descricao: string;
@@ -240,6 +306,11 @@ export interface NotaFiscal {
   id: string;
   user_id: string;
   ordem_servico_id: string;
+  aditivo_id?: string;
+  tipo_origem?: 'os_consolidada' | 'aditivo' | 'substituicao';
+  nota_substituida_id?: string;
+  tipo_evento_fiscal?: 'emissao' | 'substituicao';
+  motivo_substituicao?: string;
   numero_nfse?: string;
   codigo_verificacao?: string;
   numero_rps: string;
