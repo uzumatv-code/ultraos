@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, User, Wrench, DollarSign, X, Play, AlertTriangle, CheckCircle, List } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, User, Wrench, DollarSign, X, Play, AlertTriangle, CheckCircle, AlertCircle, ClipboardCheck, Phone } from 'lucide-react';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import type { OrdemServico } from '../types/database';
@@ -213,6 +213,7 @@ export function CustomCalendar({ orders, onEventClick, loading = false, onUpdate
       pendente: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400',
       em_andamento: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
       cancelado: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
+      atraso: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
       concluido: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400',
     };
     return colors[status as keyof typeof colors] || colors.cancelado;
@@ -222,7 +223,8 @@ export function CustomCalendar({ orders, onEventClick, loading = false, onUpdate
     const labels = {
       pendente: 'Pendente',
       em_andamento: 'Em Andamento',
-      cancelado: 'Cancelado/Atrasado',
+      cancelado: 'Cancelado',
+      atraso: 'Em atraso',
       concluido: 'Concluído',
     };
     return labels[status as keyof typeof labels] || 'Desconhecido';
@@ -277,31 +279,6 @@ export function CustomCalendar({ orders, onEventClick, loading = false, onUpdate
     } finally {
       setUpdatingStatus(false);
     }
-  };
-
-  // Função para extrair e formatar os serviços
-  const getServicesDescription = (order: OrdemServico) => {
-    if (!order.observacoes) return null;
-    
-    // Extrair apenas o trecho entre "Serviços:" e "Horário de"
-    const obs = order.observacoes;
-    
-    // Verificar se contém "Serviços:"
-    if (!obs.includes('Serviços:')) return null;
-    
-    // Pegar a partir de "Serviços:"
-    let servicosText = obs.substring(obs.indexOf('Serviços:'));
-    
-    // Remover tudo a partir de "Horário de" (case insensitive)
-    const horarioIndex = servicosText.search(/Hor[aá]rio de/i);
-    if (horarioIndex !== -1) {
-      servicosText = servicosText.substring(0, horarioIndex);
-    }
-    
-    // Limpar espaços em branco extras
-    servicosText = servicosText.trim();
-    
-    return servicosText;
   };
 
   return (
@@ -479,7 +456,7 @@ export function CustomCalendar({ orders, onEventClick, loading = false, onUpdate
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-2 backdrop-blur-sm sm:p-4"
             onClick={() => setSelectedOrder(null)}
           >
             <motion.div
@@ -487,120 +464,134 @@ export function CustomCalendar({ orders, onEventClick, loading = false, onUpdate
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.9, opacity: 0, y: 20 }}
               onClick={(e) => e.stopPropagation()}
-              className="glass dark:glass-dark rounded-3xl p-8 max-w-lg w-full shadow-glass-lg"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="order-details-title"
+              className="flex max-h-[calc(100vh-1rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-white/60 bg-white shadow-2xl dark:border-white/10 dark:bg-slate-900 sm:max-h-[calc(100vh-2rem)] sm:rounded-3xl"
             >
               {/* Header */}
-              <div className="flex items-start justify-between mb-6">
-                <div className="flex items-center gap-4">
-                  <div className={`w-16 h-16 rounded-2xl flex items-center justify-center ${getStatusBadgeColor(selectedOrder.status).split(' ')[0]} bg-opacity-20`}>
-                    <CalendarIcon className="w-8 h-8 text-primary-600 dark:text-primary-400" />
+              <div className="flex shrink-0 items-center justify-between border-b border-slate-200 px-4 py-4 dark:border-slate-800 sm:px-6">
+                <div className="flex min-w-0 items-center gap-3 sm:gap-4">
+                  <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl sm:h-14 sm:w-14 ${getStatusBadgeColor(selectedOrder.status)}`}>
+                    <CalendarIcon className="h-6 w-6 sm:h-7 sm:w-7" />
                   </div>
-                  <div>
-                    <h3 className="text-2xl font-bold text-gray-800 dark:text-white">
-                      Ordem de Serviço
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-primary-600 dark:text-primary-400">Ordem de serviço</p>
+                    <h3 id="order-details-title" className="truncate text-xl font-bold text-slate-900 dark:text-white sm:text-2xl">
+                      OS #{selectedOrder.numero}
                     </h3>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">
-                      ID: {selectedOrder.id.substring(0, 8)}
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Código {selectedOrder.id.substring(0, 8)}
                     </p>
                   </div>
                 </div>
                 <button
                   onClick={() => setSelectedOrder(null)}
-                  className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-xl transition-colors"
+                  aria-label="Fechar detalhes da ordem"
+                  className="shrink-0 rounded-xl p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white"
                 >
-                  <X className="w-6 h-6 text-gray-500 dark:text-gray-400" />
+                  <X className="h-6 w-6" />
                 </button>
               </div>
 
               {/* Detalhes */}
-              <div className="space-y-5">
-                <div className="flex items-start gap-4 p-4 rounded-xl bg-gray-50 dark:bg-gray-800/50">
-                  <User className="w-6 h-6 text-primary-600 dark:text-primary-400 mt-1" />
-                  <div className="flex-1">
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Cliente</p>
-                    <p className="font-bold text-lg text-gray-800 dark:text-white">
+              <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700/70 dark:bg-slate-800/60">
+                    <User className="mt-0.5 h-5 w-5 shrink-0 text-primary-600 dark:text-primary-400" />
+                    <div className="min-w-0 flex-1">
+                      <p className="mb-1 text-xs font-medium text-slate-500 dark:text-slate-400">Cliente</p>
+                      <p className="truncate font-bold text-slate-900 dark:text-white">
                       {selectedOrder.cliente?.nome || 'Não informado'}
-                    </p>
-                    {selectedOrder.cliente?.telefone && (
-                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                        📱 {selectedOrder.cliente.telefone}
                       </p>
-                    )}
+                      {selectedOrder.cliente?.telefone && (
+                        <p className="mt-1 flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-300">
+                          <Phone className="h-3.5 w-3.5" />
+                          {selectedOrder.cliente.telefone}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700/70 dark:bg-slate-800/60">
+                    <Wrench className="mt-0.5 h-5 w-5 shrink-0 text-primary-600 dark:text-primary-400" />
+                    <div className="min-w-0 flex-1">
+                      <p className="mb-1 text-xs font-medium text-slate-500 dark:text-slate-400">Equipamento</p>
+                      <p className="font-bold text-slate-900 dark:text-white">
+                        {[selectedOrder.instrumento?.nome, selectedOrder.marca?.nome].filter(Boolean).join(' - ') || 'Não informado'}
+                      </p>
+                      {selectedOrder.modelo && (
+                        <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">Modelo: {selectedOrder.modelo}</p>
+                      )}
+                    </div>
                   </div>
                 </div>
 
-                <div className="flex items-start gap-4 p-4 rounded-xl bg-gray-50 dark:bg-gray-800/50">
-                  <Wrench className="w-6 h-6 text-primary-600 dark:text-primary-400 mt-1" />
-                  <div className="flex-1">
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Equipamento</p>
-                    <p className="font-bold text-lg text-gray-800 dark:text-white">
-                      {selectedOrder.instrumento?.nome} - {selectedOrder.marca?.nome}
-                    </p>
-                    {selectedOrder.modelo && (
-                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                        Modelo: {selectedOrder.modelo}
-                      </p>
-                    )}
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="flex items-start gap-3 p-4 rounded-xl bg-gray-50 dark:bg-gray-800/50">
-                    <Clock className="w-5 h-5 text-primary-600 dark:text-primary-400 mt-1" />
-                    <div>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Previsão</p>
-                      <p className="font-semibold text-gray-800 dark:text-white">
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                  <div className="rounded-2xl border border-slate-200 bg-white p-3.5 dark:border-slate-700 dark:bg-slate-800/30">
+                    <div className="mb-2 flex items-center gap-2 text-slate-500 dark:text-slate-400">
+                      <Clock className="h-4 w-4 text-primary-600 dark:text-primary-400" />
+                      <p className="text-xs font-medium">Previsão</p>
+                    </div>
+                    <p className="font-semibold text-slate-900 dark:text-white">
                         {selectedOrder.data_previsao
                           ? parseScheduleDate(selectedOrder.data_previsao).toLocaleDateString('pt-BR')
                           : 'Não definida'}
-                      </p>
-                    </div>
+                    </p>
                   </div>
 
-                  <div className="flex items-start gap-3 p-4 rounded-xl bg-gray-50 dark:bg-gray-800/50">
-                    <DollarSign className="w-5 h-5 text-primary-600 dark:text-primary-400 mt-1" />
-                    <div>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Valor</p>
-                      <p className="font-bold text-lg text-green-600 dark:text-green-400">
-                        {formatCurrency(selectedOrder.valor_servicos - (selectedOrder.desconto || 0))}
-                      </p>
+                  <div className="rounded-2xl border border-slate-200 bg-white p-3.5 dark:border-slate-700 dark:bg-slate-800/30">
+                    <div className="mb-2 flex items-center gap-2 text-slate-500 dark:text-slate-400">
+                      <DollarSign className="h-4 w-4 text-primary-600 dark:text-primary-400" />
+                      <p className="text-xs font-medium">Valor</p>
                     </div>
+                    <p className="font-bold text-emerald-600 dark:text-emerald-400">
+                      {formatCurrency(Number(selectedOrder.valor_total ?? (selectedOrder.valor_servicos - (selectedOrder.desconto || 0))))}
+                    </p>
+                  </div>
+
+                  <div className="col-span-2 rounded-2xl border border-slate-200 bg-white p-3.5 dark:border-slate-700 dark:bg-slate-800/30 sm:col-span-1">
+                    <p className="mb-2 text-xs font-medium text-slate-500 dark:text-slate-400">Status atual</p>
+                    <span className={`inline-flex rounded-lg px-3 py-1.5 text-xs font-bold ${getStatusBadgeColor(selectedOrder.status)}`}>
+                      {getStatusLabel(selectedOrder.status)}
+                    </span>
                   </div>
                 </div>
 
-                {/* Status */}
-                <div className="p-4 rounded-xl bg-gray-50 dark:bg-gray-800/50">
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Status</p>
-                  <span className={`inline-flex px-4 py-2 rounded-xl text-sm font-bold ${getStatusBadgeColor(selectedOrder.status)}`}>
-                    {getStatusLabel(selectedOrder.status)}
-                  </span>
-                </div>
-
-                {/* Serviços */}
-                {getServicesDescription(selectedOrder) && (
-                  <div className="p-4 rounded-xl bg-gray-50 dark:bg-gray-800/50">
-                    <div className="flex items-start gap-2 mb-2">
-                      <List className="w-5 h-5 text-primary-600 dark:text-primary-400 mt-0.5" />
-                      <div className="flex-1">
-                        <p className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-line leading-relaxed">
-                          {getServicesDescription(selectedOrder)}
-                        </p>
-                      </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <section className="rounded-2xl border border-rose-200 bg-rose-50/70 p-4 dark:border-rose-900/50 dark:bg-rose-950/20">
+                    <div className="mb-2 flex items-center gap-2">
+                      <AlertCircle className="h-5 w-5 shrink-0 text-rose-600 dark:text-rose-400" />
+                      <h4 className="text-sm font-bold text-slate-900 dark:text-white">Problema relatado</h4>
                     </div>
-                  </div>
-                )}
+                    <p className="whitespace-pre-line text-sm leading-relaxed text-slate-700 dark:text-slate-300">
+                      {selectedOrder.problema_descricao?.trim() || 'Não informado nesta ordem.'}
+                    </p>
+                  </section>
 
-                {/* Botões de ação */}
-                <div className="grid grid-cols-3 gap-2 mt-6">
+                  <section className="rounded-2xl border border-indigo-200 bg-indigo-50/70 p-4 dark:border-indigo-900/50 dark:bg-indigo-950/20">
+                    <div className="mb-2 flex items-center gap-2">
+                      <ClipboardCheck className="h-5 w-5 shrink-0 text-indigo-600 dark:text-indigo-400" />
+                      <h4 className="text-sm font-bold text-slate-900 dark:text-white">Serviço a executar</h4>
+                    </div>
+                    <p className="whitespace-pre-line text-sm leading-relaxed text-slate-700 dark:text-slate-300">
+                      {selectedOrder.servico_descricao?.trim() || 'Não informado nesta ordem.'}
+                    </p>
+                  </section>
+                </div>
+              </div>
+
+              {/* Ações */}
+              <div className="grid shrink-0 grid-cols-3 gap-2 border-t border-slate-200 bg-white px-3 py-3 dark:border-slate-800 dark:bg-slate-900 sm:px-6 sm:py-4">
                   <motion.button
                     whileHover={{ scale: 1.05 }}
                     whileTap={{ scale: 0.95 }}
                     onClick={() => updateOrderStatus('em_andamento')}
                     disabled={updatingStatus || selectedOrder.status === 'em_andamento'}
-                    className="flex flex-col items-center gap-1.5 p-3 rounded-xl bg-gradient-to-br from-amber-500 to-amber-600 text-white font-semibold text-xs shadow-md hover:shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="flex min-h-16 flex-col items-center justify-center gap-1 rounded-xl bg-gradient-to-br from-amber-500 to-amber-600 p-2 text-center text-[11px] font-semibold leading-tight text-white shadow-md transition-all hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-50 sm:flex-row sm:gap-2 sm:text-xs"
                   >
                     <Play className="w-5 h-5" />
-                    <span>Em Andamento</span>
+                    <span>Iniciar serviço</span>
                   </motion.button>
 
                   <motion.button
@@ -608,7 +599,7 @@ export function CustomCalendar({ orders, onEventClick, loading = false, onUpdate
                     whileTap={{ scale: 0.95 }}
                     onClick={() => updateOrderStatus('atraso')}
                     disabled={updatingStatus || selectedOrder.status === 'atraso'}
-                    className="flex flex-col items-center gap-1.5 p-3 rounded-xl bg-gradient-to-br from-red-500 to-red-600 text-white font-semibold text-xs shadow-md hover:shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="flex min-h-16 flex-col items-center justify-center gap-1 rounded-xl bg-gradient-to-br from-red-500 to-red-600 p-2 text-center text-[11px] font-semibold leading-tight text-white shadow-md transition-all hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-50 sm:flex-row sm:gap-2 sm:text-xs"
                   >
                     <AlertTriangle className="w-5 h-5" />
                     <span>Contratempo</span>
@@ -619,12 +610,11 @@ export function CustomCalendar({ orders, onEventClick, loading = false, onUpdate
                     whileTap={{ scale: 0.95 }}
                     onClick={() => updateOrderStatus('concluido')}
                     disabled={updatingStatus || selectedOrder.status === 'concluido'}
-                    className="flex flex-col items-center gap-1.5 p-3 rounded-xl bg-gradient-to-br from-green-500 to-green-600 text-white font-semibold text-xs shadow-md hover:shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="flex min-h-16 flex-col items-center justify-center gap-1 rounded-xl bg-gradient-to-br from-green-500 to-green-600 p-2 text-center text-[11px] font-semibold leading-tight text-white shadow-md transition-all hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-50 sm:flex-row sm:gap-2 sm:text-xs"
                   >
                     <CheckCircle className="w-5 h-5" />
-                    <span>Finalização</span>
+                    <span>Finalizar OS</span>
                   </motion.button>
-                </div>
               </div>
             </motion.div>
           </motion.div>
