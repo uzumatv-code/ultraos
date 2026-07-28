@@ -14,6 +14,7 @@ import {
   PenTool as Tool,
   Receipt,
   Settings,
+  Sparkles,
   Star,
   Users,
   Wrench,
@@ -47,6 +48,7 @@ const supportItems: Array<{ path: string; icon: typeof Home; label: string; perm
   { path: '/servicos', icon: Wrench, label: 'Serviços' },
   { path: '/problemas', icon: AlertTriangle, label: 'Problemas' },
   { path: '/avaliacoes', icon: Star, label: 'Avaliações', permission: 'settings.manage' },
+  { path: '/remarketing', icon: Sparkles, label: 'Manutenção preventiva', permission: 'settings.manage' },
   { path: '/configuracoes', icon: Settings, label: 'Configurações', permission: 'settings.manage' },
 ];
 

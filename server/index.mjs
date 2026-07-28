@@ -44,6 +44,13 @@ const EVALUATION_DEFAULTS = {
   googleReviewLink: 'https://g.page/r/Cd8CHsL7KDxCEBM/review',
   instagramHandle: '@luthieriabrasilia',
 };
+const REMARKETING_DEFAULT_MESSAGE = `Olá, {{nome}}! Já faz cerca de {{meses}} meses desde a última manutenção do seu {{instrumento}}.
+
+Uma revisão preventiva pode ajudar a conservar a regulagem, as cordas e a escala. Se quiser, podemos verificar o instrumento e orientar se há necessidade de troca de cordas, higienização ou hidratação.
+
+Deseja consultar os horários disponíveis? Para não receber lembretes de manutenção, responda SAIR.`;
+const REMARKETING_FINAL_STATUSES = new Set(['enviado', 'respondido', 'convertido', 'descadastrado', 'cancelado']);
+const REMARKETING_OPT_OUT_WORDS = new Set(['sair', 'parar', 'cancelar', 'descadastrar', 'nao quero', 'não quero']);
 const SYSTEM_AI_MODEL = process.env.OPENAI_INTENT_MODEL || process.env.OPENAI_MODEL || 'gpt-5.5';
 const SYSTEM_AI_WRITE_INTENTS = new Set([
   'registrar_despesa',
@@ -1388,6 +1395,368 @@ app.post('/api/whatsapp/conversations/:id/read', requireAuth, async (req, res) =
   return res.json({ data: { read: true } });
 });
 
+function clampInteger(value, minimum, maximum, fallback) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : fallback;
+}
+
+function completedOrderDate(order) {
+  return order.data_entrega || order.updated_at || order.data_previsao || order.created_at;
+}
+
+function maintenanceInstrumentKey(order) {
+  if (order.instrumento_id) return `instrumento:${order.instrumento_id}`;
+  if (order.equipamento_id) return `equipamento:${order.equipamento_id}`;
+  return `modelo:${String(order.modelo || 'sem-modelo').trim().toLocaleLowerCase('pt-BR')}`;
+}
+
+async function markRemarketingConversion(connection, userId, order) {
+  if (!order?.id || !order?.cliente_id) return;
+  const params = [userId, order.cliente_id, order.id];
+  let instrumentSql = '';
+  if (order.instrumento_id) {
+    instrumentSql = ' AND rl.instrumento_id=?';
+    params.push(order.instrumento_id);
+  } else if (order.equipamento_id) {
+    instrumentSql = ' AND rl.equipamento_id=?';
+    params.push(order.equipamento_id);
+  } else if (String(order.modelo || '').trim()) {
+    instrumentSql = ' AND LOWER(TRIM(o.modelo))=LOWER(TRIM(?))';
+    params.push(String(order.modelo).trim());
+  } else {
+    return;
+  }
+  const [[reminder]] = await connection.query(
+    `SELECT rl.id FROM remarketing_lembretes rl
+       JOIN ordens_servico o ON o.id=rl.ordem_servico_id AND o.user_id=rl.user_id
+      WHERE rl.user_id=? AND rl.cliente_id=? AND rl.ordem_servico_id<>?
+        AND rl.status IN ('enviado','respondido')${instrumentSql}
+      ORDER BY rl.data_envio DESC LIMIT 1`,
+    params,
+  );
+  if (!reminder) return;
+  const timestamp = now();
+  await connection.query(
+    `UPDATE remarketing_lembretes SET status='convertido',convertido_em=?,ordem_conversao_id=?,updated_at=? WHERE id=? AND user_id=?`,
+    [timestamp, order.id, timestamp, reminder.id, userId],
+  );
+}
+
+function renderRemarketingMessage(template, opportunity) {
+  const months = Math.max(1, Math.floor(Number(opportunity.dias_sem_manutencao || 0) / 30));
+  const instrument = [opportunity.instrumento_nome || opportunity.equipamento_nome, opportunity.marca_nome, opportunity.modelo]
+    .filter(Boolean).join(' ') || 'instrumento';
+  return String(template || REMARKETING_DEFAULT_MESSAGE)
+    .replaceAll('{{nome}}', String(opportunity.cliente_nome || '').split(' ')[0] || 'cliente')
+    .replaceAll('{{cliente}}', opportunity.cliente_nome || 'cliente')
+    .replaceAll('{{instrumento}}', instrument)
+    .replaceAll('{{meses}}', String(months))
+    .replaceAll('{{dias}}', String(opportunity.dias_sem_manutencao || 0));
+}
+
+async function ensureRemarketingCampaign(userId) {
+  const [[existing]] = await pool.query('SELECT * FROM remarketing_campanhas WHERE user_id=? LIMIT 1', [userId]);
+  if (existing) return existing;
+  const id = uuid();
+  const timestamp = now();
+  await pool.query(
+    `INSERT INTO remarketing_campanhas
+      (id,user_id,nome,ativo,automatico,dias_sem_manutencao,horario_envio,limite_diario,intervalo_minimo_segundos,intervalo_cliente_dias,max_tentativas,mensagem,created_at,updated_at)
+     VALUES (?,?,'Manutenção preventiva',1,0,180,10,10,60,90,2,?,?,?)`,
+    [id, userId, REMARKETING_DEFAULT_MESSAGE, timestamp, timestamp],
+  );
+  const [[campaign]] = await pool.query('SELECT * FROM remarketing_campanhas WHERE id=? LIMIT 1', [id]);
+  return campaign;
+}
+
+async function getRemarketingOpportunities(userId, campaign) {
+  const cutoff = new Date(Date.now() - Number(campaign.dias_sem_manutencao) * 86_400_000).toISOString().slice(0, 10);
+  const [orders] = await pool.query(
+    `SELECT o.id AS ordem_servico_id,o.numero AS ordem_numero,o.cliente_id,o.instrumento_id,o.equipamento_id,o.marca_id,
+            o.modelo,o.data_entrega,o.data_previsao,o.created_at,o.updated_at,
+            c.nome AS cliente_nome,c.telefone AS cliente_telefone,
+            i.nome AS instrumento_nome,e.nome AS equipamento_nome,m.nome AS marca_nome,
+            cp.lembretes_manutencao_autorizado,cp.origem_consentimento,cp.consentido_em,cp.descadastrado_em,
+            rl.id AS lembrete_id,rl.status AS lembrete_status,rl.tentativas,rl.data_envio,rl.mensagem_erro
+       FROM ordens_servico o
+       JOIN clientes c ON c.id=o.cliente_id AND c.user_id=o.user_id
+       LEFT JOIN instrumentos i ON i.id=o.instrumento_id AND i.user_id=o.user_id
+       LEFT JOIN equipamentos e ON e.id=o.equipamento_id AND e.user_id=o.user_id
+       LEFT JOIN marcas m ON m.id=o.marca_id AND m.user_id=o.user_id
+       LEFT JOIN comunicacao_preferencias cp ON cp.user_id=o.user_id AND cp.cliente_id=o.cliente_id
+       LEFT JOIN remarketing_lembretes rl ON rl.user_id=o.user_id AND rl.campanha_id=? AND rl.ordem_servico_id=o.id
+      WHERE o.user_id=? AND o.status='concluido' AND c.telefone IS NOT NULL
+        AND LEFT(COALESCE(o.data_entrega,o.updated_at,o.data_previsao,o.created_at),10)<=?
+      ORDER BY COALESCE(o.data_entrega,o.updated_at,o.data_previsao,o.created_at) DESC
+      LIMIT 2000`,
+    [campaign.id, userId, cutoff],
+  );
+  const [activeOrders] = await pool.query(
+    `SELECT cliente_id,instrumento_id,equipamento_id,modelo FROM ordens_servico
+      WHERE user_id=? AND status IN ('pendente','em_andamento','atraso')`,
+    [userId],
+  );
+  const activeKeys = new Set(activeOrders.map((order) => `${order.cliente_id}|${maintenanceInstrumentKey(order)}`));
+  const latestByInstrument = new Map();
+  for (const order of orders) {
+    const key = `${order.cliente_id}|${maintenanceInstrumentKey(order)}`;
+    if (!latestByInstrument.has(key)) latestByInstrument.set(key, order);
+  }
+  const today = Date.now();
+  return [...latestByInstrument.entries()].flatMap(([key, order]) => {
+    if (activeKeys.has(key)) return [];
+    if (order.lembrete_status && REMARKETING_FINAL_STATUSES.has(order.lembrete_status)) return [];
+    if (Number(order.tentativas || 0) >= Number(campaign.max_tentativas || 2)) return [];
+    const maintenanceDate = completedOrderDate(order);
+    const date = new Date(maintenanceDate);
+    if (Number.isNaN(date.valueOf())) return [];
+    const days = Math.max(0, Math.floor((today - date.valueOf()) / 86_400_000));
+    const consentStatus = order.descadastrado_em
+      ? 'descadastrado'
+      : Number(order.lembretes_manutencao_autorizado) === 1 ? 'autorizado' : 'nao_autorizado';
+    return [{ ...order, data_ultima_manutencao: maintenanceDate, dias_sem_manutencao: days, consentimento: consentStatus }];
+  });
+}
+
+async function remarketingProviderStatus(userId) {
+  const config = await loadWhatsAppConfig(userId);
+  const official = ['meta', 'meta_cloud', 'whatsapp_cloud'].includes(String(config?.provider || '').toLowerCase());
+  return {
+    provider: config?.provider || 'nao_configurado',
+    connected: config?.status === 'conectado',
+    official,
+    // O conector oficial ainda precisa ser configurado antes de existir um worker
+    // autorizado a iniciar conversas com templates aprovados.
+    automaticAllowed: false,
+    manualSingleAllowed: Boolean(String(config?.provider || '').toLowerCase() === 'evolution'
+      && config?.method === 'webhook' && config?.webhook_url && config?.status === 'conectado'),
+  };
+}
+
+app.get('/api/remarketing/overview', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const userId = req.auth.accountId;
+    const campaign = await ensureRemarketingCampaign(userId);
+    const [opportunities, providerStatus, [history], [[historyStats]]] = await Promise.all([
+      getRemarketingOpportunities(userId, campaign),
+      remarketingProviderStatus(userId),
+      pool.query(
+        `SELECT rl.*,c.nome AS cliente_nome,c.telefone AS cliente_telefone,o.numero AS ordem_numero,o.modelo,
+                i.nome AS instrumento_nome,e.nome AS equipamento_nome,m.nome AS marca_nome
+           FROM remarketing_lembretes rl
+           JOIN clientes c ON c.id=rl.cliente_id AND c.user_id=rl.user_id
+           JOIN ordens_servico o ON o.id=rl.ordem_servico_id AND o.user_id=rl.user_id
+           LEFT JOIN instrumentos i ON i.id=o.instrumento_id AND i.user_id=o.user_id
+           LEFT JOIN equipamentos e ON e.id=o.equipamento_id AND e.user_id=o.user_id
+           LEFT JOIN marcas m ON m.id=o.marca_id AND m.user_id=o.user_id
+          WHERE rl.user_id=? ORDER BY rl.created_at DESC LIMIT 200`,
+        [userId],
+      ),
+      pool.query(
+        `SELECT COUNT(*) AS total,
+                SUM(status='enviado') AS enviados,SUM(status='respondido') AS respondidos,
+                SUM(status='convertido') AS convertidos,SUM(status='erro') AS erros,
+                SUM(status='descadastrado') AS descadastrados
+           FROM remarketing_lembretes WHERE user_id=?`,
+        [userId],
+      ),
+    ]);
+    const authorized = opportunities.filter((item) => item.consentimento === 'autorizado').length;
+    return res.json({ data: {
+      campaign,
+      provider: providerStatus,
+      opportunities,
+      history,
+      stats: {
+        elegiveis: opportunities.length,
+        autorizados: authorized,
+        enviados: Number(historyStats.enviados || 0),
+        respondidos: Number(historyStats.respondidos || 0),
+        convertidos: Number(historyStats.convertidos || 0),
+        erros: Number(historyStats.erros || 0),
+        descadastrados: Number(historyStats.descadastrados || 0),
+      },
+    } });
+  } catch (error) {
+    return res.status(500).json({ error: { message: error.message } });
+  }
+});
+
+app.put('/api/remarketing/settings', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const userId = req.auth.accountId;
+    const campaign = await ensureRemarketingCampaign(userId);
+    const provider = await remarketingProviderStatus(userId);
+    const automaticRequested = req.body.automatico === true || req.body.automatico === 1;
+    if (automaticRequested && !provider.automaticAllowed) {
+      return res.status(409).json({ error: { message: 'O envio automático exige uma conexão oficial da Plataforma WhatsApp Business.' } });
+    }
+    const message = String(req.body.mensagem || campaign.mensagem || '').trim();
+    if (!message || message.length > 3000) return res.status(400).json({ error: { message: 'A mensagem deve ter entre 1 e 3000 caracteres.' } });
+    const values = {
+      nome: String(req.body.nome || campaign.nome).trim().slice(0, 255) || 'Manutenção preventiva',
+      ativo: req.body.ativo === false || req.body.ativo === 0 ? 0 : 1,
+      automatico: automaticRequested ? 1 : 0,
+      dias: clampInteger(req.body.dias_sem_manutencao, 30, 1460, Number(campaign.dias_sem_manutencao)),
+      hour: clampInteger(req.body.horario_envio, 0, 23, Number(campaign.horario_envio)),
+      limit: clampInteger(req.body.limite_diario, 1, 100, Number(campaign.limite_diario)),
+      interval: clampInteger(req.body.intervalo_minimo_segundos, 30, 3600, Number(campaign.intervalo_minimo_segundos)),
+      cooldown: clampInteger(req.body.intervalo_cliente_dias, 30, 730, Number(campaign.intervalo_cliente_dias)),
+      attempts: clampInteger(req.body.max_tentativas, 1, 5, Number(campaign.max_tentativas)),
+    };
+    await pool.query(
+      `UPDATE remarketing_campanhas SET nome=?,ativo=?,automatico=?,dias_sem_manutencao=?,horario_envio=?,limite_diario=?,
+              intervalo_minimo_segundos=?,intervalo_cliente_dias=?,max_tentativas=?,mensagem=?,updated_at=? WHERE id=? AND user_id=?`,
+      [values.nome, values.ativo, values.automatico, values.dias, values.hour, values.limit, values.interval,
+        values.cooldown, values.attempts, message, now(), campaign.id, userId],
+    );
+    await writeAudit(req, { action: 'remarketing.configurar', resource: 'remarketing_campanhas', resourceId: campaign.id, details: values });
+    const [[updated]] = await pool.query('SELECT * FROM remarketing_campanhas WHERE id=? LIMIT 1', [campaign.id]);
+    return res.json({ data: updated });
+  } catch (error) {
+    return res.status(500).json({ error: { message: error.message } });
+  }
+});
+
+app.put('/api/remarketing/clients/:clientId/consent', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const userId = req.auth.accountId;
+    const [[client]] = await pool.query('SELECT id FROM clientes WHERE id=? AND user_id=? LIMIT 1', [req.params.clientId, userId]);
+    if (!client) return res.status(404).json({ error: { message: 'Cliente não encontrado.' } });
+    const authorized = req.body.autorizado === true || req.body.autorizado === 1;
+    const optedOut = req.body.descadastrado === true || String(req.body.origem || '') === 'whatsapp_optout';
+    const timestamp = now();
+    await pool.query(
+      `INSERT INTO comunicacao_preferencias
+        (id,user_id,cliente_id,lembretes_manutencao_autorizado,origem_consentimento,consentido_em,descadastrado_em,motivo_descadastro,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?)
+       ON DUPLICATE KEY UPDATE lembretes_manutencao_autorizado=VALUES(lembretes_manutencao_autorizado),
+         origem_consentimento=VALUES(origem_consentimento),consentido_em=VALUES(consentido_em),
+         descadastrado_em=VALUES(descadastrado_em),motivo_descadastro=VALUES(motivo_descadastro),updated_at=VALUES(updated_at)`,
+      [uuid(), userId, client.id, authorized && !optedOut ? 1 : 0, String(req.body.origem || 'registrado_no_sistema').slice(0, 100),
+        authorized && !optedOut ? timestamp : null, optedOut ? timestamp : null, optedOut ? String(req.body.motivo || 'Solicitado pelo cliente').slice(0, 255) : null,
+        timestamp, timestamp],
+    );
+    await writeAudit(req, { action: authorized && !optedOut ? 'remarketing.consentir' : 'remarketing.descadastrar', resource: 'clientes', resourceId: client.id, details: { origem: req.body.origem || 'registrado_no_sistema' } });
+    return res.json({ data: { cliente_id: client.id, autorizado: authorized && !optedOut, descadastrado: optedOut } });
+  } catch (error) {
+    return res.status(500).json({ error: { message: error.message } });
+  }
+});
+
+app.post('/api/remarketing/send/:orderId', requireAuth, requireAdmin, async (req, res) => {
+  let reminderId = null;
+  let localMessageId = null;
+  let providerSent = false;
+  try {
+    const userId = req.auth.accountId;
+    const campaign = await ensureRemarketingCampaign(userId);
+    if (!Number(campaign.ativo)) return res.status(409).json({ error: { message: 'A campanha está pausada.' } });
+    const providerStatus = await remarketingProviderStatus(userId);
+    if (!providerStatus.manualSingleAllowed) return res.status(409).json({ error: { message: 'Conecte o WhatsApp antes de enviar.' } });
+    const opportunities = await getRemarketingOpportunities(userId, campaign);
+    const opportunity = opportunities.find((item) => item.ordem_servico_id === req.params.orderId);
+    if (!opportunity) return res.status(409).json({ error: { message: 'Esta manutenção não está mais elegível. Atualize a lista.' } });
+    if (opportunity.consentimento !== 'autorizado') {
+      return res.status(409).json({ error: { message: 'Registre a autorização do cliente antes do envio.' } });
+    }
+    if (!validatePhone(opportunity.cliente_telefone)) return res.status(400).json({ error: { message: 'O cliente não possui telefone válido.' } });
+    const today = todayDate();
+    const [[daily]] = await pool.query(
+      `SELECT COUNT(*) AS total FROM remarketing_lembretes WHERE user_id=? AND LEFT(data_envio,10)=? AND status IN ('enviado','respondido','convertido')`,
+      [userId, today],
+    );
+    if (Number(daily.total || 0) >= Number(campaign.limite_diario)) {
+      return res.status(429).json({ error: { message: `Limite diário de ${campaign.limite_diario} envios atingido.` } });
+    }
+    const [[lastSent]] = await pool.query(
+      `SELECT data_envio FROM remarketing_lembretes WHERE user_id=? AND data_envio IS NOT NULL ORDER BY data_envio DESC LIMIT 1`,
+      [userId],
+    );
+    if (lastSent?.data_envio) {
+      const elapsed = Date.now() - new Date(lastSent.data_envio).valueOf();
+      const minimum = Number(campaign.intervalo_minimo_segundos) * 1000;
+      if (elapsed < minimum) return res.status(429).json({ error: { message: `Aguarde ${Math.ceil((minimum - elapsed) / 1000)} segundos para o próximo envio.` } });
+    }
+    const [[recentClient]] = await pool.query(
+      `SELECT data_envio FROM remarketing_lembretes WHERE user_id=? AND cliente_id=? AND data_envio IS NOT NULL
+        AND status IN ('enviado','respondido','convertido') ORDER BY data_envio DESC LIMIT 1`,
+      [userId, opportunity.cliente_id],
+    );
+    if (recentClient?.data_envio) {
+      const cooldown = Number(campaign.intervalo_cliente_dias) * 86_400_000;
+      if (Date.now() - new Date(recentClient.data_envio).valueOf() < cooldown) {
+        return res.status(429).json({ error: { message: `Este cliente já foi contatado nos últimos ${campaign.intervalo_cliente_dias} dias.` } });
+      }
+    }
+    const message = renderRemarketingMessage(campaign.mensagem, opportunity);
+    const timestamp = now();
+    reminderId = opportunity.lembrete_id || uuid();
+    if (opportunity.lembrete_id) {
+      const [update] = await pool.query(
+        `UPDATE remarketing_lembretes SET status='processando',tentativas=tentativas+1,mensagem=?,mensagem_erro=NULL,updated_at=?
+          WHERE id=? AND user_id=? AND status='erro' AND tentativas<?`,
+        [message, timestamp, reminderId, userId, campaign.max_tentativas],
+      );
+      if (!update.affectedRows) return res.status(409).json({ error: { message: 'Este lembrete já está sendo processado ou foi enviado.' } });
+    } else {
+      await pool.query(
+        `INSERT INTO remarketing_lembretes
+          (id,user_id,campanha_id,cliente_id,ordem_servico_id,instrumento_id,equipamento_id,telefone,mensagem,status,tentativas,created_at,updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,'processando',1,?,?)`,
+        [reminderId, userId, campaign.id, opportunity.cliente_id, opportunity.ordem_servico_id, opportunity.instrumento_id,
+          opportunity.equipamento_id, opportunity.cliente_telefone, message, timestamp, timestamp],
+      );
+    }
+    const config = await loadWhatsAppConfig(userId);
+    await ensureWhatsAppConnected(userId);
+    const conversation = await ensureWhatsAppConversation(userId, {
+      phone: opportunity.cliente_telefone,
+      pushName: opportunity.cliente_nome,
+      clientId: opportunity.cliente_id,
+      orderId: opportunity.ordem_servico_id,
+    });
+    localMessageId = uuid();
+    await pool.query(
+      `INSERT INTO whatsapp_mensagens
+       (id,user_id,conversa_id,cliente_id,ordem_servico_id,actor_user_id,direcao,tipo,conteudo,status,from_me,enviada_pelo_sistema,enviada_em,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,'saida','texto',?,'processando',1,1,?,?,?)`,
+      [localMessageId, userId, conversation.id, opportunity.cliente_id, opportunity.ordem_servico_id, req.auth.userId, message, timestamp, timestamp, timestamp],
+    );
+    const sent = await sendEvaluationViaEvolution(opportunity.cliente_telefone, message, config);
+    providerSent = true;
+    try {
+      await pool.query("UPDATE whatsapp_mensagens SET provider_message_id=?,status='enviada',updated_at=? WHERE id=?", [sent.providerMessageId || null, now(), localMessageId]);
+    } catch (error) {
+      if (error.code !== 'ER_DUP_ENTRY' || !sent.providerMessageId) throw error;
+      const [[archived]] = await pool.query('SELECT id FROM whatsapp_mensagens WHERE user_id=? AND provider_message_id=? LIMIT 1', [userId, sent.providerMessageId]);
+      if (!archived) throw error;
+      await pool.query("UPDATE whatsapp_mensagens SET actor_user_id=?,ordem_servico_id=?,enviada_pelo_sistema=1,status='enviada',updated_at=? WHERE id=?", [req.auth.userId, opportunity.ordem_servico_id, now(), archived.id]);
+      await pool.query('DELETE FROM whatsapp_mensagens WHERE id=? AND user_id=?', [localMessageId, userId]);
+      localMessageId = archived.id;
+    }
+    await pool.query('UPDATE whatsapp_conversas SET ultima_mensagem=?,ultima_mensagem_em=?,updated_at=? WHERE id=?', [message, timestamp, timestamp, conversation.id]);
+    await pool.query(
+      `UPDATE remarketing_lembretes SET conversa_id=?,whatsapp_mensagem_id=?,status='enviado',data_envio=?,updated_at=? WHERE id=? AND user_id=?`,
+      [conversation.id, localMessageId, timestamp, timestamp, reminderId, userId],
+    );
+    await writeAudit(req, { action: 'remarketing.enviar_manual', resource: 'remarketing_lembretes', resourceId: reminderId, details: { cliente_id: opportunity.cliente_id, ordem_id: opportunity.ordem_servico_id, provider: providerStatus.provider } });
+    return res.status(201).json({ data: { id: reminderId, status: 'enviado', conversa_id: conversation.id, data_envio: timestamp } });
+  } catch (error) {
+    if (localMessageId) await pool.query('UPDATE whatsapp_mensagens SET status=?,updated_at=? WHERE id=?', [providerSent ? 'enviada' : 'erro', now(), localMessageId]).catch(() => {});
+    if (reminderId) await pool.query(
+      `UPDATE remarketing_lembretes SET status=?,data_envio=CASE WHEN ? THEN COALESCE(data_envio,?) ELSE data_envio END,
+              mensagem_erro=?,updated_at=? WHERE id=?`,
+      [providerSent ? 'enviado' : 'erro', providerSent ? 1 : 0, now(), providerSent ? `Mensagem enviada; falha ao concluir o arquivamento: ${error.message}` : error.message, now(), reminderId],
+    ).catch(() => {});
+    if (providerSent) {
+      return res.status(502).json({ error: { message: 'A mensagem foi enviada, mas o histórico não foi concluído. Não tente novamente.', partial_success: true } });
+    }
+    const status = error.code === 'ER_DUP_ENTRY' ? 409 : error.status || 500;
+    return res.status(status).json({ error: { message: error.code === 'ER_DUP_ENTRY' ? 'Este lembrete já foi reservado por outro envio.' : error.message } });
+  }
+});
+
 function monthRange(dateOnly) {
   const [year, month] = String(dateOnly).split('-').map(Number);
   const start = `${year}-${String(month).padStart(2, '0')}-01`;
@@ -1649,6 +2018,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
         );
         if (physicalTable === 'ordens_servico') {
           await syncReceivableForOrder(pool, data.user_id, data.id);
+          await markRemarketingConversion(pool, data.user_id, data);
         }
         inserted.push(normalizeRow(physicalTable, data));
         await writeAudit(req, { action: 'registro.criar', resource: physicalTable, resourceId: data.id || null, details: { fields: Object.keys(data) } });
@@ -3206,6 +3576,7 @@ async function createBasicServiceOrder({ userId, clienteId, modelo, dataPrevisao
       ],
     );
     await syncReceivableForOrder(conn, userId, id);
+    await markRemarketingConversion(conn, userId, { id, cliente_id: clienteId, modelo: cleanNullableText(modelo) });
     await conn.commit();
     return { id, numero, valor: total, dataPrevisao };
   } catch (error) {
@@ -3585,6 +3956,41 @@ async function archiveEvolutionMessage(userId, body) {
     }
   }
   return { ...parsed, conversationId: conversation.id, messageId, inserted: result.affectedRows > 0 };
+}
+
+async function processRemarketingInbound(userId, archived) {
+  if (!archived?.inserted || archived.fromMe || !archived.conversationId) return { optedOut: false };
+  const [[conversation]] = await pool.query(
+    'SELECT cliente_id FROM whatsapp_conversas WHERE id=? AND user_id=? LIMIT 1',
+    [archived.conversationId, userId],
+  );
+  if (!conversation?.cliente_id) return { optedOut: false };
+  const normalizedText = String(archived.text || '').trim().toLocaleLowerCase('pt-BR').replace(/[.!?]+$/g, '');
+  const optedOut = REMARKETING_OPT_OUT_WORDS.has(normalizedText);
+  const timestamp = now();
+  if (optedOut) {
+    await pool.query(
+      `INSERT INTO comunicacao_preferencias
+        (id,user_id,cliente_id,lembretes_manutencao_autorizado,origem_consentimento,consentido_em,descadastrado_em,motivo_descadastro,created_at,updated_at)
+       VALUES (?,?,?,0,'whatsapp_optout',NULL,?,'Solicitado pelo WhatsApp',?,?)
+       ON DUPLICATE KEY UPDATE lembretes_manutencao_autorizado=0,origem_consentimento='whatsapp_optout',
+         consentido_em=NULL,descadastrado_em=VALUES(descadastrado_em),motivo_descadastro=VALUES(motivo_descadastro),updated_at=VALUES(updated_at)`,
+      [uuid(), userId, conversation.cliente_id, timestamp, timestamp, timestamp],
+    );
+    await pool.query(
+      `UPDATE remarketing_lembretes SET status='descadastrado',respondido_em=COALESCE(respondido_em,?),updated_at=?
+        WHERE user_id=? AND cliente_id=? AND status='enviado'`,
+      [timestamp, timestamp, userId, conversation.cliente_id],
+    );
+    return { optedOut: true };
+  }
+  await pool.query(
+    `UPDATE remarketing_lembretes SET status='respondido',respondido_em=?,updated_at=?
+      WHERE user_id=? AND cliente_id=? AND status='enviado'
+      ORDER BY data_envio DESC LIMIT 1`,
+    [timestamp, timestamp, userId, conversation.cliente_id],
+  );
+  return { optedOut: false };
 }
 
 async function sendFinancialAiReply(userId, phone, reply) {
@@ -3981,6 +4387,10 @@ async function handleEvolutionWebhook(req, res) {
     const archived = await archiveEvolutionMessage(config.user_id, req.body);
     if (!archived || archived.fromMe || event === 'SEND_MESSAGE') {
       return res.json({ received: true, archived: Boolean(archived?.inserted), event });
+    }
+    const remarketing = await processRemarketingInbound(config.user_id, archived);
+    if (remarketing.optedOut) {
+      return res.json({ received: true, archived: Boolean(archived.inserted), event, remarketing_optout: true });
     }
     return handleFinancialAiWebhook(req, res);
   }

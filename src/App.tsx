@@ -27,6 +27,7 @@ const ConfiguracoesCompletas = lazy(() => import('./pages/ConfiguracoesCompletas
 const DocumentoOSDesigner = lazy(() => import('./pages/DocumentoOSDesigner').then((module) => ({ default: module.DocumentoOSDesigner })));
 const NotasFiscais = lazy(() => import('./pages/NotasFiscais').then((module) => ({ default: module.NotasFiscais })));
 const AvaliacoesLembretes = lazy(() => import('./pages/AvaliacoesLembretes').then((module) => ({ default: module.AvaliacoesLembretes })));
+const Remarketing = lazy(() => import('./pages/Remarketing').then((module) => ({ default: module.Remarketing })));
 const OrdemHistorico = lazy(() => import('./pages/OrdemHistorico').then((module) => ({ default: module.OrdemHistorico })));
 const Conversas = lazy(() => import('./pages/Conversas').then((module) => ({ default: module.Conversas })));
 
@@ -331,6 +332,16 @@ function App() {
             <ProtectedRoute>
               <RequirePermission permission="settings.manage">
                 <Layout><AvaliacoesLembretes /></Layout>
+              </RequirePermission>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/remarketing"
+          element={
+            <ProtectedRoute>
+              <RequirePermission permission="settings.manage">
+                <Layout><Remarketing /></Layout>
               </RequirePermission>
             </ProtectedRoute>
           }

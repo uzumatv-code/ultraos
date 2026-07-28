@@ -856,6 +856,69 @@ CREATE TABLE IF NOT EXISTS `avaliacoes_lembretes` (
 -- ===========================================
 -- TABELA: sessoes (para controle de autenticação JWT)
 -- ===========================================
+-- Relacionamento e manutenção preventiva
+CREATE TABLE IF NOT EXISTS `remarketing_campanhas` (
+  `id` VARCHAR(36) NOT NULL PRIMARY KEY,
+  `user_id` VARCHAR(36) NOT NULL,
+  `nome` VARCHAR(255) NOT NULL DEFAULT 'Manutencao preventiva',
+  `ativo` BOOLEAN NOT NULL DEFAULT TRUE,
+  `automatico` BOOLEAN NOT NULL DEFAULT FALSE,
+  `dias_sem_manutencao` INT NOT NULL DEFAULT 180,
+  `horario_envio` INT NOT NULL DEFAULT 10,
+  `limite_diario` INT NOT NULL DEFAULT 10,
+  `intervalo_minimo_segundos` INT NOT NULL DEFAULT 60,
+  `intervalo_cliente_dias` INT NOT NULL DEFAULT 90,
+  `max_tentativas` INT NOT NULL DEFAULT 2,
+  `mensagem` TEXT NOT NULL,
+  `ultima_execucao_em` VARCHAR(50) NULL,
+  `created_at` VARCHAR(50) NOT NULL,
+  `updated_at` VARCHAR(50) NOT NULL,
+  UNIQUE KEY `unique_remarketing_campanha_user` (`user_id`),
+  INDEX `idx_remarketing_campanhas_ativo` (`user_id`, `ativo`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `comunicacao_preferencias` (
+  `id` VARCHAR(36) NOT NULL PRIMARY KEY,
+  `user_id` VARCHAR(36) NOT NULL,
+  `cliente_id` VARCHAR(36) NOT NULL,
+  `lembretes_manutencao_autorizado` BOOLEAN NOT NULL DEFAULT FALSE,
+  `origem_consentimento` VARCHAR(100) NULL,
+  `consentido_em` VARCHAR(50) NULL,
+  `descadastrado_em` VARCHAR(50) NULL,
+  `motivo_descadastro` VARCHAR(255) NULL,
+  `created_at` VARCHAR(50) NOT NULL,
+  `updated_at` VARCHAR(50) NOT NULL,
+  UNIQUE KEY `unique_comunicacao_preferencia_cliente` (`user_id`, `cliente_id`),
+  INDEX `idx_comunicacao_preferencias_optin` (`user_id`, `lembretes_manutencao_autorizado`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `remarketing_lembretes` (
+  `id` VARCHAR(36) NOT NULL PRIMARY KEY,
+  `user_id` VARCHAR(36) NOT NULL,
+  `campanha_id` VARCHAR(36) NOT NULL,
+  `cliente_id` VARCHAR(36) NOT NULL,
+  `ordem_servico_id` VARCHAR(36) NOT NULL,
+  `instrumento_id` VARCHAR(36) NULL,
+  `equipamento_id` VARCHAR(36) NULL,
+  `conversa_id` VARCHAR(36) NULL,
+  `whatsapp_mensagem_id` VARCHAR(36) NULL,
+  `telefone` VARCHAR(30) NULL,
+  `mensagem` TEXT NULL,
+  `status` VARCHAR(50) NOT NULL DEFAULT 'pendente',
+  `tentativas` INT NOT NULL DEFAULT 0,
+  `data_envio` VARCHAR(50) NULL,
+  `respondido_em` VARCHAR(50) NULL,
+  `convertido_em` VARCHAR(50) NULL,
+  `ordem_conversao_id` VARCHAR(36) NULL,
+  `mensagem_erro` TEXT NULL,
+  `created_at` VARCHAR(50) NOT NULL,
+  `updated_at` VARCHAR(50) NOT NULL,
+  UNIQUE KEY `unique_remarketing_ciclo` (`user_id`, `campanha_id`, `ordem_servico_id`),
+  INDEX `idx_remarketing_lembretes_status` (`user_id`, `status`),
+  INDEX `idx_remarketing_lembretes_cliente` (`user_id`, `cliente_id`, `data_envio`),
+  INDEX `idx_remarketing_lembretes_instrumento` (`instrumento_id`, `equipamento_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS `sessoes` (
   `id` VARCHAR(36) NOT NULL PRIMARY KEY,
   `user_id` VARCHAR(36) NOT NULL,
