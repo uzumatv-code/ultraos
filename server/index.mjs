@@ -49,7 +49,7 @@ const REMARKETING_DEFAULT_MESSAGE = `Olá, {{nome}}! Já faz cerca de {{meses}} 
 Uma revisão preventiva pode ajudar a conservar a regulagem, as cordas e a escala. Se quiser, podemos verificar o instrumento e orientar se há necessidade de troca de cordas, higienização ou hidratação.
 
 Deseja consultar os horários disponíveis? Para não receber lembretes de manutenção, responda SAIR.`;
-const REMARKETING_FINAL_STATUSES = new Set(['enviado', 'respondido', 'convertido', 'descadastrado', 'cancelado']);
+const REMARKETING_FINAL_STATUSES = new Set(['processando', 'enviado', 'respondido', 'convertido', 'descadastrado', 'cancelado']);
 const REMARKETING_OPT_OUT_WORDS = new Set(['sair', 'parar', 'cancelar', 'descadastrar', 'nao quero', 'não quero']);
 const SYSTEM_AI_MODEL = process.env.OPENAI_INTENT_MODEL || process.env.OPENAI_MODEL || 'gpt-5.5';
 const SYSTEM_AI_WRITE_INTENTS = new Set([
@@ -1401,13 +1401,7 @@ function clampInteger(value, minimum, maximum, fallback) {
 }
 
 function completedOrderDate(order) {
-  return order.data_entrega || order.data_previsao || order.data_entrada || order.created_at;
-}
-
-function maintenanceInstrumentKey(order) {
-  if (order.instrumento_id) return `instrumento:${order.instrumento_id}`;
-  if (order.equipamento_id) return `equipamento:${order.equipamento_id}`;
-  return `modelo:${String(order.modelo || 'sem-modelo').trim().toLocaleLowerCase('pt-BR')}`;
+  return order.data_entrega || order.data_previsao;
 }
 
 async function markRemarketingConversion(connection, userId, order) {
@@ -1472,7 +1466,7 @@ async function ensureRemarketingCampaign(userId) {
 async function getRemarketingOpportunities(userId, campaign) {
   const [orders] = await pool.query(
     `SELECT o.id AS ordem_servico_id,o.numero AS ordem_numero,o.cliente_id,o.instrumento_id,o.equipamento_id,o.marca_id,
-            o.modelo,o.data_entrega,o.data_previsao,o.data_entrada,o.created_at,
+            o.modelo,o.data_entrega,o.data_previsao,
             c.nome AS cliente_nome,c.telefone AS cliente_telefone,
             i.nome AS instrumento_nome,e.nome AS equipamento_nome,m.nome AS marca_nome,
             cp.lembretes_manutencao_autorizado,cp.origem_consentimento,cp.consentido_em,cp.descadastrado_em,
@@ -1485,29 +1479,15 @@ async function getRemarketingOpportunities(userId, campaign) {
        LEFT JOIN comunicacao_preferencias cp ON cp.user_id=o.user_id AND cp.cliente_id=o.cliente_id
        LEFT JOIN remarketing_lembretes rl ON rl.user_id=o.user_id AND rl.campanha_id=? AND rl.ordem_servico_id=o.id
       WHERE o.user_id=? AND o.status='concluido'
-      ORDER BY COALESCE(NULLIF(o.data_entrega,''),NULLIF(o.data_previsao,''),NULLIF(o.data_entrada,''),o.created_at) DESC
+      ORDER BY DATE(COALESCE(NULLIF(o.data_entrega,''),NULLIF(o.data_previsao,''))) ASC
       LIMIT 5000`,
     [campaign.id, userId],
   );
-  const [activeOrders] = await pool.query(
-    `SELECT cliente_id,instrumento_id,equipamento_id,modelo FROM ordens_servico
-      WHERE user_id=? AND status IN ('pendente','em_andamento','atraso')`,
-    [userId],
-  );
-  const activeKeys = new Set(activeOrders.map((order) => `${order.cliente_id}|${maintenanceInstrumentKey(order)}`));
-  const latestByInstrument = new Map();
   const excluded = [];
-  for (const order of orders) {
-    const key = `${order.cliente_id}|${maintenanceInstrumentKey(order)}`;
-    if (!latestByInstrument.has(key)) {
-      latestByInstrument.set(key, order);
-    } else {
-      excluded.push({ ...order, data_ultima_manutencao: completedOrderDate(order), exclusion_code: 'historico_anterior', exclusion_reason: 'Existe uma manutenção concluída mais recente para este instrumento.' });
-    }
-  }
   const today = Date.now();
   const opportunities = [];
-  for (const [key, order] of latestByInstrument.entries()) {
+  const includedClients = new Set();
+  for (const order of orders) {
     const maintenanceDate = completedOrderDate(order);
     const date = new Date(maintenanceDate);
     if (!maintenanceDate || Number.isNaN(date.valueOf())) {
@@ -1524,10 +1504,6 @@ async function getRemarketingOpportunities(userId, campaign) {
       excluded.push({ ...base, exclusion_code: 'telefone_invalido', exclusion_reason: 'O cliente não possui um telefone válido para WhatsApp.' });
       continue;
     }
-    if (activeKeys.has(key)) {
-      excluded.push({ ...base, exclusion_code: 'ordem_ativa', exclusion_reason: 'Este instrumento já possui uma ordem de serviço ativa.' });
-      continue;
-    }
     if (order.lembrete_status && REMARKETING_FINAL_STATUSES.has(order.lembrete_status)) {
       excluded.push({ ...base, exclusion_code: 'ciclo_contatado', exclusion_reason: `Este ciclo já foi processado (${order.lembrete_status}).` });
       continue;
@@ -1536,10 +1512,15 @@ async function getRemarketingOpportunities(userId, campaign) {
       excluded.push({ ...base, exclusion_code: 'limite_tentativas', exclusion_reason: 'O limite de tentativas deste ciclo foi atingido.' });
       continue;
     }
+    if (includedClients.has(order.cliente_id)) {
+      excluded.push({ ...base, exclusion_code: 'cliente_ja_incluido', exclusion_reason: 'O cliente já possui outra OS nesta fila; apenas uma mensagem é preparada por cliente.' });
+      continue;
+    }
     const consentStatus = order.descadastrado_em
       ? 'descadastrado'
       : Number(order.lembretes_manutencao_autorizado) === 1 ? 'autorizado' : 'nao_autorizado';
     opportunities.push({ ...base, consentimento: consentStatus });
+    includedClients.add(order.cliente_id);
   }
   return { opportunities, excluded };
 }

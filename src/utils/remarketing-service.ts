@@ -67,7 +67,7 @@ export interface RemarketingExcludedOrder {
   modelo?: string;
   data_ultima_manutencao?: string;
   dias_sem_manutencao?: number;
-  exclusion_code: 'historico_anterior' | 'data_invalida' | 'prazo_nao_atingido' | 'telefone_invalido' | 'ordem_ativa' | 'ciclo_contatado' | 'limite_tentativas';
+  exclusion_code: 'data_invalida' | 'prazo_nao_atingido' | 'telefone_invalido' | 'ciclo_contatado' | 'limite_tentativas' | 'cliente_ja_incluido';
   exclusion_reason: string;
 }
 
