@@ -11,7 +11,7 @@ import { Button } from '../components/Button';
 import { toast } from '../components/ToastCustom';
 import { alerts } from '../utils/alerts';
 import {
-  RemarketingCampaign, RemarketingHistoryItem, RemarketingOpportunity,
+  RemarketingCampaign, RemarketingExcludedOrder, RemarketingHistoryItem, RemarketingOpportunity,
   RemarketingOverview, RemarketingService,
 } from '../utils/remarketing-service';
 
@@ -48,7 +48,7 @@ export function Remarketing() {
   const [overview, setOverview] = useState<RemarketingOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [activeTab, setActiveTab] = useState<'opportunities' | 'history'>('opportunities');
+  const [activeTab, setActiveTab] = useState<'opportunities' | 'excluded' | 'history'>('opportunities');
   const [search, setSearch] = useState('');
   const [consentFilter, setConsentFilter] = useState<'todos' | 'autorizado' | 'nao_autorizado' | 'descadastrado'>('todos');
   const [showSettings, setShowSettings] = useState(false);
@@ -87,6 +87,12 @@ export function Remarketing() {
     return (overview?.history || []).filter((item) => !term || [item.cliente_nome, item.cliente_telefone, item.ordem_numero, item.status, instrumentLabel(item)]
       .join(' ').toLocaleLowerCase('pt-BR').includes(term));
   }, [overview?.history, search]);
+
+  const filteredExcluded = useMemo(() => {
+    const term = search.trim().toLocaleLowerCase('pt-BR');
+    return (overview?.excluded || []).filter((item) => !term || [item.cliente_nome, item.cliente_telefone, item.ordem_numero, item.exclusion_reason, instrumentLabel(item)]
+      .join(' ').toLocaleLowerCase('pt-BR').includes(term));
+  }, [overview?.excluded, search]);
 
   async function saveSettings() {
     if (!draft) return;
@@ -236,6 +242,7 @@ export function Remarketing() {
           <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
             <div className="flex gap-1 rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
               <TabButton active={activeTab === 'opportunities'} onClick={() => setActiveTab('opportunities')}>Oportunidades <span className="ml-1 text-xs">{overview?.opportunities.length || 0}</span></TabButton>
+              <TabButton active={activeTab === 'excluded'} onClick={() => setActiveTab('excluded')}>Excluídas <span className="ml-1 text-xs">{overview?.excluded.length || 0}</span></TabButton>
               <TabButton active={activeTab === 'history'} onClick={() => setActiveTab('history')}>Histórico <span className="ml-1 text-xs">{overview?.history.length || 0}</span></TabButton>
             </div>
             <div className="flex flex-1 flex-col gap-2 sm:flex-row xl:max-w-2xl">
@@ -245,7 +252,11 @@ export function Remarketing() {
           </div>
         </div>
 
-        {activeTab === 'opportunities' ? <OpportunityList items={filteredOpportunities} loading={loading} busyId={busyId} providerReady={Boolean(overview?.provider.manualSingleAllowed)} onConsent={registerConsent} onOptOut={optOut} onPreview={setPreview} onSend={send} /> : <HistoryList items={filteredHistory} loading={loading} onConversations={() => navigate('/conversas')} />}
+        {activeTab === 'opportunities'
+          ? <OpportunityList items={filteredOpportunities} loading={loading} busyId={busyId} providerReady={Boolean(overview?.provider.manualSingleAllowed)} onConsent={registerConsent} onOptOut={optOut} onPreview={setPreview} onSend={send} />
+          : activeTab === 'excluded'
+            ? <ExcludedList items={filteredExcluded} loading={loading} />
+            : <HistoryList items={filteredHistory} loading={loading} onConversations={() => navigate('/conversas')} />}
       </Card>
 
       <details className="mt-4 rounded-xl border border-slate-200 bg-white p-4 text-sm dark:border-slate-800 dark:bg-slate-900"><summary className="flex cursor-pointer list-none items-center justify-between font-semibold text-slate-700 dark:text-slate-200">Proteções aplicadas aos envios <ChevronDown className="h-4 w-4" /></summary><div className="mt-3 grid gap-2 text-slate-500 sm:grid-cols-2"><p>• Elegibilidade calculada por cliente e instrumento.</p><p>• Instrumentos com ordem ativa ficam fora da fila.</p><p>• Consentimento e descadastro têm histórico próprio.</p><p>• Envios repetidos são bloqueados por ciclo de manutenção.</p><p>• “SAIR”, “PARAR” e “CANCELAR” descadastram automaticamente.</p><p>• Automação exige provedor oficial do WhatsApp.</p></div></details>
@@ -286,6 +297,12 @@ function HistoryList({ items, loading, onConversations }: { items: RemarketingHi
   if (loading) return <Empty icon={RefreshCw} title="Carregando histórico…" spinning />;
   if (!items.length) return <Empty icon={Clock3} title="Nenhum envio registrado" description="As tentativas e respostas aparecerão aqui." />;
   return <div className="divide-y divide-slate-100 dark:divide-slate-800">{items.map((item) => <div key={item.id} className="grid gap-3 p-4 sm:grid-cols-[1fr_auto] sm:items-center"><div><div className="flex flex-wrap items-center gap-2"><h3 className="font-semibold text-slate-900 dark:text-white">{item.cliente_nome}</h3><span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${statusTone[item.status] || statusTone.cancelado}`}>{statusLabel[item.status] || item.status}</span><span className="text-xs text-slate-400">OS #{item.ordem_numero}</span></div><div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500"><span>{instrumentLabel(item)}</span><span>{formatPhone(item.cliente_telefone)}</span><span>{formatDate(item.data_envio || item.created_at)}</span><span>{item.tentativas} tentativa(s)</span></div>{item.mensagem_erro && <p className="mt-2 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700">{item.mensagem_erro}</p>}</div><Button size="sm" variant="ghost" icon={MessageCircle} onClick={onConversations}>Conversas</Button></div>)}</div>;
+}
+
+function ExcludedList({ items, loading }: { items: RemarketingExcludedOrder[]; loading: boolean }) {
+  if (loading) return <Empty icon={RefreshCw} title="Analisando ordens…" spinning />;
+  if (!items.length) return <Empty icon={CheckCircle2} title="Nenhuma ordem excluída" description="Todas as ordens analisadas correspondem às regras atuais." />;
+  return <div className="divide-y divide-slate-100 dark:divide-slate-800">{items.map((item) => <div key={`${item.ordem_servico_id}-${item.exclusion_code}`} className="grid gap-3 p-4 sm:grid-cols-[1fr_auto] sm:items-center"><div><div className="flex flex-wrap items-center gap-2"><h3 className="font-semibold text-slate-900 dark:text-white">{item.cliente_nome}</h3><span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">OS #{item.ordem_numero}</span>{typeof item.dias_sem_manutencao === 'number' && <span className="text-xs text-slate-400">{item.dias_sem_manutencao} dias</span>}</div><div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500"><span>{instrumentLabel(item)}</span><span>{formatPhone(item.cliente_telefone)}</span><span>{formatDate(item.data_ultima_manutencao)}</span></div></div><div className="max-w-md rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">{item.exclusion_reason}</div></div>)}</div>;
 }
 
 function PreviewModal({ opportunity, campaign, canSend, busy, onClose, onSend }: { opportunity: RemarketingOpportunity; campaign: RemarketingCampaign; canSend: boolean; busy: boolean; onClose: () => void; onSend: () => void }) {

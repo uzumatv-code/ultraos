@@ -1401,7 +1401,7 @@ function clampInteger(value, minimum, maximum, fallback) {
 }
 
 function completedOrderDate(order) {
-  return order.data_entrega || order.updated_at || order.data_previsao || order.created_at;
+  return order.data_entrega || order.data_previsao || order.data_entrada || order.created_at;
 }
 
 function maintenanceInstrumentKey(order) {
@@ -1470,10 +1470,9 @@ async function ensureRemarketingCampaign(userId) {
 }
 
 async function getRemarketingOpportunities(userId, campaign) {
-  const cutoff = new Date(Date.now() - Number(campaign.dias_sem_manutencao) * 86_400_000).toISOString().slice(0, 10);
   const [orders] = await pool.query(
     `SELECT o.id AS ordem_servico_id,o.numero AS ordem_numero,o.cliente_id,o.instrumento_id,o.equipamento_id,o.marca_id,
-            o.modelo,o.data_entrega,o.data_previsao,o.created_at,o.updated_at,
+            o.modelo,o.data_entrega,o.data_previsao,o.data_entrada,o.created_at,
             c.nome AS cliente_nome,c.telefone AS cliente_telefone,
             i.nome AS instrumento_nome,e.nome AS equipamento_nome,m.nome AS marca_nome,
             cp.lembretes_manutencao_autorizado,cp.origem_consentimento,cp.consentido_em,cp.descadastrado_em,
@@ -1485,11 +1484,10 @@ async function getRemarketingOpportunities(userId, campaign) {
        LEFT JOIN marcas m ON m.id=o.marca_id AND m.user_id=o.user_id
        LEFT JOIN comunicacao_preferencias cp ON cp.user_id=o.user_id AND cp.cliente_id=o.cliente_id
        LEFT JOIN remarketing_lembretes rl ON rl.user_id=o.user_id AND rl.campanha_id=? AND rl.ordem_servico_id=o.id
-      WHERE o.user_id=? AND o.status='concluido' AND c.telefone IS NOT NULL
-        AND LEFT(COALESCE(o.data_entrega,o.updated_at,o.data_previsao,o.created_at),10)<=?
-      ORDER BY COALESCE(o.data_entrega,o.updated_at,o.data_previsao,o.created_at) DESC
-      LIMIT 2000`,
-    [campaign.id, userId, cutoff],
+      WHERE o.user_id=? AND o.status='concluido'
+      ORDER BY COALESCE(NULLIF(o.data_entrega,''),NULLIF(o.data_previsao,''),NULLIF(o.data_entrada,''),o.created_at) DESC
+      LIMIT 5000`,
+    [campaign.id, userId],
   );
   const [activeOrders] = await pool.query(
     `SELECT cliente_id,instrumento_id,equipamento_id,modelo FROM ordens_servico
@@ -1498,24 +1496,52 @@ async function getRemarketingOpportunities(userId, campaign) {
   );
   const activeKeys = new Set(activeOrders.map((order) => `${order.cliente_id}|${maintenanceInstrumentKey(order)}`));
   const latestByInstrument = new Map();
+  const excluded = [];
   for (const order of orders) {
     const key = `${order.cliente_id}|${maintenanceInstrumentKey(order)}`;
-    if (!latestByInstrument.has(key)) latestByInstrument.set(key, order);
+    if (!latestByInstrument.has(key)) {
+      latestByInstrument.set(key, order);
+    } else {
+      excluded.push({ ...order, data_ultima_manutencao: completedOrderDate(order), exclusion_code: 'historico_anterior', exclusion_reason: 'Existe uma manutenção concluída mais recente para este instrumento.' });
+    }
   }
   const today = Date.now();
-  return [...latestByInstrument.entries()].flatMap(([key, order]) => {
-    if (activeKeys.has(key)) return [];
-    if (order.lembrete_status && REMARKETING_FINAL_STATUSES.has(order.lembrete_status)) return [];
-    if (Number(order.tentativas || 0) >= Number(campaign.max_tentativas || 2)) return [];
+  const opportunities = [];
+  for (const [key, order] of latestByInstrument.entries()) {
     const maintenanceDate = completedOrderDate(order);
     const date = new Date(maintenanceDate);
-    if (Number.isNaN(date.valueOf())) return [];
+    if (!maintenanceDate || Number.isNaN(date.valueOf())) {
+      excluded.push({ ...order, data_ultima_manutencao: maintenanceDate || null, exclusion_code: 'data_invalida', exclusion_reason: 'A OS não possui uma data de manutenção válida.' });
+      continue;
+    }
     const days = Math.max(0, Math.floor((today - date.valueOf()) / 86_400_000));
+    const base = { ...order, data_ultima_manutencao: maintenanceDate, dias_sem_manutencao: days };
+    if (days < Number(campaign.dias_sem_manutencao)) {
+      excluded.push({ ...base, exclusion_code: 'prazo_nao_atingido', exclusion_reason: `A manutenção mais recente ainda não atingiu ${campaign.dias_sem_manutencao} dias.` });
+      continue;
+    }
+    if (!validatePhone(order.cliente_telefone)) {
+      excluded.push({ ...base, exclusion_code: 'telefone_invalido', exclusion_reason: 'O cliente não possui um telefone válido para WhatsApp.' });
+      continue;
+    }
+    if (activeKeys.has(key)) {
+      excluded.push({ ...base, exclusion_code: 'ordem_ativa', exclusion_reason: 'Este instrumento já possui uma ordem de serviço ativa.' });
+      continue;
+    }
+    if (order.lembrete_status && REMARKETING_FINAL_STATUSES.has(order.lembrete_status)) {
+      excluded.push({ ...base, exclusion_code: 'ciclo_contatado', exclusion_reason: `Este ciclo já foi processado (${order.lembrete_status}).` });
+      continue;
+    }
+    if (Number(order.tentativas || 0) >= Number(campaign.max_tentativas || 2)) {
+      excluded.push({ ...base, exclusion_code: 'limite_tentativas', exclusion_reason: 'O limite de tentativas deste ciclo foi atingido.' });
+      continue;
+    }
     const consentStatus = order.descadastrado_em
       ? 'descadastrado'
       : Number(order.lembretes_manutencao_autorizado) === 1 ? 'autorizado' : 'nao_autorizado';
-    return [{ ...order, data_ultima_manutencao: maintenanceDate, dias_sem_manutencao: days, consentimento: consentStatus }];
-  });
+    opportunities.push({ ...base, consentimento: consentStatus });
+  }
+  return { opportunities, excluded };
 }
 
 async function remarketingProviderStatus(userId) {
@@ -1537,7 +1563,7 @@ app.get('/api/remarketing/overview', requireAuth, requireAdmin, async (req, res)
   try {
     const userId = req.auth.accountId;
     const campaign = await ensureRemarketingCampaign(userId);
-    const [opportunities, providerStatus, [history], [[historyStats]]] = await Promise.all([
+    const [eligibility, providerStatus, [history], [[historyStats]]] = await Promise.all([
       getRemarketingOpportunities(userId, campaign),
       remarketingProviderStatus(userId),
       pool.query(
@@ -1561,11 +1587,13 @@ app.get('/api/remarketing/overview', requireAuth, requireAdmin, async (req, res)
         [userId],
       ),
     ]);
+    const { opportunities, excluded } = eligibility;
     const authorized = opportunities.filter((item) => item.consentimento === 'autorizado').length;
     return res.json({ data: {
       campaign,
       provider: providerStatus,
       opportunities,
+      excluded,
       history,
       stats: {
         elegiveis: opportunities.length,
@@ -1654,8 +1682,8 @@ app.post('/api/remarketing/send/:orderId', requireAuth, requireAdmin, async (req
     if (!Number(campaign.ativo)) return res.status(409).json({ error: { message: 'A campanha está pausada.' } });
     const providerStatus = await remarketingProviderStatus(userId);
     if (!providerStatus.manualSingleAllowed) return res.status(409).json({ error: { message: 'Conecte o WhatsApp antes de enviar.' } });
-    const opportunities = await getRemarketingOpportunities(userId, campaign);
-    const opportunity = opportunities.find((item) => item.ordem_servico_id === req.params.orderId);
+    const eligibility = await getRemarketingOpportunities(userId, campaign);
+    const opportunity = eligibility.opportunities.find((item) => item.ordem_servico_id === req.params.orderId);
     if (!opportunity) return res.status(409).json({ error: { message: 'Esta manutenção não está mais elegível. Atualize a lista.' } });
     if (opportunity.consentimento !== 'autorizado') {
       return res.status(409).json({ error: { message: 'Registre a autorização do cliente antes do envio.' } });
