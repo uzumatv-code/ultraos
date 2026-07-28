@@ -1388,6 +1388,132 @@ app.post('/api/whatsapp/conversations/:id/read', requireAuth, async (req, res) =
   return res.json({ data: { read: true } });
 });
 
+function monthRange(dateOnly) {
+  const [year, month] = String(dateOnly).split('-').map(Number);
+  const start = `${year}-${String(month).padStart(2, '0')}-01`;
+  const next = new Date(Date.UTC(year, month, 1)).toISOString().slice(0, 10);
+  return { start, next };
+}
+
+app.get('/api/dashboard/resumo', requireAuth, async (req, res) => {
+  try {
+    const userId = req.auth.accountId;
+    const includeFinancial = req.auth.role === 'admin';
+    const today = todayDate();
+    const nextWeek = addDaysToIsoDate(today, 7);
+    const month = monthRange(today);
+    const activeStatuses = "'pendente','em_andamento','atraso'";
+    const overdueCondition = `(o.status = 'atraso' OR (o.status IN ('pendente','em_andamento') AND LEFT(o.data_previsao,10) < ?))`;
+
+    const orderSummaryPromise = pool.query(
+      `SELECT
+         COUNT(*) AS total,
+         SUM(CASE WHEN status='pendente' THEN 1 ELSE 0 END) AS pendentes,
+         SUM(CASE WHEN status='em_andamento' THEN 1 ELSE 0 END) AS em_andamento,
+         SUM(CASE WHEN status='concluido' AND LEFT(COALESCE(data_entrega,updated_at),10)>=? AND LEFT(COALESCE(data_entrega,updated_at),10)<? THEN 1 ELSE 0 END) AS concluidas_mes,
+         SUM(CASE WHEN status IN (${activeStatuses}) AND LEFT(data_previsao,10)=? THEN 1 ELSE 0 END) AS entregas_hoje,
+         SUM(CASE WHEN status='atraso' OR (status IN ('pendente','em_andamento') AND LEFT(data_previsao,10)<?) THEN 1 ELSE 0 END) AS atrasadas
+       FROM ordens_servico WHERE user_id=?`,
+      [month.start, month.next, today, today, userId],
+    );
+    const agendaPromise = pool.query(
+      `SELECT o.id,o.numero,o.status,o.data_previsao,o.modelo,c.nome AS cliente_nome,
+              COALESCE(i.nome,'Equipamento') AS instrumento_nome,COALESCE(m.nome,'') AS marca_nome
+         FROM ordens_servico o JOIN clientes c ON c.id=o.cliente_id
+         LEFT JOIN instrumentos i ON i.id=o.instrumento_id LEFT JOIN marcas m ON m.id=o.marca_id
+        WHERE o.user_id=? AND o.status IN (${activeStatuses}) AND LEFT(o.data_previsao,10) BETWEEN ? AND ?
+        ORDER BY LEFT(o.data_previsao,10),o.numero LIMIT 12`,
+      [userId, today, nextWeek],
+    );
+    const overdueOrdersPromise = pool.query(
+      `SELECT o.id,o.numero,o.data_previsao,o.status,c.nome AS cliente_nome
+         FROM ordens_servico o JOIN clientes c ON c.id=o.cliente_id
+        WHERE o.user_id=? AND ${overdueCondition}
+        ORDER BY LEFT(o.data_previsao,10),o.numero LIMIT 5`,
+      [userId, today],
+    );
+    const attentionCountsPromise = pool.query(
+      `SELECT
+        (SELECT COUNT(*) FROM os_aditivos WHERE user_id=? AND status='enviado') AS aditivos_aguardando,
+        (SELECT COALESCE(SUM(nao_lidas),0) FROM whatsapp_conversas WHERE user_id=? AND status='aberta') AS mensagens_nao_lidas,
+        (SELECT COUNT(*) FROM avaliacoes_lembretes WHERE user_id=? AND status='erro') AS avaliacoes_com_erro`,
+      [userId, userId, userId],
+    );
+    const orderHistoryPromise = pool.query(
+      `SELECT h.id,h.evento AS tipo,h.descricao,h.created_at,o.numero AS ordem_numero
+         FROM os_historico h LEFT JOIN ordens_servico o ON o.id=h.ordem_servico_id
+        WHERE h.user_id=? ORDER BY h.created_at DESC LIMIT 8`, [userId],
+    );
+    const messageActivityPromise = pool.query(
+      `SELECT wm.id,'mensagem_recebida' AS tipo,
+              CONCAT('Mensagem de ',COALESCE(c.nome,wc.nome_contato,wc.telefone)) AS descricao,
+              wm.enviada_em AS created_at,o.numero AS ordem_numero
+         FROM whatsapp_mensagens wm JOIN whatsapp_conversas wc ON wc.id=wm.conversa_id
+         LEFT JOIN clientes c ON c.id=wc.cliente_id LEFT JOIN ordens_servico o ON o.id=wm.ordem_servico_id
+        WHERE wm.user_id=? AND wm.direcao='entrada' ORDER BY wm.enviada_em DESC LIMIT 5`, [userId],
+    );
+
+    const [orderSummaryResult, agendaResult, overdueOrdersResult, attentionResult, historyResult, messageResult] = await Promise.all([
+      orderSummaryPromise, agendaPromise, overdueOrdersPromise, attentionCountsPromise, orderHistoryPromise, messageActivityPromise,
+    ]);
+    const summary = orderSummaryResult[0][0] || {};
+    const agenda = agendaResult[0];
+    const overdueOrders = overdueOrdersResult[0];
+    const attention = attentionResult[0][0] || {};
+    let financial = null;
+    let overdueReceivables = [];
+    let paymentActivity = [];
+    if (includeFinancial) {
+      const [financialResult, receivablesResult, paymentsResult] = await Promise.all([
+        pool.query(
+          `SELECT
+            (SELECT COALESCE(SUM(valor),0) FROM transacoes_financeiras WHERE user_id=? AND tipo='receita' AND LEFT(data,10)>=? AND LEFT(data,10)<?) AS recebido_mes,
+            (SELECT COALESCE(SUM(GREATEST(valor-COALESCE(valor_recebido,0),0)),0) FROM contas_receber WHERE user_id=? AND status IN ('pendente','parcial','atrasado') AND LEFT(data_vencimento,10)>=? AND LEFT(data_vencimento,10)<?) AS a_receber_mes,
+            (SELECT COALESCE(SUM(GREATEST(valor-COALESCE(valor_recebido,0),0)),0) FROM contas_receber WHERE user_id=? AND status IN ('pendente','parcial','atrasado') AND LEFT(data_vencimento,10)<?) AS vencido`,
+          [userId, month.start, month.next, userId, month.start, month.next, userId, today],
+        ),
+        pool.query(
+          `SELECT cr.id,cr.ordem_servico_id,cr.data_vencimento,GREATEST(cr.valor-COALESCE(cr.valor_recebido,0),0) AS saldo,
+                  c.nome AS cliente_nome,o.numero AS ordem_numero
+             FROM contas_receber cr LEFT JOIN clientes c ON c.id=cr.cliente_id LEFT JOIN ordens_servico o ON o.id=cr.ordem_servico_id
+            WHERE cr.user_id=? AND cr.status IN ('pendente','parcial','atrasado') AND LEFT(cr.data_vencimento,10)<?
+            ORDER BY LEFT(cr.data_vencimento,10) LIMIT 5`, [userId, today],
+        ),
+        pool.query(
+          `SELECT p.id,'pagamento' AS tipo,CONCAT('Pagamento recebido: R$ ',CAST(p.valor AS CHAR)) AS descricao,
+                  p.data_pagamento AS created_at,o.numero AS ordem_numero
+             FROM os_pagamentos p LEFT JOIN ordens_servico o ON o.id=p.ordem_servico_id
+            WHERE p.user_id=? AND p.status='confirmado' ORDER BY p.data_pagamento DESC LIMIT 5`, [userId],
+        ),
+      ]);
+      financial = financialResult[0][0];
+      overdueReceivables = receivablesResult[0];
+      paymentActivity = paymentsResult[0];
+    }
+
+    const priorities = [
+      ...overdueOrders.map((order) => ({ id: `ordem-${order.id}`, type: 'ordem_atrasada', severity: 'danger', title: `OS #${order.numero} em atraso`, description: `${order.cliente_nome} · previsão ${String(order.data_previsao || '').slice(0,10)}`, href: `/ordens/${order.id}/historico` })),
+      ...(Number(attention.aditivos_aguardando || 0) ? [{ id: 'aditivos', type: 'aditivos', severity: 'warning', title: `${attention.aditivos_aguardando} aditivo(s) aguardando aprovação`, description: 'Acompanhe a resposta dos clientes', href: '/ordens' }] : []),
+      ...(Number(attention.mensagens_nao_lidas || 0) ? [{ id: 'mensagens', type: 'mensagens', severity: 'info', title: `${attention.mensagens_nao_lidas} mensagem(ns) não lida(s)`, description: 'Conversas aguardando atendimento', href: '/conversas' }] : []),
+      ...overdueReceivables.map((item) => ({ id: `receber-${item.id}`, type: 'financeiro_vencido', severity: 'danger', title: `${item.cliente_nome || 'Cliente'} · ${money(item.saldo).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}`, description: `Pagamento vencido${item.ordem_numero ? ` · OS #${item.ordem_numero}` : ''}`, href: '/financeiro' })),
+      ...(Number(attention.avaliacoes_com_erro || 0) ? [{ id: 'avaliacoes', type: 'avaliacoes', severity: 'warning', title: `${attention.avaliacoes_com_erro} envio(s) de avaliação com erro`, description: 'Revise telefone ou conexão do WhatsApp', href: '/avaliacoes' }] : []),
+    ].slice(0, 10);
+    const activity = [...historyResult[0], ...messageResult[0], ...paymentActivity]
+      .sort((left, right) => String(right.created_at || '').localeCompare(String(left.created_at || '')))
+      .slice(0, 10);
+
+    return res.json({ data: {
+      generated_at: now(), period: { today, month_start: month.start, month_end_exclusive: month.next },
+      metrics: { entregas_hoje: Number(summary.entregas_hoje || 0), atrasadas: Number(summary.atrasadas || 0), em_andamento: Number(summary.em_andamento || 0), concluidas_mes: Number(summary.concluidas_mes || 0) },
+      pipeline: { pendente: Number(summary.pendentes || 0), em_andamento: Number(summary.em_andamento || 0), atraso: Number(summary.atrasadas || 0), concluido_mes: Number(summary.concluidas_mes || 0) },
+      financial: financial ? { recebido_mes: money(financial.recebido_mes), a_receber_mes: money(financial.a_receber_mes), vencido: money(financial.vencido) } : null,
+      agenda, priorities, activity,
+    } });
+  } catch (error) {
+    return res.status(500).json({ error: { message: error.message } });
+  }
+});
+
 function addFilter(where, params, cols, filter) {
   let { column, operator, value } = filter;
   if (column?.includes('.')) return;

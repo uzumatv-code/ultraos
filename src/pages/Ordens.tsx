@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { PenTool as Tool, Search, Plus, Trash2, ChevronLeft, ChevronRight, Send, Edit, Printer, Star, FileText, DollarSign, History } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { toast } from '../components/ToastCustom';
 import { alerts } from '../utils/alerts';
@@ -23,7 +23,8 @@ import {
 
 type StatusFilter = '' | OrdemServico['status'];
 type FinancialStatus = 'pendente' | 'parcial' | 'pago' | 'cancelado';
-type FinancialFilter = '' | FinancialStatus;
+type FinancialFilter = '' | FinancialStatus | 'aberto';
+type DeadlineFilter = '' | 'hoje' | 'atraso';
 
 function getFinancialStatus(ordem: OrdemServico) {
   const total = Number(ordem.valor_total ?? (Number(ordem.valor_servicos || 0) - Number(ordem.desconto || 0)));
@@ -37,11 +38,22 @@ function getFinancialStatus(ordem: OrdemServico) {
 export function Ordens() {
   const { can } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [ordens, setOrdens] = useState<OrdemServico[]>([]);
   const [loading, setLoading] = useState(true);
   const [globalFilter, setGlobalFilter] = useState('');
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('');
-  const [financialFilter, setFinancialFilter] = useState<FinancialFilter>('');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => {
+    const value = searchParams.get('status');
+    return ['pendente', 'em_andamento', 'concluido', 'cancelado', 'atraso'].includes(value || '') ? value as StatusFilter : '';
+  });
+  const [financialFilter, setFinancialFilter] = useState<FinancialFilter>(() => {
+    const value = searchParams.get('financeiro');
+    return ['pendente', 'parcial', 'pago', 'cancelado', 'aberto'].includes(value || '') ? value as FinancialFilter : '';
+  });
+  const [deadlineFilter, setDeadlineFilter] = useState<DeadlineFilter>(() => {
+    const value = searchParams.get('prazo');
+    return value === 'hoje' || value === 'atraso' ? value : '';
+  });
   const [pagina, setPagina] = useState(0);
   const [showPrintModal, setShowPrintModal] = useState(false);
   const [ordemParaImprimir, setOrdemParaImprimir] = useState<OrdemServico | null>(null);
@@ -78,7 +90,13 @@ export function Ordens() {
 
     return ordens.filter(ordem => {
       if (statusFilter && ordem.status !== statusFilter) return false;
-      if (financialFilter && getFinancialStatus(ordem).value !== financialFilter) return false;
+      const financialStatus = getFinancialStatus(ordem).value;
+      if (financialFilter === 'aberto' && !['pendente', 'parcial'].includes(financialStatus)) return false;
+      if (financialFilter && financialFilter !== 'aberto' && financialStatus !== financialFilter) return false;
+      const dueDate = String(ordem.data_previsao || '').slice(0, 10);
+      const today = todayLocalDate();
+      if (deadlineFilter === 'hoje' && dueDate !== today) return false;
+      if (deadlineFilter === 'atraso' && !(ordem.status === 'atraso' || (['pendente', 'em_andamento'].includes(ordem.status) && dueDate && dueDate < today))) return false;
       if (!search) return true;
 
       const values = [
@@ -93,7 +111,7 @@ export function Ordens() {
       ].join(' ').toLowerCase();
       return values.includes(search);
     });
-  }, [ordens, globalFilter, statusFilter, financialFilter]);
+  }, [ordens, globalFilter, statusFilter, financialFilter, deadlineFilter]);
 
   // Paginação client-side
   const paginatedOrdens = useMemo(() => {
@@ -498,6 +516,7 @@ export function Ordens() {
                     className="w-full rounded-lg border border-gray-200 bg-white/50 px-3 py-2 text-gray-900 backdrop-blur-lg transition-all duration-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 dark:border-purple-500/20 dark:bg-gray-900/50 dark:text-gray-100 dark:focus:ring-indigo-400"
                   >
                     <option value="">Todo o financeiro</option>
+                    <option value="aberto">Em aberto</option>
                     <option value="pendente">Pendente</option>
                     <option value="parcial">Parcial</option>
                     <option value="pago">Pago</option>
@@ -505,6 +524,14 @@ export function Ordens() {
                   </select>
                 </div>
               )}
+              <div className="min-w-40 flex-1 sm:flex-none">
+                <label htmlFor="deadline-filter" className="sr-only">Filtrar por prazo</label>
+                <select id="deadline-filter" value={deadlineFilter} onChange={e => { setDeadlineFilter(e.target.value as DeadlineFilter); setPagina(0); }} className="w-full rounded-lg border border-gray-200 bg-white/50 px-3 py-2 text-gray-900 backdrop-blur-lg transition-all duration-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 dark:border-purple-500/20 dark:bg-gray-900/50 dark:text-gray-100 dark:focus:ring-indigo-400">
+                  <option value="">Todos os prazos</option>
+                  <option value="hoje">Entrega hoje</option>
+                  <option value="atraso">Em atraso</option>
+                </select>
+              </div>
             </div>
             <div className="flex flex-col gap-2 sm:flex-row">
               <motion.button
