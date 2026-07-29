@@ -1967,9 +1967,10 @@ app.get('/api/dashboard/resumo', requireAuth, async (req, res) => {
         pool.query(
           `SELECT
             (SELECT COALESCE(SUM(valor),0) FROM transacoes_financeiras WHERE user_id=? AND tipo='receita' AND LEFT(data,10)>=? AND LEFT(data,10)<?) AS recebido_mes,
+            (SELECT COALESCE(SUM(GREATEST(valor-COALESCE(valor_recebido,0),0)),0) FROM contas_receber WHERE user_id=? AND status IN ('pendente','parcial','atrasado')) AS a_receber,
             (SELECT COALESCE(SUM(GREATEST(valor-COALESCE(valor_recebido,0),0)),0) FROM contas_receber WHERE user_id=? AND status IN ('pendente','parcial','atrasado') AND LEFT(data_vencimento,10)>=? AND LEFT(data_vencimento,10)<?) AS a_receber_mes,
             (SELECT COALESCE(SUM(GREATEST(valor-COALESCE(valor_recebido,0),0)),0) FROM contas_receber WHERE user_id=? AND status IN ('pendente','parcial','atrasado') AND LEFT(data_vencimento,10)<?) AS vencido`,
-          [userId, month.start, month.next, userId, month.start, month.next, userId, today],
+          [userId, month.start, month.next, userId, userId, month.start, month.next, userId, today],
         ),
         pool.query(
           `SELECT cr.id,cr.ordem_servico_id,cr.data_vencimento,GREATEST(cr.valor-COALESCE(cr.valor_recebido,0),0) AS saldo,
@@ -2007,7 +2008,12 @@ app.get('/api/dashboard/resumo', requireAuth, async (req, res) => {
       generated_at: now(), period: { today, month_start: month.start, month_end_exclusive: month.next },
       metrics: { entregas_hoje: Number(summary.entregas_hoje || 0), atrasadas: Number(summary.atrasadas || 0), em_andamento: Number(summary.em_andamento || 0), concluidas_mes: Number(summary.concluidas_mes || 0) },
       pipeline: { pendente: Number(summary.pendentes || 0), em_andamento: Number(summary.em_andamento || 0), atraso: Number(summary.atrasadas || 0), concluido_mes: Number(summary.concluidas_mes || 0) },
-      financial: financial ? { recebido_mes: money(financial.recebido_mes), a_receber_mes: money(financial.a_receber_mes), vencido: money(financial.vencido) } : null,
+      financial: financial ? {
+        recebido_mes: money(financial.recebido_mes),
+        a_receber: money(financial.a_receber),
+        a_receber_mes: money(financial.a_receber_mes),
+        vencido: money(financial.vencido),
+      } : null,
       agenda, priorities, activity,
     } });
   } catch (error) {
