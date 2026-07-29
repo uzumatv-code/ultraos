@@ -34,7 +34,7 @@ import { formatCurrency } from '../utils/formatters';
 import { TransacaoModal } from '../components/TransacaoModal';
 import { CategoriaFinanceiraModal } from '../components/CategoriaFinanceiraModal';
 import { ImportarCSVModal } from '../components/ImportarCSVModal';
-import type { CategoriaFinanceira, ContaPagar, ContaReceber, OrdemServico, TransacaoFinanceira } from '../types/database';
+import type { CategoriaFinanceira, ContaPagar, ContaReceber, TransacaoFinanceira } from '../types/database';
 
 ChartJS.register(
   CategoryScale,
@@ -49,7 +49,7 @@ ChartJS.register(
 );
 
 type TipoFiltro = 'todos' | 'receita' | 'despesa';
-type FluxoMensal = { label: string; receitas: number; despesas: number };
+type FluxoMensal = { label: string; receitas: number; despesas: number; pago: number };
 type CategoriaResumo = { nome: string; valor: number; cor: string };
 
 function toDateInput(date: Date) {
@@ -89,15 +89,23 @@ function parseDate(value?: string) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+function parseDueDate(value?: string) {
+  if (!value) return null;
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return parseDate(value);
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 function monthLabel(date: Date) {
   return date.toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '');
 }
 
-function buildFluxoMensal(transacoes: TransacaoFinanceira[]) {
+function buildFluxoMensal(transacoes: TransacaoFinanceira[], contas: ContaPagar[]) {
   const months: FluxoMensal[] = Array.from({ length: 6 }, (_, index) => {
     const date = new Date();
     date.setMonth(date.getMonth() - (5 - index));
-    return { label: monthLabel(date), receitas: 0, despesas: 0 };
+    return { label: monthLabel(date), receitas: 0, despesas: 0, pago: 0 };
   });
 
   const first = new Date();
@@ -110,10 +118,34 @@ function buildFluxoMensal(transacoes: TransacaoFinanceira[]) {
     if (index < 0 || index > 5) return;
 
     if (transacao.tipo === 'receita') months[index].receitas += Number(transacao.valor || 0);
-    else months[index].despesas += Number(transacao.valor || 0);
+  });
+
+  contas.forEach((conta) => {
+    const vencimento = parseDueDate(conta.data_vencimento);
+    if (!vencimento || conta.status === 'cancelado') return;
+    const index = (vencimento.getFullYear() - first.getFullYear()) * 12 + vencimento.getMonth() - first.getMonth();
+    if (index < 0 || index > 5) return;
+
+    const valor = Number(conta.valor || 0);
+    months[index].despesas += valor;
+    if (conta.status === 'pago') months[index].pago += valor;
   });
 
   return months;
+}
+
+function summarizeAccountsByCategory(contas: ContaPagar[]) {
+  const map = new Map<string, CategoriaResumo>();
+  contas
+    .filter((conta) => conta.status !== 'cancelado')
+    .forEach((conta) => {
+      const nome = conta.categoria?.nome || 'Sem categoria';
+      const current = map.get(nome) || { nome, valor: 0, cor: conta.categoria?.cor || '#64748B' };
+      current.valor += Number(conta.valor || 0);
+      map.set(nome, current);
+    });
+
+  return [...map.values()].sort((a, b) => b.valor - a.valor).slice(0, 6);
 }
 
 function summarizeByCategory(transacoes: TransacaoFinanceira[], tipo: 'receita' | 'despesa') {
@@ -167,12 +199,14 @@ function StatCard({
 export function Financeiro() {
   const navigate = useNavigate();
   const [transacoes, setTransacoes] = useState<TransacaoFinanceira[]>([]);
+  const [transacoesMes, setTransacoesMes] = useState<TransacaoFinanceira[]>([]);
   const [transacoesGrafico, setTransacoesGrafico] = useState<TransacaoFinanceira[]>([]);
   const [categorias, setCategorias] = useState<CategoriaFinanceira[]>([]);
+  const [contasMes, setContasMes] = useState<ContaPagar[]>([]);
+  const [contasGrafico, setContasGrafico] = useState<ContaPagar[]>([]);
   const [contasPendentes, setContasPendentes] = useState<ContaPagar[]>([]);
   const [contasAtrasadas, setContasAtrasadas] = useState<ContaPagar[]>([]);
   const [contasReceber, setContasReceber] = useState<ContaReceber[]>([]);
-  const [ordensConcluidas, setOrdensConcluidas] = useState<OrdemServico[]>([]);
   const [loading, setLoading] = useState(true);
   const [currentDate, setCurrentDate] = useState(new Date());
   const [modalTransacaoAberto, setModalTransacaoAberto] = useState(false);
@@ -215,6 +249,14 @@ export function Financeiro() {
       if (tipoFiltro !== 'todos') transacoesQuery = transacoesQuery.eq('tipo', tipoFiltro);
       if (categoriaFiltro) transacoesQuery = transacoesQuery.eq('categoria_id', categoriaFiltro);
 
+      const transacoesMesQuery = supabase
+        .from('transacoes_financeiras')
+        .select('*, categoria:categorias_financeiras(*)')
+        .eq('user_id', user.id)
+        .gte('data', monthStart)
+        .lt('data', nextMonthStart)
+        .order('data', { ascending: false });
+
       const transacoesGraficoQuery = supabase
         .from('transacoes_financeiras')
         .select('*, categoria:categorias_financeiras(*)')
@@ -230,6 +272,24 @@ export function Financeiro() {
         .in('status', ['pendente', 'atrasado'])
         .gte('data_vencimento', monthStart)
         .lt('data_vencimento', nextMonthStart)
+        .order('data_vencimento', { ascending: true });
+
+      const contasMesQuery = supabase
+        .from('contas_pagar')
+        .select('*, categoria:categorias_financeiras(*)')
+        .eq('user_id', user.id)
+        .neq('status', 'cancelado')
+        .gte('data_vencimento', monthStart)
+        .lt('data_vencimento', nextMonthStart)
+        .order('data_vencimento', { ascending: true });
+
+      const contasGraficoQuery = supabase
+        .from('contas_pagar')
+        .select('*, categoria:categorias_financeiras(*)')
+        .eq('user_id', user.id)
+        .neq('status', 'cancelado')
+        .gte('data_vencimento', chartRange.start)
+        .lt('data_vencimento', chartRange.nextEnd)
         .order('data_vencimento', { ascending: true });
 
       const contasAtrasadasQuery = supabase
@@ -249,40 +309,47 @@ export function Financeiro() {
         .lt('data_vencimento', nextMonthStart)
         .order('data_vencimento', { ascending: true });
 
-      const ordensQuery = supabase
-        .from('ordens_servico')
-        .select('id, numero, valor_total, valor_servicos, desconto, data_entrega, data_entrada, cliente:clientes(*)')
-        .eq('user_id', user.id)
-        .eq('status', 'concluido')
-        .gte('data_entrega', monthStart)
-        .lt('data_entrega', nextMonthStart)
-        .order('data_entrega', { ascending: false });
-
       const [
         { data: categoriasData, error: categoriasError },
         { data: transacoesData, error: transacoesError },
+        { data: transacoesMesData, error: transacoesMesError },
         { data: graficoData, error: graficoError },
         { data: contasData, error: contasError },
+        { data: contasMesData, error: contasMesError },
+        { data: contasGraficoData, error: contasGraficoError },
         { data: contasAtrasadasData, error: contasAtrasadasError },
         { data: contasReceberData, error: contasReceberError },
-        { data: ordensData, error: ordensError },
-      ] = await Promise.all([categoriasQuery, transacoesQuery, transacoesGraficoQuery, contasQuery, contasAtrasadasQuery, contasReceberQuery, ordensQuery]);
+      ] = await Promise.all([
+        categoriasQuery,
+        transacoesQuery,
+        transacoesMesQuery,
+        transacoesGraficoQuery,
+        contasQuery,
+        contasMesQuery,
+        contasGraficoQuery,
+        contasAtrasadasQuery,
+        contasReceberQuery,
+      ]);
 
       if (categoriasError) throw categoriasError;
       if (transacoesError) throw transacoesError;
+      if (transacoesMesError) throw transacoesMesError;
       if (graficoError) throw graficoError;
       if (contasError) throw contasError;
+      if (contasMesError) throw contasMesError;
+      if (contasGraficoError) throw contasGraficoError;
       if (contasAtrasadasError) throw contasAtrasadasError;
       if (contasReceberError) throw contasReceberError;
-      if (ordensError) throw ordensError;
 
       setCategorias(categoriasData || []);
       setTransacoes(transacoesData || []);
+      setTransacoesMes(transacoesMesData || []);
       setTransacoesGrafico(graficoData || []);
       setContasPendentes(contasData || []);
+      setContasMes(contasMesData || []);
+      setContasGrafico(contasGraficoData || []);
       setContasAtrasadas(contasAtrasadasData || []);
       setContasReceber(contasReceberData || []);
-      setOrdensConcluidas(ordensData || []);
     } catch (error) {
       console.error('Erro ao carregar financeiro:', error);
       toast.error('Erro ao carregar dados financeiros');
@@ -296,21 +363,21 @@ export function Financeiro() {
   }, [buscarDados]);
 
   const receitasMes = useMemo(
-    () => transacoes.filter((item) => item.tipo === 'receita').reduce((acc, item) => acc + Number(item.valor || 0), 0),
-    [transacoes],
+    () => transacoesMes.filter((item) => item.tipo === 'receita').reduce((acc, item) => acc + Number(item.valor || 0), 0),
+    [transacoesMes],
   );
 
   const despesasMes = useMemo(
-    () => transacoes.filter((item) => item.tipo === 'despesa').reduce((acc, item) => acc + Number(item.valor || 0), 0),
-    [transacoes],
+    () => contasMes.reduce((acc, conta) => acc + Number(conta.valor || 0), 0),
+    [contasMes],
+  );
+
+  const totalPagoMes = useMemo(
+    () => contasMes.filter((conta) => conta.status === 'pago').reduce((acc, conta) => acc + Number(conta.valor || 0), 0),
+    [contasMes],
   );
 
   const saldoMes = receitasMes - despesasMes;
-
-  const totalOrdensConcluidas = useMemo(
-    () => ordensConcluidas.reduce((acc, ordem) => acc + Number(ordem.valor_total ?? (Number(ordem.valor_servicos || 0) - Number(ordem.desconto || 0))), 0),
-    [ordensConcluidas],
-  );
 
   const totalContasPendentes = useMemo(
     () => contasPendentes.reduce((acc, conta) => acc + Number(conta.valor || 0), 0),
@@ -324,9 +391,9 @@ export function Financeiro() {
 
   const lucroLiquido = saldoMes;
 
-  const fluxoMensal = useMemo(() => buildFluxoMensal(transacoesGrafico), [transacoesGrafico]);
-  const receitasPorCategoria = useMemo(() => summarizeByCategory(transacoes, 'receita'), [transacoes]);
-  const despesasPorCategoria = useMemo(() => summarizeByCategory(transacoes, 'despesa'), [transacoes]);
+  const fluxoMensal = useMemo(() => buildFluxoMensal(transacoesGrafico, contasGrafico), [contasGrafico, transacoesGrafico]);
+  const receitasPorCategoria = useMemo(() => summarizeByCategory(transacoesMes, 'receita'), [transacoesMes]);
+  const despesasPorCategoria = useMemo(() => summarizeAccountsByCategory(contasMes), [contasMes]);
   const ultimasTransacoes = transacoes.slice(0, 8);
   const proximasContas = contasPendentes.slice(0, 6);
   const proximosRecebimentos = contasReceber.slice(0, 6);
@@ -348,6 +415,14 @@ export function Financeiro() {
         borderColor: '#dc2626',
         backgroundColor: 'rgba(220, 38, 38, 0.10)',
         fill: true,
+        tension: 0.35,
+      },
+      {
+        label: 'Pago',
+        data: fluxoMensal.map((item) => item.pago),
+        borderColor: '#7c3aed',
+        backgroundColor: 'rgba(124, 58, 237, 0.10)',
+        fill: false,
         tension: 0.35,
       },
     ],
@@ -404,9 +479,9 @@ export function Financeiro() {
       if (!response.ok) throw new Error(json.error?.message || 'Erro ao pagar conta');
       toast.success('Conta paga e despesa lancada');
       buscarDados();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Erro ao pagar conta:', error);
-      toast.error(error.message || 'Erro ao pagar conta');
+      toast.error(error instanceof Error ? error.message : 'Erro ao pagar conta');
     }
   }
 
@@ -431,9 +506,9 @@ export function Financeiro() {
       if (!response.ok) throw new Error(json.error?.message || 'Erro ao receber conta');
       toast.success('Recebimento lancado como receita');
       buscarDados();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Erro ao receber conta:', error);
-      toast.error(error.message || 'Erro ao receber conta');
+      toast.error(error instanceof Error ? error.message : 'Erro ao receber conta');
     }
   }
 
@@ -462,10 +537,11 @@ export function Financeiro() {
           </div>
         </div>
 
-        <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
-          <StatCard title="Receitas do mes" value={formatCurrency(receitasMes)} description="Lancamentos filtrados no periodo" tone="green" icon={<ArrowUpRight className="h-5 w-5" />} />
-          <StatCard title="Despesas do mes" value={formatCurrency(despesasMes)} description="Saidas registradas no periodo" tone="red" icon={<ArrowDownRight className="h-5 w-5" />} />
-          <StatCard title="Lucro liquido" value={formatCurrency(lucroLiquido)} description="Recebido menos despesas" tone={saldoMes >= 0 ? 'blue' : 'amber'} icon={<Wallet className="h-5 w-5" />} />
+        <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <StatCard title="Receitas do mes" value={formatCurrency(receitasMes)} description="Entradas registradas no periodo" tone="green" icon={<ArrowUpRight className="h-5 w-5" />} />
+          <StatCard title="Despesas do mes" value={formatCurrency(despesasMes)} description={`${contasMes.length} conta(s) do Contas a Pagar`} tone="red" icon={<ArrowDownRight className="h-5 w-5" />} />
+          <StatCard title="Ja pago no mes" value={formatCurrency(totalPagoMes)} description={`${contasMes.filter((conta) => conta.status === 'pago').length} conta(s) paga(s)`} tone="blue" icon={<CheckCircle className="h-5 w-5" />} />
+          <StatCard title="Resultado do mes" value={formatCurrency(lucroLiquido)} description="Receitas menos despesas do mes" tone={saldoMes >= 0 ? 'blue' : 'amber'} icon={<Wallet className="h-5 w-5" />} />
           <StatCard title="Contas a pagar" value={formatCurrency(totalContasPendentes)} description={`${contasPendentes.length} conta(s) no mes`} tone="red" icon={<ArrowDownRight className="h-5 w-5" />} />
           <StatCard title="A receber" value={formatCurrency(totalReceberPendente)} description={`${contasReceber.length} recebivel(is) no mes`} tone="amber" icon={<Receipt className="h-5 w-5" />} />
         </div>
@@ -491,6 +567,11 @@ export function Financeiro() {
                 <p className="text-sm text-gray-500">Contas a pagar no mes</p>
                 <p className="mt-1 text-xl font-semibold text-gray-950 dark:text-white">{formatCurrency(totalContasPendentes)}</p>
                 <p className="mt-1 text-xs text-gray-500">{contasPendentes.length} conta(s) pendente(s)</p>
+              </div>
+              <div className="rounded-lg bg-gray-50 p-4 dark:bg-gray-950">
+                <p className="text-sm text-gray-500">Pago no mes</p>
+                <p className="mt-1 text-xl font-semibold text-emerald-600">{formatCurrency(totalPagoMes)}</p>
+                <p className="mt-1 text-xs text-gray-500">Conforme o status do Contas a Pagar</p>
               </div>
               <div className="rounded-lg bg-gray-50 p-4 dark:bg-gray-950">
                 <p className="text-sm text-gray-500">Recebiveis do mes</p>
