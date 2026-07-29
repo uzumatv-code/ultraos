@@ -212,6 +212,7 @@ export function Financeiro() {
   const [modalTransacaoAberto, setModalTransacaoAberto] = useState(false);
   const [modalCategoriaAberto, setModalCategoriaAberto] = useState(false);
   const [modalImportarCSVAberto, setModalImportarCSVAberto] = useState(false);
+  const [showAllReceivables, setShowAllReceivables] = useState(false);
   const [transacaoParaEditar, setTransacaoParaEditar] = useState<TransacaoFinanceira>();
   const [busca, setBusca] = useState('');
   const [tipoFiltro, setTipoFiltro] = useState<TipoFiltro>('todos');
@@ -305,8 +306,6 @@ export function Financeiro() {
         .select('*, cliente:clientes(*), ordem_servico:ordens_servico(*)')
         .eq('user_id', user.id)
         .in('status', ['pendente', 'parcial', 'atrasado'])
-        .gte('data_vencimento', monthStart)
-        .lt('data_vencimento', nextMonthStart)
         .order('data_vencimento', { ascending: true });
 
       const [
@@ -396,7 +395,7 @@ export function Financeiro() {
   const despesasPorCategoria = useMemo(() => summarizeAccountsByCategory(contasMes), [contasMes]);
   const ultimasTransacoes = transacoes.slice(0, 8);
   const proximasContas = contasPendentes.slice(0, 6);
-  const proximosRecebimentos = contasReceber.slice(0, 6);
+  const proximosRecebimentos = showAllReceivables ? contasReceber : contasReceber.slice(0, 6);
 
   const lineData = {
     labels: fluxoMensal.map((item) => item.label),
@@ -543,7 +542,7 @@ export function Financeiro() {
           <StatCard title="Ja pago no mes" value={formatCurrency(totalPagoMes)} description={`${contasMes.filter((conta) => conta.status === 'pago').length} conta(s) paga(s)`} tone="blue" icon={<CheckCircle className="h-5 w-5" />} />
           <StatCard title="Resultado do mes" value={formatCurrency(lucroLiquido)} description="Receitas menos despesas do mes" tone={saldoMes >= 0 ? 'blue' : 'amber'} icon={<Wallet className="h-5 w-5" />} />
           <StatCard title="Contas a pagar" value={formatCurrency(totalContasPendentes)} description={`${contasPendentes.length} conta(s) no mes`} tone="red" icon={<ArrowDownRight className="h-5 w-5" />} />
-          <StatCard title="A receber" value={formatCurrency(totalReceberPendente)} description={`${contasReceber.length} recebivel(is) no mes`} tone="amber" icon={<Receipt className="h-5 w-5" />} />
+          <StatCard title="A receber" value={formatCurrency(totalReceberPendente)} description={`${contasReceber.length} recebivel(is) em aberto`} tone="amber" icon={<Receipt className="h-5 w-5" />} />
         </div>
 
         <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -574,7 +573,7 @@ export function Financeiro() {
                 <p className="mt-1 text-xs text-gray-500">Conforme o status do Contas a Pagar</p>
               </div>
               <div className="rounded-lg bg-gray-50 p-4 dark:bg-gray-950">
-                <p className="text-sm text-gray-500">Recebiveis do mes</p>
+                <p className="text-sm text-gray-500">Recebiveis em aberto</p>
                 <p className="mt-1 text-xl font-semibold text-amber-600">{formatCurrency(totalReceberPendente)}</p>
                 <p className="mt-1 text-xs text-gray-500">{contasReceber.length} recebivel(is)</p>
               </div>
@@ -634,7 +633,7 @@ export function Financeiro() {
             <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4 dark:border-gray-800">
               <div>
                 <h2 className="text-lg font-semibold text-gray-950 dark:text-white">Contas a receber</h2>
-                <p className="text-sm text-gray-500 dark:text-gray-400">{formatCurrency(totalReceberPendente)} no mes</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400">{formatCurrency(totalReceberPendente)} em aberto</p>
               </div>
               <Receipt className="h-5 w-5 text-amber-500" />
             </div>
@@ -661,6 +660,15 @@ export function Financeiro() {
                   </div>
                 );
               })}
+              {contasReceber.length > 6 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllReceivables((current) => !current)}
+                  className="w-full px-5 py-4 text-sm font-semibold text-sky-700 hover:bg-sky-50 dark:text-sky-400 dark:hover:bg-sky-950/30"
+                >
+                  {showAllReceivables ? 'Mostrar menos' : `Mostrar todos (${contasReceber.length})`}
+                </button>
+              )}
             </div>
           </div>
 

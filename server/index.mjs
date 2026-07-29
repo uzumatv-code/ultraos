@@ -459,6 +459,61 @@ async function removeOrphanedReceivables(conn, userId) {
   return Number(result.affectedRows || 0);
 }
 
+async function createMissingReceivables(conn, userId) {
+  const [result] = await conn.query(
+    `INSERT IGNORE INTO contas_receber
+      (id, user_id, ordem_servico_id, cliente_id, descricao, valor, valor_recebido, data_vencimento,
+       data_recebimento, status, forma_pagamento, parcelas, parcela_atual, observacoes, created_at, updated_at)
+     SELECT
+       UUID(),
+       o.user_id,
+       o.id,
+       o.cliente_id,
+       CONCAT('OS #', o.numero, ' - ', COALESCE(c.nome, 'Cliente')),
+       COALESCE(o.valor_total, COALESCE(o.valor_servicos, 0) - COALESCE(o.desconto, 0), 0),
+       COALESCE(p.total_pago, 0),
+       COALESCE(NULLIF(o.data_previsao, ''), NULLIF(o.data_entrega, ''), NULLIF(o.data_entrada, ''), LEFT(o.created_at, 10), DATE_FORMAT(CURDATE(), '%Y-%m-%d')),
+       CASE
+         WHEN COALESCE(p.total_pago, 0) >= COALESCE(o.valor_total, COALESCE(o.valor_servicos, 0) - COALESCE(o.desconto, 0), 0)
+          AND COALESCE(o.valor_total, COALESCE(o.valor_servicos, 0) - COALESCE(o.desconto, 0), 0) > 0
+         THEN p.ultima_data
+         ELSE NULL
+       END,
+       CASE
+         WHEN COALESCE(p.total_pago, 0) >= COALESCE(o.valor_total, COALESCE(o.valor_servicos, 0) - COALESCE(o.desconto, 0), 0)
+          AND COALESCE(o.valor_total, COALESCE(o.valor_servicos, 0) - COALESCE(o.desconto, 0), 0) > 0
+         THEN 'recebido'
+         WHEN COALESCE(p.total_pago, 0) > 0 THEN 'parcial'
+         WHEN COALESCE(NULLIF(o.data_previsao, ''), NULLIF(o.data_entrega, ''), NULLIF(o.data_entrada, ''), LEFT(o.created_at, 10), DATE_FORMAT(CURDATE(), '%Y-%m-%d')) < DATE_FORMAT(CURDATE(), '%Y-%m-%d')
+         THEN 'atrasado'
+         ELSE 'pendente'
+       END,
+       o.forma_pagamento,
+       COALESCE(o.parcelas, 1),
+       1,
+       'Recebivel recuperado automaticamente a partir da OS',
+       COALESCE(o.created_at, ?),
+       ?
+     FROM ordens_servico o
+     LEFT JOIN clientes c
+       ON c.user_id = o.user_id AND c.id = o.cliente_id
+     LEFT JOIN (
+       SELECT user_id, ordem_servico_id, SUM(valor) AS total_pago, MAX(data_pagamento) AS ultima_data
+         FROM os_pagamentos
+        WHERE status = 'confirmado'
+        GROUP BY user_id, ordem_servico_id
+     ) p ON p.user_id = o.user_id AND p.ordem_servico_id = o.id
+     LEFT JOIN contas_receber cr
+       ON cr.user_id = o.user_id AND cr.ordem_servico_id = o.id
+     WHERE o.user_id = ?
+       AND o.status <> 'cancelado'
+       AND cr.id IS NULL
+       AND COALESCE(o.valor_total, COALESCE(o.valor_servicos, 0) - COALESCE(o.desconto, 0), 0) > 0`,
+    [now(), now(), userId],
+  );
+  return Number(result.affectedRows || 0);
+}
+
 function normalizeRow(table, row) {
   const copy = { ...row };
 
@@ -1948,6 +2003,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
       // Remove registros legados deixados por exclusoes de OS anteriores a
       // sincronizacao transacional implementada abaixo.
       if (physicalTable === 'contas_receber') {
+        await createMissingReceivables(pool, req.user.id);
         await removeOrphanedReceivables(pool, req.user.id);
       }
 
