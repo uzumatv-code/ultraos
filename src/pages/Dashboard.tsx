@@ -61,6 +61,7 @@ export function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [showCalendar, setShowCalendar] = useState(false);
+  const [showRecentActivity, setShowRecentActivity] = useState(false);
   const [calendarLoading, setCalendarLoading] = useState(false);
   const [calendarOrders, setCalendarOrders] = useState<OrdemServico[]>([]);
 
@@ -141,11 +142,15 @@ export function Dashboard() {
         {isFinancial && summary?.financial && <DashboardCard title="Financeiro do mês" subtitle="Regime de caixa e vencimentos" icon={CircleDollarSign} action={<button onClick={() => navigate('/financeiro')} className="text-xs font-semibold text-violet-600">Abrir financeiro</button>}><div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1"><FinancialLine label="Recebido" value={summary.financial.recebido_mes} tone="text-emerald-600" /><FinancialLine label="A receber no mês" value={summary.financial.a_receber_mes} tone="text-violet-600" /><FinancialLine label="Saldo vencido" value={summary.financial.vencido} tone={summary.financial.vencido ? 'text-rose-600' : 'text-slate-500'} /></div></DashboardCard>}
       </section>
 
-      <DashboardCard title="Atividade recente" subtitle="Atualizações de OS, mensagens e pagamentos" icon={Clock3}>
-        {summary?.activity.length ? <div className="divide-y divide-slate-100 dark:divide-slate-800">{summary.activity.slice(0, 8).map((item) => <div key={`${item.tipo}-${item.id}`} className="flex items-center gap-3 py-3"><span className="h-2.5 w-2.5 shrink-0 rounded-full bg-violet-500" /><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium text-slate-700 dark:text-slate-200">{item.descricao}</p><p className="text-xs text-slate-400">{activityLabel(item.tipo)}{item.ordem_numero ? ` · OS #${item.ordem_numero}` : ''}</p></div><time className="shrink-0 text-xs text-slate-400">{new Date(item.created_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</time></div>)}</div> : <EmptyPanel icon={Clock3} title="Sem atividade recente" description="As movimentações mais recentes aparecerão aqui." />}
-      </DashboardCard>
-
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900"><button onClick={() => void toggleCalendar()} className="flex w-full items-center justify-between p-5 text-left"><div className="flex items-center gap-3"><span className="rounded-xl bg-violet-50 p-2.5 text-violet-600 dark:bg-violet-950/40"><CalendarDays className="h-5 w-5" /></span><div><h2 className="font-bold text-slate-900 dark:text-white">Planejamento mensal</h2><p className="text-xs text-slate-500">Abra o calendário completo quando precisar reorganizar prazos.</p></div></div><ChevronDown className={`h-5 w-5 text-slate-400 transition ${showCalendar ? 'rotate-180' : ''}`} /></button>{showCalendar && <div className="border-t border-slate-200 p-4 dark:border-slate-800"><CustomCalendar orders={calendarOrders} loading={calendarLoading} onEventClick={(order) => alerts.orderDetails(order, () => { void loadCalendar(); void loadSummary(true); })} onUpdate={() => { void loadCalendar(); void loadSummary(true); }} /></div>}</section>
+
+      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <button type="button" onClick={() => setShowRecentActivity((current) => !current)} className="flex w-full items-center justify-between p-5 text-left" aria-expanded={showRecentActivity}>
+          <div className="flex items-center gap-3"><span className="rounded-xl bg-violet-50 p-2.5 text-violet-600 dark:bg-violet-950/40"><Clock3 className="h-5 w-5" /></span><div><h2 className="font-bold text-slate-900 dark:text-white">Atividades recentes</h2><p className="text-xs text-slate-500">Atualizações de OS, mensagens e pagamentos.</p></div></div>
+          <ChevronDown className={`h-5 w-5 text-slate-400 transition ${showRecentActivity ? 'rotate-180' : ''}`} />
+        </button>
+        {showRecentActivity && <div className="border-t border-slate-200 px-5 pb-2 dark:border-slate-800">{summary?.activity.length ? <div className="divide-y divide-slate-100 dark:divide-slate-800">{summary.activity.slice(0, 8).map((item) => <div key={`${item.tipo}-${item.id}`} className="flex items-center gap-3 py-3"><span className="h-2.5 w-2.5 shrink-0 rounded-full bg-violet-500" /><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium text-slate-700 dark:text-slate-200">{item.descricao}</p><p className="text-xs text-slate-400">{activityLabel(item.tipo)}{item.ordem_numero ? ` · OS #${item.ordem_numero}` : ''}</p></div><time className="shrink-0 text-xs text-slate-400">{new Date(item.created_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</time></div>)}</div> : <EmptyPanel icon={Clock3} title="Sem atividade recente" description="As movimentações mais recentes aparecerão aqui." />}</div>}
+      </section>
     </main>
   );
 }
