@@ -514,6 +514,71 @@ async function createMissingReceivables(conn, userId) {
   return Number(result.affectedRows || 0);
 }
 
+async function reconcileReceivables(conn, userId) {
+  const removed = await removeOrphanedReceivables(conn, userId);
+  const created = await createMissingReceivables(conn, userId);
+
+  await conn.query(
+    `UPDATE ordens_servico o
+     LEFT JOIN (
+       SELECT user_id, ordem_servico_id, COALESCE(SUM(valor), 0) AS total_pago,
+              MAX(data_pagamento) AS ultima_data
+         FROM os_pagamentos
+        WHERE status = 'confirmado'
+        GROUP BY user_id, ordem_servico_id
+     ) p ON p.user_id = o.user_id AND p.ordem_servico_id = o.id
+        SET o.valor_pago = COALESCE(p.total_pago, 0),
+            o.data_ultimo_pagamento = p.ultima_data,
+            o.status_financeiro = CASE
+              WHEN o.status = 'cancelado' THEN 'cancelado'
+              WHEN COALESCE(o.valor_total, COALESCE(o.valor_servicos, 0) - COALESCE(o.desconto, 0), 0) <= 0 THEN 'pago'
+              WHEN COALESCE(p.total_pago, 0) >= COALESCE(o.valor_total, COALESCE(o.valor_servicos, 0) - COALESCE(o.desconto, 0), 0) THEN 'pago'
+              WHEN COALESCE(p.total_pago, 0) > 0 THEN 'parcial'
+              ELSE 'pendente'
+            END
+      WHERE o.user_id = ?`,
+    [userId],
+  );
+
+  const [updatedResult] = await conn.query(
+    `UPDATE contas_receber cr
+     JOIN ordens_servico o ON o.user_id = cr.user_id AND o.id = cr.ordem_servico_id
+     LEFT JOIN clientes c ON c.user_id = o.user_id AND c.id = o.cliente_id
+     LEFT JOIN (
+       SELECT user_id, ordem_servico_id, COALESCE(SUM(valor), 0) AS total_pago,
+              MAX(data_pagamento) AS ultima_data
+         FROM os_pagamentos
+        WHERE status = 'confirmado'
+        GROUP BY user_id, ordem_servico_id
+     ) p ON p.user_id = o.user_id AND p.ordem_servico_id = o.id
+        SET cr.cliente_id = o.cliente_id,
+            cr.descricao = CONCAT('OS #', o.numero, ' - ', COALESCE(c.nome, 'Cliente')),
+            cr.valor = COALESCE(o.valor_total, COALESCE(o.valor_servicos, 0) - COALESCE(o.desconto, 0), 0),
+            cr.valor_recebido = COALESCE(p.total_pago, 0),
+            cr.data_vencimento = COALESCE(NULLIF(o.data_previsao, ''), NULLIF(o.data_entrega, ''), NULLIF(o.data_entrada, ''), LEFT(o.created_at, 10), DATE_FORMAT(CURDATE(), '%Y-%m-%d')),
+            cr.data_recebimento = CASE
+              WHEN COALESCE(o.valor_total, COALESCE(o.valor_servicos, 0) - COALESCE(o.desconto, 0), 0) > 0
+               AND COALESCE(p.total_pago, 0) >= COALESCE(o.valor_total, COALESCE(o.valor_servicos, 0) - COALESCE(o.desconto, 0), 0)
+              THEN p.ultima_data
+              ELSE NULL
+            END,
+            cr.status = CASE
+              WHEN o.status = 'cancelado' THEN 'cancelado'
+              WHEN COALESCE(o.valor_total, COALESCE(o.valor_servicos, 0) - COALESCE(o.desconto, 0), 0) <= 0 THEN 'recebido'
+              WHEN COALESCE(p.total_pago, 0) >= COALESCE(o.valor_total, COALESCE(o.valor_servicos, 0) - COALESCE(o.desconto, 0), 0) THEN 'recebido'
+              WHEN COALESCE(p.total_pago, 0) > 0 THEN 'parcial'
+              WHEN COALESCE(NULLIF(o.data_previsao, ''), NULLIF(o.data_entrega, ''), NULLIF(o.data_entrada, ''), LEFT(o.created_at, 10), DATE_FORMAT(CURDATE(), '%Y-%m-%d')) < DATE_FORMAT(CURDATE(), '%Y-%m-%d') THEN 'atrasado'
+              ELSE 'pendente'
+            END,
+            cr.forma_pagamento = o.forma_pagamento,
+            cr.parcelas = COALESCE(o.parcelas, 1)
+      WHERE cr.user_id = ?`,
+    [userId],
+  );
+
+  return { removed, created, updated: Number(updatedResult.affectedRows || 0) };
+}
+
 function normalizeRow(table, row) {
   const copy = { ...row };
 
@@ -1897,6 +1962,7 @@ app.get('/api/dashboard/resumo', requireAuth, async (req, res) => {
     let overdueReceivables = [];
     let paymentActivity = [];
     if (includeFinancial) {
+      await reconcileReceivables(pool, userId);
       const [financialResult, receivablesResult, paymentsResult] = await Promise.all([
         pool.query(
           `SELECT
@@ -1908,14 +1974,16 @@ app.get('/api/dashboard/resumo', requireAuth, async (req, res) => {
         pool.query(
           `SELECT cr.id,cr.ordem_servico_id,cr.data_vencimento,GREATEST(cr.valor-COALESCE(cr.valor_recebido,0),0) AS saldo,
                   c.nome AS cliente_nome,o.numero AS ordem_numero
-             FROM contas_receber cr LEFT JOIN clientes c ON c.id=cr.cliente_id LEFT JOIN ordens_servico o ON o.id=cr.ordem_servico_id
+             FROM contas_receber cr
+             LEFT JOIN clientes c ON c.user_id=cr.user_id AND c.id=cr.cliente_id
+             LEFT JOIN ordens_servico o ON o.user_id=cr.user_id AND o.id=cr.ordem_servico_id
             WHERE cr.user_id=? AND cr.status IN ('pendente','parcial','atrasado') AND LEFT(cr.data_vencimento,10)<?
             ORDER BY LEFT(cr.data_vencimento,10) LIMIT 5`, [userId, today],
         ),
         pool.query(
           `SELECT p.id,'pagamento' AS tipo,CONCAT('Pagamento recebido: R$ ',CAST(p.valor AS CHAR)) AS descricao,
                   p.data_pagamento AS created_at,o.numero AS ordem_numero
-             FROM os_pagamentos p LEFT JOIN ordens_servico o ON o.id=p.ordem_servico_id
+             FROM os_pagamentos p LEFT JOIN ordens_servico o ON o.user_id=p.user_id AND o.id=p.ordem_servico_id
             WHERE p.user_id=? AND p.status='confirmado' ORDER BY p.data_pagamento DESC LIMIT 5`, [userId],
         ),
       ]);
@@ -2002,9 +2070,8 @@ app.post('/api/query', requireAuth, async (req, res) => {
     if (action === 'select') {
       // Remove registros legados deixados por exclusoes de OS anteriores a
       // sincronizacao transacional implementada abaixo.
-      if (physicalTable === 'contas_receber') {
-        await createMissingReceivables(pool, req.user.id);
-        await removeOrphanedReceivables(pool, req.user.id);
+      if (physicalTable === 'contas_receber' || (physicalTable === 'ordens_servico' && req.auth.role === 'admin')) {
+        await reconcileReceivables(pool, req.user.id);
       }
 
       const where = [];
@@ -3005,18 +3072,19 @@ async function ensureDefaultFinancialCategory(userId, tipo, nome, cor) {
 
 async function syncOrderFinancialStatus(conn, userId, ordemId) {
   const [[totals]] = await conn.query(
-    `SELECT o.valor_total, o.status, COALESCE(SUM(CASE WHEN p.status = 'confirmado' THEN p.valor ELSE 0 END), 0) AS total_pago,
+    `SELECT COALESCE(o.valor_total, COALESCE(o.valor_servicos, 0) - COALESCE(o.desconto, 0), 0) AS valor_total,
+            o.status, COALESCE(SUM(CASE WHEN p.status = 'confirmado' THEN p.valor ELSE 0 END), 0) AS total_pago,
             MAX(CASE WHEN p.status = 'confirmado' THEN p.data_pagamento ELSE NULL END) AS ultima_data
        FROM ordens_servico o
        LEFT JOIN os_pagamentos p ON p.user_id = o.user_id AND p.ordem_servico_id = o.id
       WHERE o.user_id = ? AND o.id = ?
-      GROUP BY o.id, o.valor_total, o.status`,
+      GROUP BY o.id, o.valor_total, o.valor_servicos, o.desconto, o.status`,
     [userId, ordemId],
   );
   if (!totals) return null;
   const total = money(totals.valor_total);
   const paid = money(totals.total_pago);
-  const status = totals.status === 'cancelado' ? 'cancelado' : paid >= total && total > 0 ? 'pago' : paid > 0 ? 'parcial' : 'pendente';
+  const status = totals.status === 'cancelado' ? 'cancelado' : total <= 0 || paid >= total ? 'pago' : paid > 0 ? 'parcial' : 'pendente';
   await conn.query(
     `UPDATE ordens_servico
         SET valor_pago = ?, status_financeiro = ?, data_ultimo_pagamento = ?, updated_at = ?
@@ -3039,7 +3107,7 @@ async function syncReceivableForOrder(conn, userId, ordemId) {
             COALESCE(p.total_pago, 0) AS total_pago,
             p.ultima_data
        FROM ordens_servico o
-       LEFT JOIN clientes c ON c.id = o.cliente_id
+       LEFT JOIN clientes c ON c.user_id = o.user_id AND c.id = o.cliente_id
        LEFT JOIN (
          SELECT user_id, ordem_servico_id, COALESCE(SUM(valor), 0) AS total_pago, MAX(data_pagamento) AS ultima_data
            FROM os_pagamentos
@@ -3054,9 +3122,9 @@ async function syncReceivableForOrder(conn, userId, ordemId) {
 
   const total = money(order.valor_total ?? (Number(order.valor_servicos || 0) - Number(order.desconto || 0)));
   const paid = money(order.total_pago || 0);
-  const statusFinanceiro = order.status === 'cancelado' ? 'cancelado' : paid >= total && total > 0 ? 'pago' : paid > 0 ? 'parcial' : 'pendente';
-  const dataRecebimento = statusFinanceiro === 'pago' ? order.ultima_data || order.data_ultimo_pagamento || order.updated_at || now() : null;
-  const dueDate = order.data_previsao || order.data_entrega || todayDate();
+  const statusFinanceiro = order.status === 'cancelado' ? 'cancelado' : total <= 0 || paid >= total ? 'pago' : paid > 0 ? 'parcial' : 'pendente';
+  const dataRecebimento = statusFinanceiro === 'pago' && total > 0 ? order.ultima_data || order.data_ultimo_pagamento || order.updated_at || now() : null;
+  const dueDate = String(order.data_previsao || order.data_entrega || order.data_entrada || order.created_at || todayDate()).slice(0, 10);
   const receivableStatus = statusFinanceiro === 'pago'
     ? 'recebido'
     : statusFinanceiro === 'pendente' && dueDate < todayDate()
@@ -4117,8 +4185,11 @@ async function logFinancialAi(data) {
 
 async function answerSystemQuery(userId, intent) {
   const today = todayDate();
-  const monthStart = today.slice(0, 8) + '01';
-  const monthEnd = today.slice(0, 8) + '31';
+  const month = monthRange(today);
+
+  if (intent.intent === 'a_receber_mes' || intent.intent === 'os_pendentes_pagamento') {
+    await reconcileReceivables(pool, userId);
+  }
 
   if (intent.intent === 'contas_vencem_hoje') {
     const [rows] = await pool.query(
@@ -4134,8 +4205,9 @@ async function answerSystemQuery(userId, intent) {
   if (intent.intent === 'a_receber_mes') {
     const [[row]] = await pool.query(
       `SELECT COALESCE(SUM(valor - COALESCE(valor_recebido, 0)), 0) AS total FROM contas_receber
-        WHERE user_id = ? AND status IN ('pendente', 'parcial', 'atrasado') AND LEFT(data_vencimento, 10) BETWEEN ? AND ?`,
-      [userId, monthStart, monthEnd],
+        WHERE user_id = ? AND status IN ('pendente', 'parcial', 'atrasado')
+          AND LEFT(data_vencimento, 10) >= ? AND LEFT(data_vencimento, 10) < ?`,
+      [userId, month.start, month.next],
     );
     return `A receber este mes: R$ ${Number(row.total || 0).toFixed(2)}.`;
   }
@@ -4143,8 +4215,8 @@ async function answerSystemQuery(userId, intent) {
   if (intent.intent === 'faturamento_mes') {
     const [[row]] = await pool.query(
       `SELECT COALESCE(SUM(valor), 0) AS total FROM transacoes_financeiras
-        WHERE user_id = ? AND tipo = 'receita' AND LEFT(data, 10) BETWEEN ? AND ?`,
-      [userId, monthStart, monthEnd],
+        WHERE user_id = ? AND tipo = 'receita' AND LEFT(data, 10) >= ? AND LEFT(data, 10) < ?`,
+      [userId, month.start, month.next],
     );
     return `Faturamento recebido no mes: R$ ${Number(row.total || 0).toFixed(2)}.`;
   }

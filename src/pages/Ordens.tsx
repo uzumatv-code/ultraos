@@ -30,7 +30,7 @@ function getFinancialStatus(ordem: OrdemServico) {
   const total = Number(ordem.valor_total ?? (Number(ordem.valor_servicos || 0) - Number(ordem.desconto || 0)));
   const paid = Number(ordem.valor_pago || 0);
   if (ordem.status === 'cancelado') return { value: 'cancelado' as const, label: 'Cancelado', className: 'bg-gray-100 text-gray-700', remaining: 0 };
-  if (paid >= total && total > 0) return { value: 'pago' as const, label: 'Pago', className: 'bg-green-100 text-green-800', remaining: 0 };
+  if (total <= 0 || paid >= total) return { value: 'pago' as const, label: 'Pago', className: 'bg-green-100 text-green-800', remaining: 0 };
   if (paid > 0) return { value: 'parcial' as const, label: 'Parcial', className: 'bg-blue-100 text-blue-800', remaining: Math.max(0, total - paid) };
   return { value: 'pendente' as const, label: 'Pendente', className: 'bg-yellow-100 text-yellow-800', remaining: Math.max(0, total - paid) };
 }
