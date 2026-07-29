@@ -25,6 +25,7 @@ export function PrintOrdemModal({ isOpen, onClose, ordem }: PrintOrdemModalProps
   const [logoDataUrl, setLogoDataUrl] = useState('');
   const [templateName, setTemplateName] = useState('Padrão do sistema');
   const [config, setConfig] = useState<OrderDocumentTemplateConfig>(DEFAULT_ORDER_DOCUMENT_CONFIG);
+  const [paymentConditions, setPaymentConditions] = useState<OrdemServico['condicoes_pagamento']>([]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -35,8 +36,9 @@ export function PrintOrdemModal({ isOpen, onClose, ordem }: PrintOrdemModalProps
       supabase.from('configuracoes_empresa').select('*').maybeSingle(),
       listDocumentTemplates<OrderDocumentTemplateConfig>(),
       loadBrandLogoDataUrl().catch(() => ''),
+      supabase.from('os_condicoes_pagamento').select('*').eq('ordem_servico_id', ordem.id).neq('status', 'cancelado').order('ordem', { ascending: true }),
     ])
-      .then(([companyResult, templates, logo]) => {
+      .then(([companyResult, templates, logo, conditionsResult]) => {
         if (!active) return;
         if (companyResult.error && companyResult.error.code !== 'PGRST116') throw companyResult.error;
         const selected = templates.find((template) => template.is_default) || templates[0];
@@ -44,6 +46,8 @@ export function PrintOrdemModal({ isOpen, onClose, ordem }: PrintOrdemModalProps
         setLogoDataUrl(logo);
         setTemplateName(selected?.name || 'Padrão do sistema');
         setConfig(normalizeOrderDocumentConfig(selected?.config_json));
+        if (conditionsResult.error) throw conditionsResult.error;
+        setPaymentConditions(conditionsResult.data || []);
       })
       .catch((loadError) => {
         if (!active) return;
@@ -52,7 +56,7 @@ export function PrintOrdemModal({ isOpen, onClose, ordem }: PrintOrdemModalProps
       })
       .finally(() => active && setLoading(false));
     return () => { active = false; };
-  }, [isOpen]);
+  }, [isOpen, ordem.id]);
 
   function handlePrint() {
     const printWindow = window.open('', '_blank');
@@ -61,7 +65,7 @@ export function PrintOrdemModal({ isOpen, onClose, ordem }: PrintOrdemModalProps
       return;
     }
     printWindow.document.open();
-    printWindow.document.write(buildOrderDocumentHtml({ ordem, company, logoDataUrl, config, autoPrint: true }));
+    printWindow.document.write(buildOrderDocumentHtml({ ordem: { ...ordem, condicoes_pagamento: paymentConditions }, company, logoDataUrl, config, autoPrint: true }));
     printWindow.document.close();
   }
 

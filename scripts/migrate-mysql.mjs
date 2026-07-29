@@ -315,6 +315,27 @@ const createTables = [
     INDEX idx_os_pagamentos_transacao (transacao_financeira_id)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 
+  `CREATE TABLE IF NOT EXISTS os_condicoes_pagamento (
+    id varchar(36) NOT NULL PRIMARY KEY,
+    user_id varchar(36) NOT NULL,
+    ordem_servico_id varchar(36) NOT NULL,
+    pagamento_id varchar(36) DEFAULT NULL,
+    valor decimal(10,2) NOT NULL DEFAULT 0.00,
+    forma_pagamento varchar(50) DEFAULT NULL,
+    momento varchar(30) NOT NULL DEFAULT 'retirada',
+    data_vencimento varchar(50) DEFAULT NULL,
+    status varchar(30) NOT NULL DEFAULT 'pendente',
+    observacoes text DEFAULT NULL,
+    ordem int NOT NULL DEFAULT 1,
+    created_at varchar(50) DEFAULT NULL,
+    updated_at varchar(50) DEFAULT NULL,
+    INDEX idx_condicoes_pagamento_pagamento (pagamento_id),
+    INDEX idx_condicoes_pagamento_user (user_id),
+    INDEX idx_condicoes_pagamento_ordem (ordem_servico_id),
+    INDEX idx_condicoes_pagamento_status (status),
+    INDEX idx_condicoes_pagamento_vencimento (data_vencimento)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
   `CREATE TABLE IF NOT EXISTS anexos_financeiros (
     id varchar(36) NOT NULL PRIMARY KEY,
     user_id varchar(36) NOT NULL,
@@ -830,6 +851,16 @@ const requiredColumns = {
     status: "varchar(50) DEFAULT 'confirmado'",
     updated_at: 'varchar(50) DEFAULT NULL',
   },
+  os_condicoes_pagamento: {
+    pagamento_id: 'varchar(36) DEFAULT NULL',
+    forma_pagamento: 'varchar(50) DEFAULT NULL',
+    momento: "varchar(30) NOT NULL DEFAULT 'retirada'",
+    data_vencimento: 'varchar(50) DEFAULT NULL',
+    status: "varchar(30) NOT NULL DEFAULT 'pendente'",
+    observacoes: 'text DEFAULT NULL',
+    ordem: 'int NOT NULL DEFAULT 1',
+    updated_at: 'varchar(50) DEFAULT NULL',
+  },
   configuracoes_whatsapp: {
     provider: "varchar(30) DEFAULT 'evolution'",
     status: "varchar(30) DEFAULT 'nao_configurado'",
@@ -1134,6 +1165,56 @@ async function backfillPayments(conn) {
   });
 }
 
+async function backfillPaymentConditions(conn) {
+  await safeStep('vincular pagamentos existentes as condicoes das OS', async () => {
+    const [result] = await conn.query(`
+      INSERT IGNORE INTO os_condicoes_pagamento
+        (id, user_id, ordem_servico_id, pagamento_id, valor, forma_pagamento, momento,
+         data_vencimento, status, observacoes, ordem, created_at, updated_at)
+      SELECT
+        UUID(), p.user_id, p.ordem_servico_id, p.id, p.valor, p.forma_pagamento, 'agora',
+        LEFT(p.data_pagamento, 10), 'recebido', p.observacoes,
+        ROW_NUMBER() OVER (PARTITION BY p.user_id, p.ordem_servico_id ORDER BY p.data_pagamento, p.created_at, p.id),
+        COALESCE(p.created_at, ?), COALESCE(p.updated_at, ?)
+      FROM os_pagamentos p
+      LEFT JOIN os_condicoes_pagamento cp ON cp.pagamento_id = p.id
+      WHERE cp.id IS NULL AND p.status = 'confirmado'
+    `, [nowSql(), nowSql()]);
+    if (Number(result.affectedRows || 0) > 0) console.log(`Condicoes recebidas migradas: ${result.affectedRows}`);
+  });
+
+  await safeStep('criar saldo pendente nas condicoes das OS', async () => {
+    const [result] = await conn.query(`
+      INSERT INTO os_condicoes_pagamento
+        (id, user_id, ordem_servico_id, pagamento_id, valor, forma_pagamento, momento,
+         data_vencimento, status, observacoes, ordem, created_at, updated_at)
+      SELECT
+        UUID(), o.user_id, o.id, NULL,
+        GREATEST(COALESCE(o.valor_total, COALESCE(o.valor_servicos, 0) - COALESCE(o.desconto, 0), 0) - COALESCE(p.total_pago, 0), 0),
+        o.forma_pagamento, 'retirada',
+        COALESCE(NULLIF(o.data_previsao, ''), NULLIF(o.data_entrega, ''), LEFT(o.created_at, 10)),
+        'pendente', 'Saldo migrado automaticamente', COALESCE(cp.proxima_ordem, 1),
+        COALESCE(o.created_at, ?), ?
+      FROM ordens_servico o
+      LEFT JOIN (
+        SELECT user_id, ordem_servico_id, SUM(valor) AS total_pago
+        FROM os_pagamentos WHERE status = 'confirmado'
+        GROUP BY user_id, ordem_servico_id
+      ) p ON p.user_id = o.user_id AND p.ordem_servico_id = o.id
+      LEFT JOIN (
+        SELECT user_id, ordem_servico_id, MAX(ordem) + 1 AS proxima_ordem,
+               SUM(CASE WHEN status = 'pendente' THEN 1 ELSE 0 END) AS pendentes
+        FROM os_condicoes_pagamento
+        GROUP BY user_id, ordem_servico_id
+      ) cp ON cp.user_id = o.user_id AND cp.ordem_servico_id = o.id
+      WHERE o.status <> 'cancelado'
+        AND COALESCE(cp.pendentes, 0) = 0
+        AND COALESCE(o.valor_total, COALESCE(o.valor_servicos, 0) - COALESCE(o.desconto, 0), 0) > COALESCE(p.total_pago, 0)
+    `, [nowSql(), nowSql()]);
+    if (Number(result.affectedRows || 0) > 0) console.log(`Condicoes pendentes migradas: ${result.affectedRows}`);
+  });
+}
+
 async function syncFinancialStatus(conn) {
   await safeStep('sincronizar status financeiro das OS', () => conn.query(`
     UPDATE ordens_servico o
@@ -1187,6 +1268,7 @@ try {
   await backfillEvaluationReminders(conn);
   await backfillReceivables(conn);
   await backfillPayments(conn);
+  await backfillPaymentConditions(conn);
   await syncFinancialStatus(conn);
 
   console.log('Migracao MySQL concluida com sucesso.');

@@ -3,18 +3,17 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   ArrowLeft,
-  Banknote,
   Calendar,
   Check,
   ChevronLeft,
   ChevronRight,
-  CreditCard,
   FileText,
   X,
   MessageCircle,
   Printer,
+  Plus,
   Send,
-  Smartphone,
+  Trash2,
   UserRound,
   Wrench,
 } from 'lucide-react';
@@ -32,9 +31,33 @@ import { formatCurrency } from '../utils/formatters';
 import { addDaysToDateOnly, formatLocalDate, parseLocalDate, toDateOnly, todayLocalDate } from '../utils/dates';
 import { WhatsAppService } from '../utils/whatsapp-service';
 import { getUserObservations } from '../utils/template-service';
-import type { Cliente, Instrumento, Marca, OrdemServico, Problema, Servico } from '../types/database';
+import { useAuth } from '../contexts/AuthContext';
+import type { Cliente, Instrumento, Marca, OrdemServico, OSCondicaoPagamento, Problema, Servico } from '../types/database';
 
-type FormaPagamento = 'credito' | 'debito' | 'pix';
+type FormaPagamento = 'credito' | 'debito' | 'pix' | 'dinheiro' | 'boleto' | 'a_definir';
+type MomentoPagamento = 'agora' | 'retirada' | 'data';
+type CondicaoPagamentoDraft = {
+  id: string;
+  valor: number;
+  forma_pagamento: FormaPagamento;
+  momento: MomentoPagamento;
+  data_vencimento: string;
+  status: 'pendente' | 'recebido';
+  pagamento_id?: string;
+  observacoes?: string;
+};
+
+function createPaymentCondition(overrides: Partial<CondicaoPagamentoDraft> = {}): CondicaoPagamentoDraft {
+  return {
+    id: crypto.randomUUID(),
+    valor: 0,
+    forma_pagamento: 'pix',
+    momento: 'retirada',
+    data_vencimento: '',
+    status: 'pendente',
+    ...overrides,
+  };
+}
 type AcaoAposSalvar = 'nenhuma' | 'mensagem' | 'pdf';
 type AgendaOrder = Pick<OrdemServico, 'id' | 'numero' | 'modelo' | 'data_previsao' | 'status'> & {
   cliente?: Pick<Cliente, 'nome'> | null;
@@ -121,6 +144,7 @@ function itemDescription(descriptions: Record<string, string>, itemId: string, d
 }
 
 export function NovaOrdem() {
+  const { can } = useAuth();
   const navigate = useNavigate();
   const { id } = useParams();
   const [step, setStep] = useState(1);
@@ -140,7 +164,7 @@ export function NovaOrdem() {
   const [servicosDescricoes, setServicosDescricoes] = useState<Record<string, string>>({});
   const [valorServicos, setValorServicos] = useState(0);
   const [desconto, setDesconto] = useState(0);
-  const [formaPagamento, setFormaPagamento] = useState<FormaPagamento>('pix');
+  const [condicoesPagamento, setCondicoesPagamento] = useState<CondicaoPagamentoDraft[]>([createPaymentCondition()]);
   const [dataPrevisao, setDataPrevisao] = useState('');
   const [observacoes, setObservacoes] = useState('Pagamento Antecipado!');
   const [acaoAposSalvar, setAcaoAposSalvar] = useState<AcaoAposSalvar>('mensagem');
@@ -163,6 +187,53 @@ export function NovaOrdem() {
 
   const clienteSelecionado = clientes.find((cliente) => cliente.id === clienteId);
   const total = Math.max(0, Number(valorServicos || 0) - Number(desconto || 0));
+  const totalPlanejado = useMemo(
+    () => condicoesPagamento.reduce((sum, condition) => sum + Number(condition.valor || 0), 0),
+    [condicoesPagamento],
+  );
+  const totalRecebido = useMemo(
+    () => condicoesPagamento
+      .filter((condition) => condition.status === 'recebido' || condition.momento === 'agora')
+      .reduce((sum, condition) => sum + Number(condition.valor || 0), 0),
+    [condicoesPagamento],
+  );
+  const diferencaPlanejamento = Number((total - totalPlanejado).toFixed(2));
+
+  useEffect(() => {
+    if (id || total <= 0) return;
+    setCondicoesPagamento((current) => {
+      if (current.length !== 1 || current[0].status === 'recebido' || Number(current[0].valor || 0) !== 0) return current;
+      return [{ ...current[0], valor: total }];
+    });
+  }, [id, total]);
+
+  function updatePaymentCondition(conditionId: string, updates: Partial<CondicaoPagamentoDraft>) {
+    setCondicoesPagamento((current) => current.map((condition) => condition.id === conditionId ? { ...condition, ...updates } : condition));
+  }
+
+  function addPaymentCondition() {
+    setCondicoesPagamento((current) => [
+      ...current,
+      createPaymentCondition({
+        valor: Math.max(0, Number((total - current.reduce((sum, condition) => sum + Number(condition.valor || 0), 0)).toFixed(2))),
+        data_vencimento: dataPrevisao,
+      }),
+    ]);
+  }
+
+  function removePaymentCondition(conditionId: string) {
+    setCondicoesPagamento((current) => current.filter((condition) => condition.id !== conditionId));
+  }
+
+  function adjustPaymentPlanBalance() {
+    setCondicoesPagamento((current) => {
+      const editable = [...current].reverse().find((condition) => condition.status !== 'recebido');
+      if (!editable) return current;
+      return current.map((condition) => condition.id === editable.id
+        ? { ...condition, valor: Math.max(0, Number((Number(condition.valor || 0) + diferencaPlanejamento).toFixed(2))) }
+        : condition);
+    });
+  }
   const agendaStart = useMemo(() => {
     const today = todayForDatabase();
     const selected = dateForDatabase(dataPrevisao);
@@ -285,9 +356,34 @@ export function NovaOrdem() {
       setServicosDescricoes(normalizeDescriptions(data.servicos_descricoes));
       setValorServicos(Number(data.valor_servicos || 0));
       setDesconto(Number(data.desconto || 0));
-      setFormaPagamento(data.forma_pagamento || 'pix');
       setObservacoes(getUserObservations(data.observacoes));
       setDataPrevisao(data.data_previsao ? dateForDatabase(data.data_previsao) : '');
+
+      const { data: paymentConditions, error: conditionsError } = await supabase
+        .from('os_condicoes_pagamento')
+        .select('*')
+        .eq('ordem_servico_id', orderId)
+        .neq('status', 'cancelado')
+        .order('ordem', { ascending: true });
+      if (conditionsError) throw conditionsError;
+      if (paymentConditions?.length) {
+        setCondicoesPagamento(paymentConditions.map((condition: OSCondicaoPagamento) => ({
+          id: condition.id,
+          valor: Number(condition.valor || 0),
+          forma_pagamento: (condition.forma_pagamento || 'a_definir') as FormaPagamento,
+          momento: condition.momento,
+          data_vencimento: condition.data_vencimento ? dateForDatabase(condition.data_vencimento) : '',
+          status: condition.status === 'recebido' ? 'recebido' : 'pendente',
+          pagamento_id: condition.pagamento_id,
+          observacoes: condition.observacoes,
+        })));
+      } else {
+        setCondicoesPagamento([createPaymentCondition({
+          valor: Number(data.valor_total ?? (Number(data.valor_servicos || 0) - Number(data.desconto || 0))),
+          forma_pagamento: ['credito', 'debito', 'pix', 'dinheiro', 'boleto'].includes(data.forma_pagamento) ? data.forma_pagamento as FormaPagamento : 'a_definir',
+          data_vencimento: data.data_previsao ? dateForDatabase(data.data_previsao) : '',
+        })]);
+      }
     } catch (error) {
       console.error('Erro ao carregar ordem:', error);
       toast.error('Erro ao carregar ordem de serviço');
@@ -335,7 +431,23 @@ export function NovaOrdem() {
       .eq('id', orderId)
       .single();
     if (error) throw error;
-    return data as OrdemServico;
+    const { data: conditions, error: conditionsError } = await supabase
+      .from('os_condicoes_pagamento')
+      .select('*')
+      .eq('ordem_servico_id', orderId)
+      .neq('status', 'cancelado')
+      .order('ordem', { ascending: true });
+    if (conditionsError) throw conditionsError;
+    return { ...data, condicoes_pagamento: conditions || [] } as OrdemServico;
+  }
+
+  function getAuthHeaders() {
+    const sessionRaw = localStorage.getItem('mysql-auth-session');
+    const token = sessionRaw ? JSON.parse(sessionRaw)?.access_token : null;
+    return {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    };
   }
 
   async function handleSubmit(event: React.FormEvent) {
@@ -344,22 +456,34 @@ export function NovaOrdem() {
       toast.error('Revise os campos obrigatórios desta etapa.');
       return;
     }
+    if (total > 0 && !condicoesPagamento.length) {
+      toast.error('Adicione ao menos uma condição de pagamento.');
+      return;
+    }
+    if (Math.round(totalPlanejado * 100) !== Math.round(total * 100)) {
+      toast.error(`As condições somam ${formatCurrency(totalPlanejado)}, mas o total da OS é ${formatCurrency(total)}.`);
+      return;
+    }
+    if (condicoesPagamento.some((condition) => condition.momento === 'data' && !condition.data_vencimento)) {
+      toast.error('Informe a data de vencimento das condições programadas.');
+      return;
+    }
+    if (!can('financeiro.write') && condicoesPagamento.some((condition) => condition.status !== 'recebido' && condition.momento === 'agora')) {
+      toast.error('Seu perfil não pode confirmar valores recebidos.');
+      return;
+    }
 
     setLoading(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Usuário não autenticado');
 
-      let numero: number | undefined;
-      if (!id) {
-        const { data: nextNumber, error: numberError } = await supabase.rpc('get_next_order_number', { p_user_id: user.id });
-        if (numberError) throw numberError;
-        numero = Number(nextNumber);
-      }
+      const selectedMethods = [...new Set(condicoesPagamento.map((condition) => condition.forma_pagamento).filter((method) => method !== 'a_definir'))];
+      const paymentMethod = selectedMethods.length > 1 ? 'misto' : selectedMethods[0] || 'a_definir';
 
       const ordemData = {
         ...(id && { id }),
-        ...(!id && { numero, status: 'pendente' as const, data_entrada: todayForDatabase() }),
+        ...(!id && { status: 'pendente' as const, data_entrada: todayForDatabase() }),
         cliente_id: clienteId,
         instrumento_id: instrumentoId,
         marca_id: marcaId,
@@ -374,21 +498,31 @@ export function NovaOrdem() {
         valor_servicos: Number(valorServicos || 0),
         desconto: Number(desconto || 0),
         valor_total: total,
-        forma_pagamento: formaPagamento,
+        forma_pagamento: paymentMethod,
         observacoes: getUserObservations(observacoes),
         data_previsao: dateForDatabase(dataPrevisao),
         user_id: user.id,
       };
 
-      let savedId = id;
-      if (id) {
-        const { error } = await supabase.from('ordens_servico').update(ordemData).eq('id', id).eq('user_id', user.id);
-        if (error) throw error;
-      } else {
-        const { data, error } = await supabase.from('ordens_servico').insert([ordemData]);
-        if (error) throw error;
-        savedId = Array.isArray(data) ? data[0]?.id : data?.id;
-      }
+      const response = await fetch('/api/ordens/salvar', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          ordem: ordemData,
+          condicoes_pagamento: condicoesPagamento.map((condition) => ({
+            id: condition.id,
+            valor: Number(condition.valor || 0),
+            forma_pagamento: condition.forma_pagamento,
+            momento: condition.momento,
+            data_vencimento: condition.momento === 'data' ? dateForDatabase(condition.data_vencimento) : null,
+            status: condition.status,
+            observacoes: condition.observacoes || null,
+          })),
+        }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error?.message || 'Erro ao salvar ordem e pagamentos');
+      const savedId = result.data?.id;
 
       if (!savedId) throw new Error('Ordem salva sem identificador');
       const savedOrder = await fetchSavedOrder(savedId);
@@ -605,12 +739,80 @@ export function NovaOrdem() {
                 </div>
 
                 <div className="space-y-4">
-                  <div>
-                    <p className="mb-2 text-sm font-semibold text-gray-800">Forma de pagamento</p>
-                    <div className="grid grid-cols-1 gap-2">
-                      <PaymentButton active={formaPagamento === 'pix'} icon={<Smartphone className="h-5 w-5" />} title="PIX" description="Transferência instantânea" onClick={() => setFormaPagamento('pix')} />
-                      <PaymentButton active={formaPagamento === 'credito'} icon={<CreditCard className="h-5 w-5" />} title="Crédito" description="Cartão de crédito" onClick={() => setFormaPagamento('credito')} />
-                      <PaymentButton active={formaPagamento === 'debito'} icon={<Banknote className="h-5 w-5" />} title="Débito" description="Pagamento à vista" onClick={() => setFormaPagamento('debito')} />
+                  <div className="space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-gray-800">Condições de pagamento</p>
+                        <p className="text-xs text-gray-500">Separe entrada, formas e saldo da retirada.</p>
+                      </div>
+                      <button type="button" onClick={addPaymentCondition} className="inline-flex items-center gap-1 rounded-lg border border-violet-200 px-2.5 py-1.5 text-xs font-semibold text-violet-700 hover:bg-violet-50">
+                        <Plus className="h-3.5 w-3.5" /> Adicionar
+                      </button>
+                    </div>
+
+                    <div className="space-y-3">
+                      {condicoesPagamento.map((condition, index) => {
+                        const locked = condition.status === 'recebido';
+                        return (
+                          <div key={condition.id} className={`rounded-xl border p-3 ${locked ? 'border-emerald-200 bg-emerald-50/70' : 'border-gray-200 bg-gray-50'}`}>
+                            <div className="mb-2 flex items-center justify-between gap-2">
+                              <span className="text-xs font-semibold text-gray-600">Pagamento {index + 1}</span>
+                              <div className="flex items-center gap-2">
+                                {locked && <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">Recebido</span>}
+                                {!locked && condicoesPagamento.length > 1 && (
+                                  <button type="button" onClick={() => removePaymentCondition(condition.id)} className="rounded-md p-1 text-gray-400 hover:bg-red-50 hover:text-red-600" aria-label={`Remover pagamento ${index + 1}`}>
+                                    <Trash2 className="h-4 w-4" />
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                            <div className="grid gap-2 sm:grid-cols-2">
+                              <label className="text-xs font-medium text-gray-600">
+                                Forma
+                                <select disabled={locked} value={condition.forma_pagamento} onChange={(event) => updatePaymentCondition(condition.id, { forma_pagamento: event.target.value as FormaPagamento })} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-2.5 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-70">
+                                  <option value="pix">PIX</option>
+                                  <option value="debito">Débito</option>
+                                  <option value="credito">Crédito</option>
+                                  <option value="dinheiro">Dinheiro</option>
+                                  <option value="boleto">Boleto</option>
+                                  <option value="a_definir">Definir depois</option>
+                                </select>
+                              </label>
+                              <label className="text-xs font-medium text-gray-600">
+                                Valor
+                                <input disabled={locked} type="number" min="0.01" step="0.01" value={condition.valor || ''} onChange={(event) => updatePaymentCondition(condition.id, { valor: Number(event.target.value) })} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-2.5 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-70" />
+                              </label>
+                              <label className="text-xs font-medium text-gray-600 sm:col-span-2">
+                                Quando
+                                <select disabled={locked} value={condition.momento} onChange={(event) => updatePaymentCondition(condition.id, { momento: event.target.value as MomentoPagamento })} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-2.5 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-70">
+                                  {can('financeiro.write') && <option value="agora">Recebido agora</option>}
+                                  <option value="retirada">Na retirada / entrega</option>
+                                  <option value="data">Em uma data específica</option>
+                                </select>
+                              </label>
+                              {condition.momento === 'data' && (
+                                <label className="text-xs font-medium text-gray-600 sm:col-span-2">
+                                  Vencimento
+                                  <input disabled={locked} type="date" value={condition.data_vencimento} onChange={(event) => updatePaymentCondition(condition.id, { data_vencimento: event.target.value })} className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-2.5 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-70" />
+                                </label>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div className="rounded-xl border border-gray-200 bg-white p-3 text-xs">
+                      <div className="flex justify-between text-gray-600"><span>Total da OS</span><strong>{formatCurrency(total)}</strong></div>
+                      <div className="mt-1 flex justify-between text-emerald-700"><span>Recebido</span><strong>{formatCurrency(totalRecebido)}</strong></div>
+                      <div className="mt-1 flex justify-between text-amber-700"><span>A receber</span><strong>{formatCurrency(Math.max(0, total - totalRecebido))}</strong></div>
+                      <div className={`mt-2 flex items-center justify-between border-t pt-2 ${diferencaPlanejamento === 0 ? 'text-emerald-700' : 'text-red-600'}`}>
+                        <span>{diferencaPlanejamento === 0 ? 'Planejamento conferido' : diferencaPlanejamento > 0 ? 'Falta distribuir' : 'Valor excedente'}</span>
+                        <div className="flex items-center gap-2">
+                          <strong>{formatCurrency(Math.abs(diferencaPlanejamento))}</strong>
+                          {diferencaPlanejamento !== 0 && <button type="button" onClick={adjustPaymentPlanBalance} className="rounded-md bg-violet-50 px-2 py-1 font-semibold text-violet-700">Ajustar</button>}
+                        </div>
+                      </div>
                     </div>
                   </div>
 
@@ -770,24 +972,6 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <span className="mb-1.5 block text-sm font-medium text-gray-700">{label}</span>
       {children}
     </label>
-  );
-}
-
-function PaymentButton({ active, icon, title, description, onClick }: { active: boolean; icon: React.ReactNode; title: string; description: string; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`flex items-center gap-3 rounded-lg border p-3 text-left transition ${
-        active ? 'border-violet-300 bg-violet-50 text-violet-900' : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
-      }`}
-    >
-      <span className={`flex h-10 w-10 items-center justify-center rounded-lg ${active ? 'bg-violet-600 text-white' : 'bg-gray-100 text-gray-500'}`}>{icon}</span>
-      <span>
-        <span className="block text-sm font-semibold">{title}</span>
-        <span className="block text-xs text-gray-500">{description}</span>
-      </span>
-    </button>
   );
 }
 

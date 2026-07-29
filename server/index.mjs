@@ -120,6 +120,7 @@ const allowedTables = new Set([
   'contas_pagar',
   'contas_receber',
   'os_pagamentos',
+  'os_condicoes_pagamento',
   'anexos_financeiros',
   'transacoes_financeiras',
   'financeiro_ia_autorizados',
@@ -140,6 +141,7 @@ const allowedTables = new Set([
 const OPERATOR_READ_TABLES = new Set([
   'clientes', 'marcas', 'instrumentos', 'equipamentos', 'servicos', 'problemas',
   'ordens_servico', 'configuracoes_empresa',
+  'os_condicoes_pagamento',
   'system_settings', 'message_templates', 'templates_mensagem', 'agenda_logs',
   'avaliacoes_lembretes',
 ]);
@@ -190,6 +192,10 @@ const relationMap = {
     cliente: ['clientes', 'cliente_id'],
     ordem_servico: ['ordens_servico', 'ordem_servico_id'],
     transacao_financeira: ['transacoes_financeiras', 'transacao_financeira_id'],
+  },
+  os_condicoes_pagamento: {
+    ordem_servico: ['ordens_servico', 'ordem_servico_id'],
+    pagamento: ['os_pagamentos', 'pagamento_id'],
   },
   financeiro_ia_logs: {
     autorizado: ['financeiro_ia_autorizados', 'autorizado_id'],
@@ -2208,6 +2214,11 @@ app.post('/api/query', requireAuth, async (req, res) => {
                 throw Object.assign(new Error('Esta OS possui histórico, conversa ou documento fiscal e não pode ser excluída. Cancele a OS para preservar a rastreabilidade.'), { status: 409 });
               }
               await conn.query(
+                `DELETE FROM os_condicoes_pagamento
+                  WHERE user_id = ? AND ordem_servico_id IN (${orderIds.map(() => '?').join(',')})`,
+                [req.user.id, ...orderIds],
+              );
+              await conn.query(
                 `DELETE FROM contas_receber
                   WHERE user_id = ? AND ordem_servico_id IN (${orderIds.map(() => '?').join(',')})`,
                 [req.user.id, ...orderIds],
@@ -3061,14 +3072,14 @@ async function getSystemIntent(message) {
   return heuristic;
 }
 
-async function ensureDefaultFinancialCategory(userId, tipo, nome, cor) {
-  const [rows] = await pool.query(
+async function ensureDefaultFinancialCategory(userId, tipo, nome, cor, conn = pool) {
+  const [rows] = await conn.query(
     'SELECT id FROM categorias_financeiras WHERE user_id = ? AND tipo = ? AND LOWER(nome) = LOWER(?) LIMIT 1',
     [userId, tipo, nome],
   );
   if (rows[0]?.id) return rows[0].id;
   const id = uuid();
-  await pool.query(
+  await conn.query(
     `INSERT INTO categorias_financeiras (id, user_id, nome, tipo, cor, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
     [id, userId, nome, tipo, cor, now(), now()],
@@ -3442,65 +3453,249 @@ app.post('/api/ordens/:id/aditivos/:aditivoId/recusar', requireAuth, async (req,
   } finally { conn.release(); }
 });
 
-async function registerOrderPayment({ userId, ordemNumero, ordemId, valor, formaPagamento, origem = 'manual', observacoes = null }) {
+async function applyPaymentToConditions(conn, {
+  userId,
+  orderId,
+  paymentId,
+  amount,
+  method,
+  paidAt,
+  conditionId = null,
+}) {
+  const [conditions] = await conn.query(
+    `SELECT * FROM os_condicoes_pagamento
+      WHERE user_id = ? AND ordem_servico_id = ? AND status = 'pendente'
+      ORDER BY CASE WHEN id = ? THEN 0 WHEN forma_pagamento = ? THEN 1 ELSE 2 END, ordem, created_at
+      FOR UPDATE`,
+    [userId, orderId, conditionId || '', method],
+  );
+  let remaining = money(amount);
+  for (const condition of conditions) {
+    if (remaining <= 0) break;
+    const conditionValue = money(condition.valor);
+    const allocated = Math.min(remaining, conditionValue);
+    if (allocated >= conditionValue) {
+      await conn.query(
+        `UPDATE os_condicoes_pagamento
+            SET pagamento_id = ?, forma_pagamento = COALESCE(?, forma_pagamento), momento = 'agora',
+                data_vencimento = ?, status = 'recebido', updated_at = ?
+          WHERE id = ? AND user_id = ? AND ordem_servico_id = ?`,
+        [paymentId, method, paidAt.slice(0, 10), paidAt, condition.id, userId, orderId],
+      );
+    } else {
+      await conn.query(
+        `UPDATE os_condicoes_pagamento SET valor = ?, updated_at = ?
+          WHERE id = ? AND user_id = ? AND ordem_servico_id = ?`,
+        [money(conditionValue - allocated), paidAt, condition.id, userId, orderId],
+      );
+      await conn.query(
+        `INSERT INTO os_condicoes_pagamento
+         (id, user_id, ordem_servico_id, pagamento_id, valor, forma_pagamento, momento,
+          data_vencimento, status, observacoes, ordem, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'agora', ?, 'recebido', ?, ?, ?, ?)`,
+        [uuid(), userId, orderId, paymentId, allocated, method, paidAt.slice(0, 10), 'Pagamento parcial confirmado', condition.ordem, paidAt, paidAt],
+      );
+    }
+    remaining = money(remaining - allocated);
+  }
+
+  if (remaining > 0) {
+    const [[nextOrder]] = await conn.query(
+      'SELECT COALESCE(MAX(ordem), 0) + 1 AS ordem FROM os_condicoes_pagamento WHERE user_id = ? AND ordem_servico_id = ?',
+      [userId, orderId],
+    );
+    await conn.query(
+      `INSERT INTO os_condicoes_pagamento
+       (id, user_id, ordem_servico_id, pagamento_id, valor, forma_pagamento, momento,
+        data_vencimento, status, observacoes, ordem, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'agora', ?, 'recebido', ?, ?, ?, ?)`,
+      [uuid(), userId, orderId, paymentId, remaining, method, paidAt.slice(0, 10), 'Pagamento confirmado', Number(nextOrder?.ordem || 1), paidAt, paidAt],
+    );
+  }
+}
+
+async function registerOrderPaymentInTransaction(conn, {
+  userId,
+  order,
+  valor,
+  formaPagamento,
+  origem = 'manual',
+  observacoes = null,
+  conditionId = null,
+}) {
+  if (order.status === 'cancelado') throw new Error('Nao e possivel pagar uma OS cancelada');
+  await ensureReceivableForOrder(conn, userId, order);
+
+  const [[currentPaidRow]] = await conn.query(
+    `SELECT COALESCE(SUM(valor), 0) AS total_pago
+       FROM os_pagamentos
+      WHERE user_id = ? AND ordem_servico_id = ? AND status = 'confirmado'`,
+    [userId, order.id],
+  );
+  const orderTotal = money(order.valor_total ?? (Number(order.valor_servicos || 0) - Number(order.desconto || 0)));
+  const remaining = money(orderTotal - Number(currentPaidRow?.total_pago || 0));
+  const amount = money(valor ?? remaining);
+  if (amount <= 0) throw new Error('Valor de pagamento invalido');
+  if (remaining <= 0) throw new Error('Esta OS ja esta quitada');
+  if (amount > remaining) throw new Error(`Valor maior que o saldo pendente da OS (${remaining.toFixed(2)})`);
+
+  const categoriaId = await ensureDefaultFinancialCategory(userId, 'receita', 'Servicos', '#10B981', conn);
+  const dataPagamento = now();
+  const paymentId = uuid();
+  const transactionId = uuid();
+  const method = formaPagamento || order.forma_pagamento || null;
+  if (!RECEIVED_PAYMENT_METHODS.has(method)) {
+    throw new Error('Informe a forma usada no recebimento');
+  }
+  const description = `Pagamento OS #${order.numero} - ${order.cliente_nome || 'Cliente'}`;
+
+  await conn.query(
+    `INSERT INTO transacoes_financeiras
+     (id, user_id, descricao, valor, tipo, data, categoria_id, ordem_servico_id, forma_pagamento, origem, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'receita', ?, ?, ?, ?, ?, ?, ?)`,
+    [transactionId, userId, description, amount, dataPagamento, categoriaId, order.id, method, origem, dataPagamento, dataPagamento],
+  );
+  await conn.query(
+    `INSERT INTO os_pagamentos
+     (id, user_id, ordem_servico_id, cliente_id, transacao_financeira_id, valor, forma_pagamento, data_pagamento, observacoes, origem, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmado', ?, ?)`,
+    [paymentId, userId, order.id, order.cliente_id, transactionId, amount, method, dataPagamento, observacoes, origem, dataPagamento, dataPagamento],
+  );
+
+  await applyPaymentToConditions(conn, {
+    userId,
+    orderId: order.id,
+    paymentId,
+    amount,
+    method,
+    paidAt: dataPagamento,
+    conditionId,
+  });
+
+  const financial = await syncOrderFinancialStatus(conn, userId, order.id);
+  return { order, amount, transactionId, paymentId, financial, dataPagamento, method };
+}
+
+async function registerOrderPayment({ userId, ordemNumero, ordemId, valor, formaPagamento, origem = 'manual', observacoes = null, conditionId = null }) {
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
     const [orders] = await conn.query(
       `SELECT o.*, c.nome AS cliente_nome
          FROM ordens_servico o
-         JOIN clientes c ON c.id = o.cliente_id
+         JOIN clientes c ON c.user_id = o.user_id AND c.id = o.cliente_id
         WHERE o.user_id = ? AND ${ordemId ? 'o.id = ?' : 'o.numero = ?'}
-        LIMIT 1`,
+        LIMIT 1 FOR UPDATE`,
       [userId, ordemId || ordemNumero],
     );
     const order = orders[0];
     if (!order) throw new Error('Ordem de servico nao encontrada');
-    if (order.status === 'cancelado') throw new Error('Nao e possivel pagar uma OS cancelada');
-
-    await ensureReceivableForOrder(conn, userId, order);
-
-    const [[currentPaidRow]] = await conn.query(
-      `SELECT COALESCE(SUM(valor), 0) AS total_pago
-         FROM os_pagamentos
-        WHERE user_id = ? AND ordem_servico_id = ? AND status = 'confirmado'`,
-      [userId, order.id],
-    );
-    const remaining = money(Number(order.valor_total || 0) - Number(currentPaidRow?.total_pago || 0));
-    const amount = money(valor || remaining);
-    if (amount <= 0) throw new Error('Valor de pagamento invalido');
-    if (remaining <= 0) throw new Error('Esta OS ja esta quitada');
-    if (amount > remaining) throw new Error(`Valor maior que o saldo pendente da OS (${remaining.toFixed(2)})`);
-
-    const categoriaId = await ensureDefaultFinancialCategory(userId, 'receita', 'Servicos', '#10B981');
-    const dataPagamento = now();
-    const paymentId = uuid();
-    const transactionId = uuid();
-    const description = `Pagamento OS #${order.numero} - ${order.cliente_nome}`;
-
-    await conn.query(
-      `INSERT INTO transacoes_financeiras
-       (id, user_id, descricao, valor, tipo, data, categoria_id, ordem_servico_id, forma_pagamento, origem, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'receita', ?, ?, ?, ?, ?, ?, ?)`,
-      [transactionId, userId, description, amount, dataPagamento, categoriaId, order.id, formaPagamento || order.forma_pagamento || null, origem, dataPagamento, dataPagamento],
-    );
-
-    await conn.query(
-      `INSERT INTO os_pagamentos
-       (id, user_id, ordem_servico_id, cliente_id, transacao_financeira_id, valor, forma_pagamento, data_pagamento, observacoes, origem, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmado', ?, ?)`,
-      [paymentId, userId, order.id, order.cliente_id, transactionId, amount, formaPagamento || order.forma_pagamento || null, dataPagamento, observacoes, origem, dataPagamento, dataPagamento],
-    );
-
-    const financial = await syncOrderFinancialStatus(conn, userId, order.id);
+    const result = await registerOrderPaymentInTransaction(conn, {
+      userId, order, valor, formaPagamento, origem, observacoes, conditionId,
+    });
     await conn.commit();
-    return { order, amount, transactionId, paymentId, financial };
+    return result;
   } catch (error) {
     await conn.rollback();
     throw error;
   } finally {
     conn.release();
   }
+}
+
+const PAYMENT_METHODS = new Set(['pix', 'credito', 'debito', 'dinheiro', 'boleto', 'a_definir']);
+const RECEIVED_PAYMENT_METHODS = new Set(['pix', 'credito', 'debito', 'dinheiro', 'boleto']);
+const PAYMENT_MOMENTS = new Set(['agora', 'retirada', 'data']);
+
+async function saveOrderPaymentConditions(conn, { userId, order, rawConditions, role }) {
+  const [receivedConditions] = await conn.query(
+    `SELECT * FROM os_condicoes_pagamento
+      WHERE user_id = ? AND ordem_servico_id = ? AND status = 'recebido'
+      ORDER BY ordem, created_at FOR UPDATE`,
+    [userId, order.id],
+  );
+  const receivedIds = new Set(receivedConditions.map((condition) => condition.id));
+  const orderTotal = money(order.valor_total ?? (Number(order.valor_servicos || 0) - Number(order.desconto || 0)));
+  const conditions = (Array.isArray(rawConditions) ? rawConditions : [])
+    .filter((condition) => !condition?.id || !receivedIds.has(condition.id))
+    .filter((condition) => !(orderTotal === 0 && money(condition?.valor) === 0))
+    .map((condition, index) => {
+      const method = String(condition?.forma_pagamento || '').trim().toLowerCase();
+      const moment = String(condition?.momento || 'retirada').trim().toLowerCase();
+      const value = money(condition?.valor);
+      const dueDate = condition?.data_vencimento ? String(condition.data_vencimento).slice(0, 10) : null;
+      if (value <= 0) throw new Error(`Informe um valor valido na condicao ${index + 1}`);
+      if (!PAYMENT_METHODS.has(method)) throw new Error(`Forma de pagamento invalida na condicao ${index + 1}`);
+      if (!PAYMENT_MOMENTS.has(moment)) throw new Error(`Momento de pagamento invalido na condicao ${index + 1}`);
+      if (moment === 'data' && !dueDate) throw new Error(`Informe o vencimento da condicao ${index + 1}`);
+      if (moment === 'agora' && !RECEIVED_PAYMENT_METHODS.has(method)) throw new Error(`Informe a forma usada no recebimento da condicao ${index + 1}`);
+      if (moment === 'agora' && role !== 'admin') throw Object.assign(new Error('Somente administradores podem confirmar valores recebidos'), { status: 403 });
+      return {
+        id: uuid(),
+        value,
+        method,
+        moment,
+        dueDate: moment === 'agora' ? todayDate() : moment === 'retirada' ? String(order.data_previsao || todayDate()).slice(0, 10) : dueDate,
+        notes: cleanNullableText(condition?.observacoes),
+        order: index + receivedConditions.length + 1,
+      };
+    });
+
+  const plannedTotal = money(
+    receivedConditions.reduce((sum, condition) => sum + Number(condition.valor || 0), 0)
+    + conditions.reduce((sum, condition) => sum + condition.value, 0),
+  );
+  if (orderTotal > 0 && !conditions.length && !receivedConditions.length) {
+    throw new Error('Adicione ao menos uma condicao de pagamento');
+  }
+  if (Math.round(plannedTotal * 100) !== Math.round(orderTotal * 100)) {
+    throw new Error(`As condicoes somam R$ ${plannedTotal.toFixed(2)}, mas o total da OS e R$ ${orderTotal.toFixed(2)}`);
+  }
+
+  await conn.query(
+    `DELETE FROM os_condicoes_pagamento
+      WHERE user_id = ? AND ordem_servico_id = ? AND status = 'pendente'`,
+    [userId, order.id],
+  );
+
+  const createdAt = now();
+  for (const condition of conditions) {
+    await conn.query(
+      `INSERT INTO os_condicoes_pagamento
+       (id, user_id, ordem_servico_id, pagamento_id, valor, forma_pagamento, momento,
+        data_vencimento, status, observacoes, ordem, created_at, updated_at)
+       VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 'pendente', ?, ?, ?, ?)`,
+      [condition.id, userId, order.id, condition.value, condition.method, condition.moment, condition.dueDate, condition.notes, condition.order, createdAt, createdAt],
+    );
+  }
+
+  for (const condition of conditions.filter((item) => item.moment === 'agora')) {
+    await registerOrderPaymentInTransaction(conn, {
+      userId,
+      order,
+      valor: condition.value,
+      formaPagamento: condition.method,
+      origem: 'abertura_os',
+      observacoes: condition.notes || 'Pagamento confirmado na abertura da OS',
+      conditionId: condition.id,
+    });
+  }
+
+  const methods = [...new Set([...receivedConditions.map((item) => item.forma_pagamento), ...conditions.map((item) => item.method)].filter(Boolean))];
+  const primaryMethod = methods.length > 1 ? 'misto' : methods[0] || 'a_definir';
+  await conn.query(
+    'UPDATE ordens_servico SET forma_pagamento = ? WHERE user_id = ? AND id = ?',
+    [primaryMethod, userId, order.id],
+  );
+  await syncReceivableForOrder(conn, userId, order.id);
+
+  const [savedConditions] = await conn.query(
+    `SELECT * FROM os_condicoes_pagamento
+      WHERE user_id = ? AND ordem_servico_id = ? AND status <> 'cancelado'
+      ORDER BY ordem, created_at`,
+    [userId, order.id],
+  );
+  return savedConditions.map((condition) => normalizeRow('os_condicoes_pagamento', condition));
 }
 
 async function createExpense({ userId, descricao, valor, formaPagamento, origem = 'manual' }) {
@@ -4305,6 +4500,105 @@ async function answerSystemQuery(userId, intent) {
   return 'Nao entendi o pedido. Exemplos: "quais OS tenho hoje?", "cadastre cliente Maria telefone 61999999999", "abra OS para Maria dia 05/06" ou "registre que a OS 125 foi paga em pix".';
 }
 
+app.post('/api/ordens/salvar', requireAuth, async (req, res) => {
+  const conn = await pool.getConnection();
+  let savedOrder = null;
+  try {
+    const orderPayload = req.body?.ordem || {};
+    const conditions = req.body?.condicoes_pagamento;
+    const cols = await getColumns('ordens_servico');
+    const data = await filterDataToColumns('ordens_servico', orderPayload);
+    const orderId = cleanNullableText(orderPayload.id);
+    const timestamp = now();
+
+    for (const column of ['user_id', 'valor_pago', 'status_financeiro', 'data_ultimo_pagamento', 'observacoes_financeiras']) delete data[column];
+    await conn.beginTransaction();
+
+    if (orderId) {
+      const [[current]] = await conn.query(
+        'SELECT * FROM ordens_servico WHERE id = ? AND user_id = ? LIMIT 1 FOR UPDATE',
+        [orderId, req.auth.accountId],
+      );
+      if (!current) throw Object.assign(new Error('Ordem de servico nao encontrada'), { status: 404 });
+      if (req.auth.role === 'operador') {
+        if (['concluido', 'cancelado'].includes(current.status)) {
+          throw Object.assign(new Error('Ordens concluidas ou canceladas nao podem ser editadas pelo operador'), { status: 403 });
+        }
+        if (data.status) {
+          const allowed = OPERATOR_STATUS_TRANSITIONS[current.status] || new Set();
+          if (!allowed.has(data.status)) throw Object.assign(new Error('Transicao de status nao permitida'), { status: 403 });
+        }
+      }
+      delete data.id;
+      delete data.numero;
+      delete data.created_at;
+      data.updated_at = timestamp;
+      if (data.valor_total === undefined && (data.valor_servicos !== undefined || data.desconto !== undefined)) {
+        data.valor_total = money(Number(data.valor_servicos ?? current.valor_servicos ?? 0) - Number(data.desconto ?? current.desconto ?? 0));
+      }
+      if (data.status === 'concluido' && !data.data_entrega) data.data_entrega = todayDate();
+      const keys = Object.keys(data);
+      if (keys.length) {
+        await conn.query(
+          `UPDATE ordens_servico SET ${keys.map((key) => `\`${key}\` = ?`).join(', ')} WHERE id = ? AND user_id = ?`,
+          [...Object.values(data), orderId, req.auth.accountId],
+        );
+      }
+      [[savedOrder]] = await conn.query(
+        `SELECT o.*, c.nome AS cliente_nome FROM ordens_servico o
+         JOIN clientes c ON c.user_id = o.user_id AND c.id = o.cliente_id
+         WHERE o.id = ? AND o.user_id = ? LIMIT 1`,
+        [orderId, req.auth.accountId],
+      );
+    } else {
+      data.id = uuid();
+      data.user_id = req.auth.accountId;
+      data.numero = Number(data.numero || await getNextOrderNumber(req.auth.accountId));
+      data.data_entrada = data.data_entrada || todayDate();
+      data.status = ['pendente', 'em_andamento'].includes(data.status) ? data.status : 'pendente';
+      data.valor_total = money(data.valor_total ?? (Number(data.valor_servicos || 0) - Number(data.desconto || 0)));
+      data.created_at = timestamp;
+      data.updated_at = timestamp;
+      const keys = Object.keys(data).filter((key) => cols.has(key));
+      await conn.query(
+        `INSERT INTO ordens_servico (${keys.map((key) => `\`${key}\``).join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`,
+        keys.map((key) => data[key]),
+      );
+      [[savedOrder]] = await conn.query(
+        `SELECT o.*, c.nome AS cliente_nome FROM ordens_servico o
+         JOIN clientes c ON c.user_id = o.user_id AND c.id = o.cliente_id
+         WHERE o.id = ? AND o.user_id = ? LIMIT 1`,
+        [data.id, req.auth.accountId],
+      );
+    }
+
+    if (!savedOrder) throw new Error('Falha ao salvar a ordem de servico');
+    const [[client]] = await conn.query('SELECT id FROM clientes WHERE id = ? AND user_id = ? LIMIT 1', [savedOrder.cliente_id, req.auth.accountId]);
+    if (!client) throw new Error('Cliente invalido para esta empresa');
+    const savedConditions = await saveOrderPaymentConditions(conn, {
+      userId: req.auth.accountId,
+      order: savedOrder,
+      rawConditions: conditions,
+      role: req.auth.role,
+    });
+    await conn.commit();
+
+    await markRemarketingConversion(pool, req.auth.accountId, savedOrder).catch(() => {});
+    await writeAudit(req, {
+      action: orderId ? 'ordem.atualizar_com_pagamentos' : 'ordem.criar_com_pagamentos',
+      resource: 'ordens_servico',
+      resourceId: savedOrder.id,
+      details: { condicoes_pagamento: savedConditions.length },
+    }).catch((auditError) => console.error('Falha ao auditar salvamento da OS:', auditError));
+    return res.json({ data: { id: savedOrder.id, numero: savedOrder.numero, condicoes_pagamento: savedConditions }, error: null });
+  } catch (error) {
+    await conn.rollback();
+    return res.status(error.status || 400).json({ data: null, error: { message: error.message } });
+  } finally {
+    conn.release();
+  }
+});
+
 app.post('/api/financeiro/os/:id/pagamentos', requireAuth, requireAdmin, async (req, res) => {
   try {
     const result = await registerOrderPayment({
@@ -4314,6 +4608,7 @@ app.post('/api/financeiro/os/:id/pagamentos', requireAuth, requireAdmin, async (
       formaPagamento: req.body?.forma_pagamento,
       origem: 'manual',
       observacoes: req.body?.observacoes || null,
+      conditionId: req.body?.condicao_pagamento_id || null,
     });
     res.json({ data: result, error: null });
   } catch (error) {

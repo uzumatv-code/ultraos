@@ -138,6 +138,20 @@ function row(label: string, value: unknown) {
   return `<div class="field"><span class="label">${escapeHtml(label)}</span><span>${escapeHtml(value || '—')}</span></div>`;
 }
 
+function paymentConditionsRows(ordem: OrdemServico) {
+  const conditions = ordem.condicoes_pagamento || [];
+  if (!conditions.length) return row('Forma de pagamento', String(ordem.forma_pagamento || '').toUpperCase());
+  const methodLabels: Record<string, string> = {
+    pix: 'PIX', credito: 'Crédito', debito: 'Débito', dinheiro: 'Dinheiro', boleto: 'Boleto', a_definir: 'A definir',
+  };
+  const momentLabels: Record<string, string> = { agora: 'recebido', retirada: 'na retirada', data: 'programado' };
+  return conditions.map((condition, index) => {
+    const status = condition.status === 'recebido' ? 'recebido' : momentLabels[condition.momento] || 'pendente';
+    const dueDate = condition.momento === 'data' && condition.data_vencimento ? ` em ${formatDate(condition.data_vencimento)}` : '';
+    return row(`Pagamento ${index + 1}`, `${formatCurrency(Number(condition.valor || 0))} · ${methodLabels[condition.forma_pagamento || ''] || condition.forma_pagamento || 'A definir'} · ${status}${dueDate}`);
+  }).join('');
+}
+
 function customText(content: string, ordem: OrdemServico, company: CompanyDocumentConfig, problemas: string, servicos: string) {
   const values: Record<string, string> = {
     '{empresa.nome}': company.nome_empresa || 'Sua Empresa',
@@ -182,7 +196,7 @@ function renderBlock(
       return section(`<div class="stack"><b>Problema</b><span>${escapeHtml(problemas)}</span></div><div class="stack"><b>Solução / serviços</b><span>${escapeHtml(servicos)}</span></div>`);
     case 'pricing': {
       const total = Number(ordem.valor_total ?? (Number(ordem.valor_servicos || 0) - Number(ordem.desconto || 0)));
-      return section(`${row('Valor dos serviços', formatCurrency(Number(ordem.valor_servicos || 0)))}${row('Desconto', formatCurrency(Number(ordem.desconto || 0)))}${row('Valor total', formatCurrency(total))}${row('Forma de pagamento', String(ordem.forma_pagamento || '').toUpperCase())}`);
+      return section(`${row('Valor dos serviços', formatCurrency(Number(ordem.valor_servicos || 0)))}${row('Desconto', formatCurrency(Number(ordem.desconto || 0)))}${row('Valor total', formatCurrency(total))}${paymentConditionsRows(ordem)}`);
     }
     case 'dates':
       return section(`${row('Data de entrada', formatDate(ordem.data_entrada))}${row('Previsão de entrega', formatDate(ordem.data_previsao))}`);

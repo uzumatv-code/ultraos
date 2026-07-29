@@ -46,10 +46,33 @@ function formatPaymentMethod(value: unknown): string {
     debito: 'Cartão de Débito',
     pix: 'PIX',
     dinheiro: 'Dinheiro',
+    boleto: 'Boleto',
+    misto: 'Pagamento misto',
+    a_definir: 'A definir',
     transferencia: 'Transferência Bancária',
   };
   const key = String(value || '').trim();
   return methods[key] || key || 'A definir';
+}
+
+function formatPaymentConditions(data: Record<string, unknown>): string {
+  if (!Array.isArray(data.condicoes_pagamento) || !data.condicoes_pagamento.length) {
+    return formatPaymentMethod(data.forma_pagamento);
+  }
+
+  return data.condicoes_pagamento
+    .filter((condition): condition is Record<string, unknown> => Boolean(condition && typeof condition === 'object'))
+    .map((condition) => {
+      const received = String(condition.status || '').toLowerCase() === 'recebido';
+      const moment = String(condition.momento || '').toLowerCase();
+      const detail = received || moment === 'agora'
+        ? 'recebido'
+        : moment === 'retirada'
+          ? 'na retirada'
+          : `em ${formatTemplateDate(condition.data_vencimento, 'data a definir')}`;
+      return `${formatPaymentMethod(condition.forma_pagamento)}: ${formatCurrency(condition.valor, 'R$ 0,00')} (${detail})`;
+    })
+    .join('\n');
 }
 
 function serviceDescription(data: Record<string, unknown>): string {
@@ -94,7 +117,7 @@ function templateValues(content: string, data: Record<string, unknown>, companyC
     servicos: services,
     problemas: problems,
     valor: formatCurrency(data.valor_total, 'A definir'),
-    forma_pagamento: formatPaymentMethod(data.forma_pagamento),
+    forma_pagamento: formatPaymentConditions(data),
     valor_servicos: formatCurrency(data.valor_servicos, 'R$ 0,00'),
     desconto: formatCurrency(data.desconto, 'R$ 0,00'),
     valor_pendente: formatCurrency(data.valor_pendente, 'R$ 0,00'),

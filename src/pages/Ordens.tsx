@@ -145,13 +145,13 @@ export function Ordens() {
     };
   }
 
-  async function registrarPagamentoOS(ordem: OrdemServico, valor?: number, observacoes = 'Pagamento registrado pela tela de OS') {
+  async function registrarPagamentoOS(ordem: OrdemServico, valor?: number, formaPagamento?: string, observacoes = 'Pagamento registrado pela tela de OS') {
     const response = await fetch(`/api/financeiro/os/${ordem.id}/pagamentos`, {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify({
         valor,
-        forma_pagamento: ordem.forma_pagamento,
+        forma_pagamento: formaPagamento || ordem.forma_pagamento,
         observacoes
       })
     });
@@ -294,18 +294,6 @@ export function Ordens() {
 
       if (error) throw error;
 
-      if (newStatus === 'concluido' && can('financeiro.write')) {
-        try {
-          await registrarPagamentoOS(ordem, undefined, 'Receita lancada automaticamente ao concluir a OS');
-        } catch (paymentError: any) {
-          const message = paymentError?.message || '';
-          if (!message.includes('ja esta quitada')) {
-            console.error('Erro ao lancar receita da OS:', paymentError);
-            toast.error(`Status atualizado, mas a receita nao foi lancada: ${message}`);
-          }
-        }
-      }
-
       // If changing to completed status, send WhatsApp message
       if (newStatus === 'concluido' && ordem.cliente?.telefone) {
         try {
@@ -415,16 +403,11 @@ export function Ordens() {
       return;
     }
 
-    const result = await alerts.confirm({
-      title: 'Registrar pagamento',
-      text: `Registrar pagamento restante de ${formatCurrency(financial.remaining)} na OS #${ordem.numero}?`,
-      icon: 'question',
-      confirmButtonText: 'Registrar'
-    });
-    if (!result.isConfirmed) return;
+    const result = await alerts.payment({ remaining: financial.remaining, defaultMethod: ordem.forma_pagamento });
+    if (!result.isConfirmed || !result.value) return;
 
     try {
-      await registrarPagamentoOS(ordem, financial.remaining);
+      await registrarPagamentoOS(ordem, result.value.value, result.value.method);
       toast.success('Pagamento registrado com sucesso!');
       buscarOrdens();
     } catch (error: any) {

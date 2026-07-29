@@ -60,7 +60,7 @@ export interface OrdemServico {
   status_financeiro?: 'pendente' | 'parcial' | 'pago' | 'cancelado';
   data_ultimo_pagamento?: string;
   observacoes_financeiras?: string;
-  forma_pagamento: 'credito' | 'debito' | 'pix';
+  forma_pagamento: 'credito' | 'debito' | 'pix' | 'dinheiro' | 'boleto' | 'misto' | 'a_definir';
   parcelas?: number;
   observacoes: string;
   data_entrada: string;
@@ -77,6 +77,7 @@ export interface OrdemServico {
   marca?: Marca;
   problemas?: Problema[];
   servicos?: Servico[];
+  condicoes_pagamento?: OSCondicaoPagamento[];
 }
 
 export interface CategoriaFinanceira {
@@ -230,6 +231,22 @@ export interface OSPagamento {
   observacoes?: string;
   origem: string;
   status: 'confirmado' | 'estornado' | 'cancelado';
+  created_at: string;
+  updated_at: string;
+  user_id: string;
+}
+
+export interface OSCondicaoPagamento {
+  id: string;
+  ordem_servico_id: string;
+  pagamento_id?: string;
+  valor: number;
+  forma_pagamento?: 'credito' | 'debito' | 'pix' | 'dinheiro' | 'boleto' | 'a_definir';
+  momento: 'agora' | 'retirada' | 'data';
+  data_vencimento?: string;
+  status: 'pendente' | 'recebido' | 'cancelado';
+  observacoes?: string;
+  ordem: number;
   created_at: string;
   updated_at: string;
   user_id: string;

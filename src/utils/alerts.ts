@@ -90,6 +90,45 @@ export const alerts = {
     });
   },
 
+  payment: (options: { remaining: number; defaultMethod?: string }) => {
+    const amount = Number(options.remaining || 0).toFixed(2);
+    const defaultMethod = ['pix', 'debito', 'credito', 'dinheiro', 'boleto'].includes(options.defaultMethod || '')
+      ? options.defaultMethod
+      : 'pix';
+    return Swal.fire({
+      ...getBaseConfig(),
+      title: 'Registrar recebimento',
+      html: `<div class="space-y-4 text-left">
+        <label class="block text-sm font-medium">Valor recebido
+          <input id="payment-amount" type="number" min="0.01" max="${amount}" step="0.01" value="${amount}" class="mt-1 w-full rounded-lg border px-3 py-2" />
+        </label>
+        <label class="block text-sm font-medium">Forma de pagamento
+          <select id="payment-method" class="mt-1 w-full rounded-lg border px-3 py-2">
+            <option value="pix" ${defaultMethod === 'pix' ? 'selected' : ''}>PIX</option>
+            <option value="debito" ${defaultMethod === 'debito' ? 'selected' : ''}>Débito</option>
+            <option value="credito" ${defaultMethod === 'credito' ? 'selected' : ''}>Crédito</option>
+            <option value="dinheiro" ${defaultMethod === 'dinheiro' ? 'selected' : ''}>Dinheiro</option>
+            <option value="boleto" ${defaultMethod === 'boleto' ? 'selected' : ''}>Boleto</option>
+          </select>
+        </label>
+        <p class="text-xs opacity-75">Saldo atual: ${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(options.remaining)}</p>
+      </div>`,
+      showCancelButton: true,
+      confirmButtonText: 'Confirmar recebimento',
+      cancelButtonText: 'Cancelar',
+      confirmButtonColor: '#10b981',
+      preConfirm: () => {
+        const value = Number((document.getElementById('payment-amount') as HTMLInputElement | null)?.value || 0);
+        const method = (document.getElementById('payment-method') as HTMLSelectElement | null)?.value || 'pix';
+        if (value <= 0 || value > options.remaining) {
+          Swal.showValidationMessage('Informe um valor válido até o saldo pendente.');
+          return false;
+        }
+        return { value, method };
+      },
+    });
+  },
+
   orderDetails: (ordem: any, onStatusUpdate?: () => void) => {
     const dark = isDarkMode();
     
@@ -317,23 +356,5 @@ export const alerts = {
 
     if (error) throw error;
 
-    if (status === 'concluido') {
-      const sessionRaw = localStorage.getItem('mysql-auth-session');
-      const token = sessionRaw ? JSON.parse(sessionRaw)?.access_token : null;
-      const response = await fetch(`/api/financeiro/os/${ordemId}/pagamentos`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {})
-        },
-        body: JSON.stringify({
-          observacoes: 'Receita lancada automaticamente ao concluir a OS'
-        })
-      });
-      const json = await response.json().catch(() => ({}));
-      if (!response.ok && !String(json.error?.message || '').includes('ja esta quitada')) {
-        throw new Error(json.error?.message || 'Erro ao lancar receita da OS');
-      }
-    }
   }
 };
