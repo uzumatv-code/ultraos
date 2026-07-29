@@ -196,9 +196,9 @@ export function Header() {
   const visibleMainItems = mainItems.filter((item) => !item.permission || can(item.permission));
   const visibleSupportItems = supportItems.filter((item) => !item.permission || can(item.permission));
   const sidebar = (
-    <aside className="flex h-full flex-col bg-slate-950 text-white">
+    <aside className="flex h-full flex-col border-r border-white/10 bg-[#10141F] text-white">
       <div className="flex items-center gap-3 px-5 py-5">
-        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-indigo-600 shadow-lg shadow-violet-500/30">
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-violet-400/30 bg-violet-600 shadow-neon">
           {logoUrl ? <img src={logoUrl} alt="Logo" className="h-7 w-7 object-contain" /> : <Music2 className="h-6 w-6" />}
         </div>
         <div className="min-w-0">
@@ -216,11 +216,11 @@ export function Header() {
               key={item.path}
               to={item.path}
               onClick={() => setMobileOpen(false)}
-              className={`flex items-center gap-3 rounded-lg px-3 py-3 text-sm font-medium transition ${
-                active ? 'bg-gradient-to-r from-violet-600 to-indigo-600 text-white shadow-lg shadow-violet-950/40' : 'text-slate-300 hover:bg-white/10 hover:text-white'
+              className={`flex items-center gap-3 rounded-xl px-2.5 py-2 text-sm font-medium transition ${
+                active ? 'bg-violet-600 text-white shadow-neon' : 'text-slate-300 hover:bg-white/10 hover:text-white'
               }`}
             >
-              <Icon className="h-5 w-5 shrink-0" />
+              <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border ${active ? 'border-white/20 bg-white/15' : 'border-white/5 bg-white/5'}`}><Icon className="h-4 w-4" /></span>
               <span className="truncate">{item.label}</span>
             </Link>
           );
@@ -246,11 +246,11 @@ export function Header() {
                     key={item.path}
                     to={item.path}
                     onClick={() => setMobileOpen(false)}
-                    className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition ${
+                    className={`flex items-center gap-3 rounded-xl px-2.5 py-2 text-sm transition ${
                       active ? 'bg-white/15 text-white' : 'text-slate-400 hover:bg-white/10 hover:text-white'
                     }`}
                   >
-                    <Icon className="h-4 w-4 shrink-0" />
+                    <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border ${active ? 'border-violet-400/30 bg-violet-500/20 text-violet-200' : 'border-white/5 bg-white/5'}`}><Icon className="h-4 w-4" /></span>
                     <span className="truncate">{item.label}</span>
                   </Link>
                 );
@@ -279,7 +279,7 @@ export function Header() {
           onClick={handleLogout}
           className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-slate-400 hover:bg-red-500/10 hover:text-red-200"
         >
-          <LogOut className="h-4 w-4" />
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg border border-red-400/10 bg-red-500/10"><LogOut className="h-4 w-4" /></span>
           Sair
         </button>
       </div>
@@ -296,7 +296,7 @@ export function Header() {
             <Menu className="h-6 w-6" />
           </button>
           <div className="flex min-w-0 items-center gap-2">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-violet-500 to-indigo-600 text-white">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-violet-600 text-white">
               <Music2 className="h-5 w-5" />
             </div>
             <span className="truncate text-sm font-semibold text-gray-950">{siteTitle}</span>
@@ -336,8 +336,8 @@ export function Header() {
         )}
       </AnimatePresence>
 
-      <header className="fixed left-64 right-0 top-0 z-30 hidden h-16 items-center justify-between border-b border-slate-200 bg-white/95 px-6 backdrop-blur lg:flex dark:border-slate-800 dark:bg-slate-950/95">
-        <p className="truncate text-sm font-semibold text-slate-900 dark:text-white">{siteTitle}</p>
+      <header className="fixed left-64 right-0 top-0 z-30 hidden h-16 items-center justify-between border-b border-[rgb(var(--app-border))] bg-[rgb(var(--app-surface))]/95 px-6 backdrop-blur lg:flex">
+        <div><p className="text-[11px] font-bold uppercase tracking-[0.14em] text-violet-600">Professional Command</p><p className="truncate text-sm font-semibold text-[rgb(var(--app-text))]">{siteTitle}</p></div>
         <div className="flex items-center gap-2">
         <ThemeToggle />
         <div className="relative">

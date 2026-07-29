@@ -89,9 +89,7 @@ export function Problemas() {
               >
                 <AlertTriangle className="w-6 h-6 text-white" />
               </motion.div>
-              <h1 className="responsive-heading text-slate-950 dark:text-white">
-                Problemas
-              </h1>
+              <div className="min-w-0"><p className="command-eyebrow">Diagnóstico</p><h1 className="responsive-heading text-slate-950 dark:text-white">Problemas</h1><p className="command-page-description">Mantenha diagnósticos claros e reutilizáveis nas ordens.</p></div>
             </motion.div>
 
             <motion.div 

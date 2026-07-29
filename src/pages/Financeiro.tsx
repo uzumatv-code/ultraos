@@ -169,31 +169,36 @@ function StatCard({
   description,
   tone,
   icon,
+  action,
+  onClick,
 }: {
   title: string;
   value: string;
   description: string;
   tone: 'green' | 'red' | 'blue' | 'amber';
   icon: React.ReactNode;
+  action: string;
+  onClick: () => void;
 }) {
   const toneMap = {
-    green: 'border-emerald-200 bg-emerald-50 text-emerald-700',
-    red: 'border-rose-200 bg-rose-50 text-rose-700',
-    blue: 'border-sky-200 bg-sky-50 text-sky-700',
-    amber: 'border-amber-200 bg-amber-50 text-amber-700',
+    green: 'command-tone-success',
+    red: 'command-tone-danger',
+    blue: 'command-tone-info',
+    amber: 'command-tone-warning',
   };
 
   return (
-    <div className="rounded-lg border border-gray-200 bg-white p-4 sm:p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-      <div className="flex items-start justify-between gap-3 sm:gap-4">
+    <button type="button" onClick={onClick} className="command-metric min-h-0">
+      <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <p className="text-sm font-medium text-gray-500 dark:text-gray-400">{title}</p>
-          <p className="mt-2 break-words text-xl font-semibold text-gray-950 dark:text-white sm:text-2xl">{value}</p>
-          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{description}</p>
+          <p className="command-metric-label">{title}</p>
+          <p className="command-metric-value">{value}</p>
+          <p className="command-metric-context">{description}</p>
         </div>
-        <div className={`rounded-lg border p-2 ${toneMap[tone]}`}>{icon}</div>
+        <span className={`command-icon command-icon-md ${toneMap[tone]}`}>{icon}</span>
       </div>
-    </div>
+      <span className="command-metric-action">{action}<ArrowRight className="h-3.5 w-3.5" /></span>
+    </button>
   );
 }
 
@@ -546,37 +551,37 @@ export function Financeiro() {
       <div className="responsive-page">
         <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Gestao financeira</p>
+            <p className="command-eyebrow">Gestão financeira</p>
             <h1 className="mt-1 text-2xl sm:text-3xl font-semibold text-gray-950 dark:text-white">Financeiro</h1>
             <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-              Caixa, recebimentos, despesas, vencimentos e categorias em uma visao operacional.
+              Caixa, recebimentos, despesas, vencimentos e categorias em uma visão operacional.
             </p>
           </div>
 
           <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap sm:items-center">
             <button onClick={() => changeMonth(-1)} className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-200">
-              Mes anterior
+              Mês anterior
             </button>
             <div className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-semibold capitalize text-gray-900 dark:border-gray-800 dark:bg-gray-900 dark:text-white">
               {periodoLabel}
             </div>
             <button onClick={() => changeMonth(1)} className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-200">
-              Proximo mes
+              Próximo mês
             </button>
           </div>
         </div>
 
         <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-          <StatCard title="Receitas do mes" value={formatCurrency(receitasMes)} description="Entradas registradas no periodo" tone="green" icon={<ArrowUpRight className="h-5 w-5" />} />
-          <StatCard title="Despesas do mes" value={formatCurrency(despesasMes)} description={`${contasMes.length} conta(s) do Contas a Pagar`} tone="red" icon={<ArrowDownRight className="h-5 w-5" />} />
-          <StatCard title="Ja pago no mes" value={formatCurrency(totalPagoMes)} description={`${contasMes.filter((conta) => conta.status === 'pago').length} conta(s) paga(s)`} tone="blue" icon={<CheckCircle className="h-5 w-5" />} />
-          <StatCard title="Resultado do mes" value={formatCurrency(lucroLiquido)} description="Receitas menos despesas do mes" tone={saldoMes >= 0 ? 'blue' : 'amber'} icon={<Wallet className="h-5 w-5" />} />
-          <StatCard title="Contas a pagar" value={formatCurrency(totalContasPendentes)} description={`${contasPendentes.length} conta(s) no mes`} tone="red" icon={<ArrowDownRight className="h-5 w-5" />} />
-          <StatCard title="A receber" value={formatCurrency(totalReceberPendente)} description={`${contasReceber.length} recebivel(is) em aberto`} tone="amber" icon={<Receipt className="h-5 w-5" />} />
+          <StatCard title="Receitas do mês" value={formatCurrency(receitasMes)} description="Entradas registradas no período" action="Ver movimentações" onClick={() => navigate('/transacoes')} tone="green" icon={<ArrowUpRight className="h-5 w-5" />} />
+          <StatCard title="Despesas do mês" value={formatCurrency(despesasMes)} description={`${contasMes.length} conta(s) do Contas a Pagar`} action="Revisar despesas" onClick={() => navigate('/contas')} tone="red" icon={<ArrowDownRight className="h-5 w-5" />} />
+          <StatCard title="Já pago no mês" value={formatCurrency(totalPagoMes)} description={`${contasMes.filter((conta) => conta.status === 'pago').length} conta(s) paga(s)`} action="Conferir pagamentos" onClick={() => navigate('/contas')} tone="blue" icon={<CheckCircle className="h-5 w-5" />} />
+          <StatCard title="Resultado do mês" value={formatCurrency(lucroLiquido)} description="Receitas menos despesas do mês" action="Analisar fluxo" onClick={() => document.getElementById('fluxo-financeiro')?.scrollIntoView({ behavior: 'smooth' })} tone={saldoMes >= 0 ? 'blue' : 'amber'} icon={<Wallet className="h-5 w-5" />} />
+          <StatCard title="Contas a pagar" value={formatCurrency(totalContasPendentes)} description={`${contasPendentes.length} conta(s) no mês`} action="Abrir contas" onClick={() => navigate('/contas')} tone="red" icon={<ArrowDownRight className="h-5 w-5" />} />
+          <StatCard title="A receber" value={formatCurrency(totalReceberPendente)} description={`${contasReceber.length} recebível(is) em aberto`} action="Registrar pagamento" onClick={() => navigate('/ordens?financeiro=aberto')} tone="amber" icon={<Receipt className="h-5 w-5" />} />
         </div>
 
         <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
-          <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900 lg:col-span-2">
+          <div id="fluxo-financeiro" className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900 lg:col-span-2">
             <div className="mb-4 flex items-center justify-between">
               <div>
                 <h2 className="text-lg font-semibold text-gray-950 dark:text-white">Fluxo dos ultimos 6 meses</h2>

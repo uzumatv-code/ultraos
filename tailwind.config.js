@@ -8,6 +8,16 @@ export default {
         sans: ['Inter Variable', 'Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
       },
       colors: {
+        ultra: {
+          canvas: '#10141F',
+          secondary: '#171C29',
+          card: '#202636',
+          primary: '#7C3AED',
+          success: '#16C784',
+          warning: '#FFB020',
+          danger: '#FF4D67',
+          info: '#4DA3FF',
+        },
         primary: {
           50: '#f5f3ff',
           100: '#ede9fe',
@@ -35,11 +45,11 @@ export default {
         },
       },
       animation: {
-        'fade-in': 'fadeIn 0.5s ease-in-out',
-        'slide-up': 'slideUp 0.5s ease-out',
-        'slide-down': 'slideDown 0.3s ease-out',
-        'scale-in': 'scaleIn 0.3s ease-out',
-        'bounce-subtle': 'bounceSubtle 0.6s ease-in-out',
+        'fade-in': 'fadeIn 0.2s ease-out',
+        'slide-up': 'slideUp 0.2s ease-out',
+        'slide-down': 'slideDown 0.2s ease-out',
+        'scale-in': 'scaleIn 0.2s ease-out',
+        'bounce-subtle': 'bounceSubtle 0.2s ease-in-out',
         'shimmer': 'shimmer 2s linear infinite',
         'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
       },
@@ -49,7 +59,7 @@ export default {
           '100%': { opacity: '1' },
         },
         slideUp: {
-          '0%': { transform: 'translateY(20px)', opacity: '0' },
+          '0%': { transform: 'translateY(8px)', opacity: '0' },
           '100%': { transform: 'translateY(0)', opacity: '1' },
         },
         slideDown: {
@@ -73,8 +83,8 @@ export default {
         xs: '2px',
       },
       boxShadow: {
-        'glass': '0 1px 2px rgba(15, 23, 42, 0.05), 0 8px 24px rgba(15, 23, 42, 0.06)',
-        'glass-lg': '0 1px 3px rgba(15, 23, 42, 0.08), 0 18px 48px rgba(15, 23, 42, 0.10)',
+        'glass': 'var(--app-shadow)',
+        'glass-lg': 'var(--app-shadow-raised)',
         'inner-lg': 'inset 0 2px 4px 0 rgba(0, 0, 0, 0.06)',
         'neon': '0 8px 24px rgba(124, 58, 237, 0.18)',
       },

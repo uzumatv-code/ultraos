@@ -444,9 +444,7 @@ export function Ordens() {
             >
               <Tool className="w-6 h-6 text-white" />
             </motion.div>
-            <h1 className="responsive-heading text-slate-950 dark:text-white">
-              Ordens de Serviço
-            </h1>
+            <div className="min-w-0"><p className="command-eyebrow">Operação</p><h1 className="responsive-heading text-slate-950 dark:text-white">Ordens de Serviço</h1><p className="command-page-description">Priorize atrasos, acompanhe a bancada e conclua atendimentos.</p></div>
           </motion.div>
           <motion.div 
             initial={{ opacity: 0, x: 20 }}

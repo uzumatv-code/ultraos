@@ -18,18 +18,18 @@ export function Card({
   className = '',
   ...props 
 }: CardProps) {
-  const baseClasses = 'min-w-0 rounded-xl border border-slate-200 shadow-sm dark:border-slate-800';
+  const baseClasses = 'command-card';
   const variantClasses = 
-    variant === 'glass' ? 'bg-white dark:bg-slate-900' :
-    variant === 'gradient' ? 'bg-violet-600 text-white border-violet-600' :
-    glass ? 'bg-white dark:bg-slate-900' : 'bg-white dark:bg-slate-900';
+    variant === 'gradient' ? 'border-violet-600 bg-violet-600 text-white' :
+    variant === 'glass' || glass ? '' : '';
   const hoverClasses = hover ? 'card-hover' : '';
   const gradientClasses = gradient ? 'border-violet-600 bg-violet-600 text-white' : '';
   
   return (
     <motion.div
-      initial={{ opacity: 0, y: 20 }}
+      initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2 }}
       className={`${baseClasses} ${variantClasses} ${hoverClasses} ${gradientClasses} ${className}`}
       {...props}
     >
@@ -40,7 +40,7 @@ export function Card({
 
 export function CardHeader({ children, className = '' }: { children: ReactNode; className?: string }) {
   return (
-    <div className={`border-b border-slate-200 px-4 py-4 sm:px-5 dark:border-slate-800 ${className}`}>
+    <div className={`border-b border-[rgb(var(--app-border))] px-4 py-4 sm:px-5 ${className}`}>
       {children}
     </div>
   );
@@ -48,7 +48,7 @@ export function CardHeader({ children, className = '' }: { children: ReactNode; 
 
 export function CardTitle({ children, className = '' }: { children: ReactNode; className?: string }) {
   return (
-    <h3 className={`text-base font-semibold text-slate-950 dark:text-white ${className}`}>
+    <h3 className={`text-base font-bold text-[rgb(var(--app-text))] ${className}`}>
       {children}
     </h3>
   );

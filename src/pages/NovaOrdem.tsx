@@ -564,8 +564,9 @@ export function NovaOrdem() {
               <ArrowLeft className="h-5 w-5" />
             </button>
             <div>
-              <p className="text-sm font-medium text-violet-700">Ordens de Serviço</p>
-              <h1 className="text-2xl font-semibold text-gray-950">{id ? 'Editar ordem' : 'Nova ordem em 3 passos'}</h1>
+              <p className="command-eyebrow">Fluxo de atendimento</p>
+              <h1 className="text-2xl font-bold tracking-tight text-gray-950">{id ? 'Editar Ordem' : 'Nova Ordem'}</h1>
+              <p className="command-page-description">Identifique o cliente, defina o serviço e confirme entrega e pagamento.</p>
             </div>
           </div>
           <div className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-600">

@@ -89,9 +89,7 @@ export function Instrumentos() {
               >
                 <Music2 className="w-6 h-6 text-white" />
               </motion.div>
-              <h1 className="responsive-heading text-slate-950 dark:text-white">
-                Equipamentos
-              </h1>
+              <div className="min-w-0"><p className="command-eyebrow">Base técnica</p><h1 className="responsive-heading text-slate-950 dark:text-white">Equipamentos</h1><p className="command-page-description">Organize os equipamentos atendidos pela equipe.</p></div>
             </motion.div>
 
             <motion.div 

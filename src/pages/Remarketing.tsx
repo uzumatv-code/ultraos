@@ -58,7 +58,8 @@ export function Remarketing() {
   const [preview, setPreview] = useState<RemarketingOpportunity | null>(null);
 
   const load = useCallback(async (silent = false) => {
-    silent ? setRefreshing(true) : setLoading(true);
+    if (silent) setRefreshing(true);
+    else setLoading(true);
     try {
       const data = await RemarketingService.getOverview();
       setOverview(data);
@@ -184,7 +185,7 @@ export function Remarketing() {
   ];
 
   return (
-    <PageContainer title="Manutenção preventiva" icon={Sparkles} iconGradient="from-emerald-500 to-teal-600">
+    <PageContainer title="Manutenção preventiva" description="Identifique oportunidades, confirme consentimentos e execute o próximo contato." eyebrow="Relacionamento ativo" icon={Sparkles}>
       <section className={`mb-5 rounded-2xl border p-5 ${overview?.provider.manualSingleAllowed || overview?.provider.automaticAllowed ? 'border-emerald-200 bg-emerald-50/70' : 'border-amber-200 bg-amber-50/70'} dark:border-slate-800 dark:bg-slate-900`}>
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-start gap-3">

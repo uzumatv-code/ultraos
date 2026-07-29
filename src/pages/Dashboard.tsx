@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { motion } from 'framer-motion';
 import {
   AlertCircle, ArrowRight, CalendarDays, CheckCircle2, ChevronDown, CircleDollarSign,
   Clock3, ListChecks, MessageCircle, Plus, RefreshCw, Sparkles, TimerReset, TrendingUp,
@@ -14,6 +13,8 @@ import { supabase } from '../lib/supabase';
 import { alerts } from '../utils/alerts';
 import { toast } from '../components/ToastCustom';
 import type { OrdemServico } from '../types/database';
+import { ActionMetric, CommandCard, CommandPageHeader, CommandTextAction, type CommandTone } from '../components/Command';
+import { Button } from '../components/Button';
 
 type DashboardMetric = {
   entregas_hoje: number;
@@ -100,37 +101,34 @@ export function Dashboard() {
   const isFinancial = can('financeiro.read') && Boolean(summary?.financial);
   const maxPipeline = useMemo(() => Math.max(1, ...(summary ? Object.values(summary.pipeline) : [1])), [summary]);
   const metrics = summary ? [
-    { label: 'Entregas hoje', value: summary.metrics.entregas_hoje, detail: 'previsões para hoje', icon: CalendarDays, tone: 'blue', href: '/ordens?prazo=hoje' },
-    { label: 'OS atrasadas', value: summary.metrics.atrasadas, detail: summary.metrics.atrasadas ? 'precisam de atenção' : 'operação em dia', icon: TimerReset, tone: 'rose', href: '/ordens?prazo=atraso' },
-    { label: 'Em andamento', value: summary.metrics.em_andamento, detail: 'na bancada agora', icon: Wrench, tone: 'violet', href: '/ordens?status=em_andamento' },
+    { label: 'Entregas hoje', value: summary.metrics.entregas_hoje, detail: `${summary.metrics.entregas_hoje} entregas previstas para hoje`, action: 'Abrir agenda', icon: CalendarDays, tone: 'info' as CommandTone, href: '/ordens?prazo=hoje' },
+    { label: 'OS atrasadas', value: summary.metrics.atrasadas, detail: summary.metrics.atrasadas ? `${summary.metrics.atrasadas} ordens exigem atenção agora` : 'Nenhuma ordem fora do prazo', action: summary.metrics.atrasadas ? 'Resolver agora' : 'Ver ordens', icon: TimerReset, tone: 'danger' as CommandTone, href: '/ordens?prazo=atraso' },
+    { label: 'Em andamento', value: summary.metrics.em_andamento, detail: `${summary.metrics.em_andamento} serviços estão na bancada`, action: 'Acompanhar execução', icon: Wrench, tone: 'brand' as CommandTone, href: '/ordens?status=em_andamento' },
     isFinancial
-      ? { label: 'A receber', value: formatCurrency(summary.financial!.a_receber), detail: `${formatCurrency(summary.financial!.vencido)} vencido`, icon: WalletCards, tone: 'emerald', href: '/ordens?financeiro=aberto' }
-      : { label: 'Concluídas no mês', value: summary.metrics.concluidas_mes, detail: 'entregas realizadas', icon: CheckCircle2, tone: 'emerald', href: '/ordens?status=concluido' },
+      ? { label: 'A receber', value: formatCurrency(summary.financial!.a_receber), detail: `${formatCurrency(summary.financial!.vencido)} já está vencido`, action: 'Registrar pagamento', icon: WalletCards, tone: 'success' as CommandTone, href: '/ordens?financeiro=aberto' }
+      : { label: 'Concluídas no mês', value: summary.metrics.concluidas_mes, detail: `${summary.metrics.concluidas_mes} serviços concluídos no mês`, action: 'Ver entregas', icon: CheckCircle2, tone: 'success' as CommandTone, href: '/ordens?status=concluido' },
   ] : [];
-  const metricTones: Record<string, string> = {
-    blue: 'bg-blue-50 text-blue-600 dark:bg-blue-950/40 dark:text-blue-300',
-    rose: 'bg-rose-50 text-rose-600 dark:bg-rose-950/40 dark:text-rose-300',
-    violet: 'bg-violet-50 text-violet-600 dark:bg-violet-950/40 dark:text-violet-300',
-    emerald: 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-300',
-  };
 
   if (loading && !summary) return <DashboardSkeleton />;
 
   return (
     <main className="responsive-page space-y-6">
-      <header className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-        <div><p className="flex items-center gap-2 text-sm font-semibold text-violet-600"><Sparkles className="h-4 w-4" /> Visão operacional</p><h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-950 sm:text-3xl dark:text-white">{greeting()}, {firstName}</h1><p className="mt-1 text-sm text-slate-500">Estas são as prioridades e entregas que exigem atenção hoje.</p></div>
-        <div className="flex flex-wrap gap-2"><button onClick={() => void loadSummary(true)} disabled={refreshing} className="inline-flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-600 shadow-sm disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"><RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} /> Atualizar</button><button onClick={() => navigate('/clientes')} className="inline-flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"><UserPlus className="h-4 w-4" /> Clientes</button><button onClick={() => navigate('/conversas')} className="inline-flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"><MessageCircle className="h-4 w-4" /> Conversas</button><button onClick={() => navigate('/ordens/nova')} className="inline-flex h-10 items-center gap-2 rounded-xl bg-violet-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-violet-700"><Plus className="h-4 w-4" /> Nova OS</button></div>
-      </header>
+      <CommandPageHeader
+        eyebrow="Visão operacional"
+        title={`${greeting()}, ${firstName}`}
+        description="Prioridades, prazos e próximas ações para manter a operação sob controle."
+        icon={Sparkles}
+        actions={<><Button size="sm" variant="text" icon={RefreshCw} onClick={() => void loadSummary(true)} disabled={refreshing}>Atualizar</Button><Button size="sm" variant="secondary" icon={UserPlus} onClick={() => navigate('/clientes')}>Clientes</Button><Button size="sm" variant="secondary" icon={MessageCircle} onClick={() => navigate('/conversas')}>Conversas</Button><Button size="sm" icon={Plus} onClick={() => navigate('/ordens/nova')}>Nova Ordem</Button></>}
+      />
 
-      <section className="grid grid-cols-2 gap-3 xl:grid-cols-4">{metrics.map(({ label, value, detail, icon: Icon, tone, href }, index) => <motion.button key={label} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.05 }} onClick={() => navigate(href)} className="group rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-violet-200 hover:shadow-md dark:border-slate-800 dark:bg-slate-900 dark:hover:border-violet-800"><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-semibold text-slate-500">{label}</p><p className="mt-1 text-2xl font-bold text-slate-950 dark:text-white">{value}</p><p className="mt-1 text-xs text-slate-400">{detail}</p></div><div className={`rounded-xl p-2.5 ${metricTones[tone]}`}><Icon className="h-5 w-5" /></div></div><span className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-violet-600 opacity-0 transition group-hover:opacity-100">Ver detalhes <ArrowRight className="h-3 w-3" /></span></motion.button>)}</section>
+      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">{metrics.map(({ label, value, detail, action, icon, tone, href }) => <ActionMetric key={label} label={label} value={value} context={detail} actionLabel={action} icon={icon} tone={tone} onClick={() => navigate(href)} />)}</section>
 
       <section className="grid gap-6 xl:grid-cols-[minmax(0,1.5fr)_minmax(320px,0.7fr)]">
-        <DashboardCard title="Precisa da sua atenção" subtitle="Ordenado por impacto operacional" icon={ListChecks} action={<button onClick={() => navigate('/ordens')} className="text-xs font-semibold text-violet-600">Ver todas as OS</button>}>
+        <DashboardCard title="Precisa da sua atenção" subtitle="Ordenado por impacto operacional" icon={ListChecks} action={<CommandTextAction onClick={() => navigate('/ordens')}>Ver todas as OS</CommandTextAction>}>
           {summary?.priorities.length ? <div className="space-y-2">{summary.priorities.map((item) => <button key={item.id} onClick={() => navigate(item.href)} className="flex w-full items-center gap-3 rounded-xl border border-slate-100 p-3 text-left transition hover:border-violet-200 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800"><span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border ${priorityTone[item.severity]}`}><AlertCircle className="h-4 w-4" /></span><span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold text-slate-800 dark:text-slate-100">{item.title}</span><span className="block truncate text-xs text-slate-500">{item.description}</span></span><ArrowRight className="h-4 w-4 shrink-0 text-slate-300" /></button>)}</div> : <EmptyPanel icon={CheckCircle2} title="Nenhuma prioridade crítica" description="A operação está em dia neste momento." />}
         </DashboardCard>
 
-        <DashboardCard title="Próximas entregas" subtitle="Hoje e próximos 7 dias" icon={CalendarDays} action={<button onClick={() => navigate('/ordens')} className="text-xs font-semibold text-violet-600">Abrir ordens</button>}>
+        <DashboardCard title="Próximas entregas" subtitle="Hoje e próximos 7 dias" icon={CalendarDays} action={<CommandTextAction onClick={() => navigate('/ordens')}>Abrir ordens</CommandTextAction>}>
           {summary?.agenda.length ? <div className="space-y-1">{summary.agenda.slice(0, 7).map((item) => <button key={item.id} onClick={() => navigate(`/ordens/${item.id}/historico`)} className="flex w-full items-center gap-3 rounded-xl p-2.5 text-left transition hover:bg-slate-50 dark:hover:bg-slate-800"><div className="w-12 shrink-0 text-center"><p className="text-xs font-bold text-violet-600">{formatDateOnly(item.data_previsao).slice(0, 5)}</p></div><div className="min-w-0 flex-1 border-l border-slate-200 pl-3 dark:border-slate-700"><p className="truncate text-sm font-semibold text-slate-800 dark:text-slate-100">OS #{item.numero} · {item.cliente_nome}</p><p className="truncate text-xs text-slate-500">{[item.instrumento_nome, item.marca_nome, item.modelo].filter(Boolean).join(' ')}</p></div></button>)}</div> : <EmptyPanel icon={CalendarDays} title="Agenda livre" description="Nenhuma entrega prevista nos próximos sete dias." />}
         </DashboardCard>
       </section>
@@ -139,7 +137,7 @@ export function Dashboard() {
         <DashboardCard title="Pipeline das ordens" subtitle="Distribuição atual do trabalho" icon={TrendingUp}>
           <div className="space-y-4">{summary && ([['Pendente', summary.pipeline.pendente, 'bg-amber-500'], ['Em andamento', summary.pipeline.em_andamento, 'bg-violet-500'], ['Em atraso', summary.pipeline.atraso, 'bg-rose-500'], ['Concluídas no mês', summary.pipeline.concluido_mes, 'bg-emerald-500']] as const).map(([label, value, color]) => <button key={label} onClick={() => navigate(label === 'Em atraso' ? '/ordens?prazo=atraso' : `/ordens?status=${label === 'Pendente' ? 'pendente' : label === 'Em andamento' ? 'em_andamento' : 'concluido'}`)} className="block w-full text-left"><div className="mb-1.5 flex justify-between text-xs"><span className="font-medium text-slate-600 dark:text-slate-300">{label}</span><strong className="text-slate-900 dark:text-white">{value}</strong></div><div className="h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800"><div className={`h-full rounded-full ${color}`} style={{ width: `${Math.max(value ? 6 : 0, (value / maxPipeline) * 100)}%` }} /></div></button>)}</div>
         </DashboardCard>
-        {isFinancial && summary?.financial && <DashboardCard title="Financeiro" subtitle="Regime de caixa e vencimentos" icon={CircleDollarSign} action={<button onClick={() => navigate('/financeiro')} className="text-xs font-semibold text-violet-600">Abrir financeiro</button>}><div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1"><FinancialLine label="Recebido no mês" value={summary.financial.recebido_mes} tone="text-emerald-600" /><FinancialLine label="A receber" value={summary.financial.a_receber} tone="text-violet-600" /><FinancialLine label="Saldo vencido" value={summary.financial.vencido} tone={summary.financial.vencido ? 'text-rose-600' : 'text-slate-500'} /></div></DashboardCard>}
+        {isFinancial && summary?.financial && <DashboardCard title="Financeiro" subtitle="Regime de caixa e vencimentos" icon={CircleDollarSign} action={<CommandTextAction onClick={() => navigate('/financeiro')}>Abrir financeiro</CommandTextAction>}><div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1"><FinancialLine label="Recebido no mês" value={summary.financial.recebido_mes} tone="text-emerald-600" /><FinancialLine label="A receber" value={summary.financial.a_receber} tone="text-violet-600" /><FinancialLine label="Saldo vencido" value={summary.financial.vencido} tone={summary.financial.vencido ? 'text-rose-600' : 'text-slate-500'} /></div></DashboardCard>}
       </section>
 
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900"><button onClick={() => void toggleCalendar()} className="flex w-full items-center justify-between p-5 text-left"><div className="flex items-center gap-3"><span className="rounded-xl bg-violet-50 p-2.5 text-violet-600 dark:bg-violet-950/40"><CalendarDays className="h-5 w-5" /></span><div><h2 className="font-bold text-slate-900 dark:text-white">Planejamento mensal</h2><p className="text-xs text-slate-500">Abra o calendário completo quando precisar reorganizar prazos.</p></div></div><ChevronDown className={`h-5 w-5 text-slate-400 transition ${showCalendar ? 'rotate-180' : ''}`} /></button>{showCalendar && <div className="border-t border-slate-200 p-4 dark:border-slate-800"><CustomCalendar orders={calendarOrders} loading={calendarLoading} onEventClick={(order) => alerts.orderDetails(order, () => { void loadCalendar(); void loadSummary(true); })} onUpdate={() => { void loadCalendar(); void loadSummary(true); }} /></div>}</section>
@@ -156,7 +154,7 @@ export function Dashboard() {
 }
 
 function DashboardCard({ title, subtitle, icon: Icon, action, children }: { title: string; subtitle: string; icon: typeof Wrench; action?: React.ReactNode; children: React.ReactNode }) {
-  return <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900"><header className="mb-4 flex items-start justify-between gap-3"><div className="flex items-center gap-3"><span className="rounded-xl bg-violet-50 p-2 text-violet-600 dark:bg-violet-950/40"><Icon className="h-5 w-5" /></span><div><h2 className="font-bold text-slate-900 dark:text-white">{title}</h2><p className="text-xs text-slate-500">{subtitle}</p></div></div>{action}</header>{children}</section>;
+  return <CommandCard title={title} description={subtitle} icon={Icon} action={action}>{children}</CommandCard>;
 }
 
 function FinancialLine({ label, value, tone }: { label: string; value: number; tone: string }) {

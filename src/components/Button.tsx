@@ -3,7 +3,8 @@ import { Loader2, LucideIcon } from 'lucide-react';
 import { ButtonHTMLAttributes, forwardRef } from 'react';
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: 'primary' | 'secondary' | 'success' | 'danger' | 'ghost';
+  /** success/danger/ghost permanecem como aliases compatíveis das três famílias visuais. */
+  variant?: 'primary' | 'secondary' | 'text' | 'success' | 'danger' | 'ghost';
   size?: 'sm' | 'md' | 'lg';
   loading?: boolean;
   icon?: LucideIcon;
@@ -22,20 +23,21 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
     disabled,
     ...props 
   }, ref) => {
-    const baseClasses = 'relative inline-flex min-w-0 items-center justify-center rounded-lg font-semibold transition-[background-color,border-color,color,box-shadow] duration-200 disabled:cursor-not-allowed disabled:opacity-50';
+    const baseClasses = 'relative inline-flex min-w-0 items-center justify-center rounded-xl font-semibold transition-[background-color,border-color,color,box-shadow,transform] duration-200 disabled:cursor-not-allowed disabled:opacity-50';
     
     const variantClasses = {
-      primary: 'border border-violet-600 bg-violet-600 text-white shadow-sm hover:border-violet-700 hover:bg-violet-700',
-      secondary: 'border border-slate-300 bg-white text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800',
-      success: 'border border-emerald-600 bg-emerald-600 text-white shadow-sm hover:border-emerald-700 hover:bg-emerald-700',
-      danger: 'border border-red-600 bg-red-600 text-white shadow-sm hover:border-red-700 hover:bg-red-700',
-      ghost: 'border border-transparent bg-transparent text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white',
+      primary: 'border border-violet-600 bg-violet-600 text-white shadow-sm hover:border-violet-500 hover:bg-violet-500 hover:shadow-neon',
+      secondary: 'border border-[rgb(var(--app-border))] bg-[rgb(var(--app-surface-raised))] text-[rgb(var(--app-text))] shadow-sm hover:border-violet-500/50 hover:bg-violet-500/5',
+      text: 'border border-transparent bg-transparent text-violet-600 hover:bg-violet-500/10',
+      success: 'border border-violet-600 bg-violet-600 text-white shadow-sm hover:border-violet-500 hover:bg-violet-500 hover:shadow-neon',
+      danger: 'border border-[rgb(var(--app-border))] bg-[rgb(var(--app-surface-raised))] text-[#FF4D67] shadow-sm hover:border-[#FF4D67]/50 hover:bg-[#FF4D67]/10',
+      ghost: 'border border-transparent bg-transparent text-violet-600 hover:bg-violet-500/10',
     };
     
     const sizeClasses = {
-      sm: 'min-h-9 px-3 py-1.5 text-sm gap-1.5',
-      md: 'min-h-11 px-4 py-2 text-sm gap-2',
-      lg: 'min-h-12 px-5 py-2.5 text-base gap-2.5',
+      sm: 'min-h-10 gap-2 px-4 py-2 text-sm',
+      md: 'min-h-12 gap-2 px-4 py-2 text-sm',
+      lg: 'min-h-14 gap-3 px-6 py-3 text-base',
     };
     
     const widthClass = fullWidth ? 'w-full' : '';

@@ -89,9 +89,7 @@ export function Marcas() {
               >
                 <Bookmark className="w-6 h-6 text-white" />
               </motion.div>
-              <h1 className="responsive-heading text-slate-950 dark:text-white">
-                Marcas
-              </h1>
+              <div className="min-w-0"><p className="command-eyebrow">Base técnica</p><h1 className="responsive-heading text-slate-950 dark:text-white">Marcas</h1><p className="command-page-description">Padronize referências usadas nas ordens de serviço.</p></div>
             </motion.div>
 
             <motion.div 

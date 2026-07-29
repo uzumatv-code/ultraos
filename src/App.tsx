@@ -60,19 +60,19 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
                 scale: [1, 1.1, 1]
               }}
               transition={{ 
-                rotate: { duration: 2, repeat: Infinity, ease: "linear" },
-                scale: { duration: 1, repeat: Infinity, ease: "easeInOut" }
+                rotate: { duration: 0.2, ease: "linear" },
+                scale: { duration: 0.2, ease: "easeOut" }
               }}
               className="w-16 h-16 gradient-primary rounded-2xl shadow-neon"
             />
             <motion.div
               animate={{ opacity: [0.5, 1, 0.5] }}
-              transition={{ duration: 2, repeat: Infinity }}
+              transition={{ duration: 0.2 }}
               className="h-2 w-32 bg-primary-200 rounded-full overflow-hidden"
             >
               <motion.div
                 animate={{ x: ['-100%', '200%'] }}
-                transition={{ duration: 1.5, repeat: Infinity, ease: "easeInOut" }}
+                transition={{ duration: 0.2, ease: "easeOut" }}
                 className="h-full w-1/2 gradient-primary"
               />
             </motion.div>
@@ -98,12 +98,12 @@ function RequirePermission({ permission, children }: { permission: Permission; c
 
 function Layout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-screen w-full bg-slate-50 dark:bg-slate-950">
+    <div className="min-h-screen w-full bg-[rgb(var(--app-canvas))]">
       <Header />
       <motion.div 
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.25 }}
+        transition={{ duration: 0.2 }}
         className="pb-[calc(5rem+env(safe-area-inset-bottom))] pt-16 lg:pb-0 lg:pl-64 lg:pt-16"
       >
         {children}
@@ -367,20 +367,20 @@ function App() {
           success: {
             duration: 4000,
             style: {
-              borderLeft: '4px solid #059669',
+              borderLeft: '4px solid #16C784',
             },
             iconTheme: {
-              primary: '#059669',
+              primary: '#16C784',
               secondary: '#ecfdf5',
             },
           },
           error: {
             duration: 5000,
             style: {
-              borderLeft: '4px solid #dc2626',
+              borderLeft: '4px solid #FF4D67',
             },
             iconTheme: {
-              primary: '#dc2626',
+              primary: '#FF4D67',
               secondary: '#fef2f2',
             },
           },
