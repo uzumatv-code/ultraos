@@ -454,7 +454,7 @@ export function CustomCalendarBills({ bills, loading = false, onUpdate, onMonthC
                       Categoria
                     </h4>
                     <span
-                      className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium"
+                      className="theme-category-color inline-flex items-center px-3 py-1 rounded-full text-sm font-medium"
                       style={{
                         backgroundColor: `${selectedBill.categoria.cor}20`,
                         color: selectedBill.categoria.cor

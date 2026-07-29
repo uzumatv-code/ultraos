@@ -276,7 +276,7 @@ export function Transacoes() {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <span
-                          className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold border-2 backdrop-blur-sm"
+                          className="theme-category-color inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold border-2 backdrop-blur-sm"
                           style={{
                             backgroundColor: `${transacao.categoria?.cor}15`,
                             borderColor: `${transacao.categoria?.cor}40`,

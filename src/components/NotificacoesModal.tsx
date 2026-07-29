@@ -236,7 +236,7 @@ Seu ${ordem.instrumento?.nome} ${ordem.marca?.nome} ${ordem.modelo} está a 6 me
                   <div className="flex items-center justify-between mt-2">
                     <div className="flex items-center space-x-2">
                       <span
-                        className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium"
+                        className="theme-category-color inline-flex items-center px-2 py-1 rounded-full text-xs font-medium"
                         style={{
                           backgroundColor: `${conta.categoria?.cor}20`,
                           color: conta.categoria?.cor

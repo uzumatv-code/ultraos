@@ -34,6 +34,7 @@ import { formatCurrency } from '../utils/formatters';
 import { TransacaoModal } from '../components/TransacaoModal';
 import { CategoriaFinanceiraModal } from '../components/CategoriaFinanceiraModal';
 import { ImportarCSVModal } from '../components/ImportarCSVModal';
+import { getTheme, themeChangeEvent, type Theme } from '../lib/theme';
 import type { CategoriaFinanceira, ContaPagar, ContaReceber, TransacaoFinanceira } from '../types/database';
 
 ChartJS.register(
@@ -213,6 +214,7 @@ export function Financeiro() {
   const [modalCategoriaAberto, setModalCategoriaAberto] = useState(false);
   const [modalImportarCSVAberto, setModalImportarCSVAberto] = useState(false);
   const [showAllReceivables, setShowAllReceivables] = useState(false);
+  const [isDarkTheme, setIsDarkTheme] = useState(() => getTheme() === 'dark');
   const [transacaoParaEditar, setTransacaoParaEditar] = useState<TransacaoFinanceira>();
   const [busca, setBusca] = useState('');
   const [tipoFiltro, setTipoFiltro] = useState<TipoFiltro>('todos');
@@ -361,6 +363,14 @@ export function Financeiro() {
     buscarDados();
   }, [buscarDados]);
 
+  useEffect(() => {
+    const handleThemeChange = (event: Event) => {
+      setIsDarkTheme((event as CustomEvent<Theme>).detail === 'dark');
+    };
+    window.addEventListener(themeChangeEvent, handleThemeChange);
+    return () => window.removeEventListener(themeChangeEvent, handleThemeChange);
+  }, []);
+
   const receitasMes = useMemo(
     () => transacoesMes.filter((item) => item.tipo === 'receita').reduce((acc, item) => acc + Number(item.valor || 0), 0),
     [transacoesMes],
@@ -450,7 +460,27 @@ export function Financeiro() {
     responsive: true,
     maintainAspectRatio: false,
     plugins: {
-      legend: { position: 'bottom' as const },
+      legend: {
+        position: 'bottom' as const,
+        labels: { color: isDarkTheme ? '#cbd5e1' : '#475569' },
+      },
+      tooltip: {
+        backgroundColor: isDarkTheme ? '#0f172a' : '#ffffff',
+        titleColor: isDarkTheme ? '#f8fafc' : '#0f172a',
+        bodyColor: isDarkTheme ? '#cbd5e1' : '#475569',
+        borderColor: isDarkTheme ? '#334155' : '#e2e8f0',
+        borderWidth: 1,
+      },
+    },
+    scales: {
+      x: {
+        ticks: { color: isDarkTheme ? '#94a3b8' : '#64748b' },
+        grid: { color: isDarkTheme ? 'rgba(51, 65, 85, 0.55)' : 'rgba(226, 232, 240, 0.8)' },
+      },
+      y: {
+        ticks: { color: isDarkTheme ? '#94a3b8' : '#64748b' },
+        grid: { color: isDarkTheme ? 'rgba(51, 65, 85, 0.55)' : 'rgba(226, 232, 240, 0.8)' },
+      },
     },
   };
 
@@ -744,7 +774,7 @@ export function Financeiro() {
                         </button>
                       </td>
                       <td className="px-5 py-4">
-                        <span className="inline-flex rounded-full px-2.5 py-1 text-xs font-medium" style={{ backgroundColor: `${transacao.categoria?.cor || '#64748B'}1A`, color: transacao.categoria?.cor || '#64748B' }}>
+                        <span className="theme-category-color inline-flex rounded-full px-2.5 py-1 text-xs font-medium" style={{ backgroundColor: `${transacao.categoria?.cor || '#64748B'}1A`, color: transacao.categoria?.cor || '#64748B' }}>
                           {transacao.categoria?.nome || 'Sem categoria'}
                         </span>
                       </td>

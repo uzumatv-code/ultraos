@@ -41,48 +41,147 @@ body {
  * Compatibilidade para telas antigas que ainda usam cores claras fixas.
  * Mantém modais, menus e formulários legíveis enquanto o tema é alternado.
  */
-html.dark [class~='bg-white'] {
+html.dark :where(
+  [class~='bg-white'], [class~='bg-white/50'], [class~='bg-white/70'],
+  [class~='bg-white/80'], [class~='bg-white/95']
+) {
   background-color: rgb(var(--app-surface));
 }
 
-html.dark [class~='bg-gray-50'],
-html.dark [class~='bg-gray-100'],
-html.dark [class~='bg-gray-200'] {
+html.dark :where(
+  [class~='bg-slate-50'], [class~='bg-slate-100'], [class~='bg-slate-200'], [class~='bg-slate-300'],
+  [class~='bg-gray-50'], [class~='bg-gray-100'], [class~='bg-gray-200'], [class~='bg-gray-300']
+) {
   background-color: rgb(var(--app-surface-muted));
 }
 
-html.dark [class~='text-gray-950'],
-html.dark [class~='text-gray-900'],
-html.dark [class~='text-gray-800'],
-html.dark [class~='text-gray-700'] {
+html.dark :where(
+  [class~='bg-slate-50/70'], [class~='bg-gray-50/80'], [class~='bg-gray-100/50'],
+  [class~='bg-gray-200/50']
+) {
+  background-color: rgb(var(--app-surface-muted) / 0.78);
+}
+
+html.dark :where(
+  [class~='text-slate-950'], [class~='text-slate-900'], [class~='text-slate-800'], [class~='text-slate-700'],
+  [class~='text-gray-950'], [class~='text-gray-900'], [class~='text-gray-800'], [class~='text-gray-700']
+) {
   color: rgb(var(--app-text));
 }
 
-html.dark [class~='text-gray-600'],
-html.dark [class~='text-gray-500'],
-html.dark [class~='text-gray-400'] {
+html.dark :where(
+  [class~='text-slate-600'], [class~='text-slate-500'], [class~='text-slate-400'],
+  [class~='text-gray-600'], [class~='text-gray-500'], [class~='text-gray-400']
+) {
   color: rgb(var(--app-text-muted));
 }
 
-html.dark [class~='border-gray-100'],
-html.dark [class~='border-gray-200'],
-html.dark [class~='border-gray-300'] {
+html.dark :where(
+  [class~='border-slate-100'], [class~='border-slate-200'], [class~='border-slate-300'],
+  [class~='border-gray-100'], [class~='border-gray-200'], [class~='border-gray-300']
+) {
   border-color: rgb(var(--app-border));
 }
 
-html.dark [class~='bg-purple-50'] {
-  background-color: rgb(76 29 149 / 0.24);
+html.dark :where([class~='divide-slate-100'], [class~='divide-gray-100']) > :not([hidden]) ~ :not([hidden]) {
+  border-color: rgb(var(--app-border));
 }
 
-html.dark [class~='border-purple-200'],
-html.dark [class~='border-purple-300'] {
-  border-color: rgb(139 92 246 / 0.45);
-}
+html.dark :where(
+  [class~='bg-red-50'], [class~='bg-red-50/80'], [class~='bg-red-100'], [class~='bg-red-200'],
+  [class~='bg-rose-50'], [class~='bg-rose-50/70'], [class~='bg-rose-100'], [class~='bg-rose-200']
+) { background-color: rgb(127 29 29 / 0.34); }
 
-html.dark [class~='text-purple-700'],
-html.dark [class~='text-purple-800'] {
-  color: rgb(196 181 253);
-}
+html.dark :where(
+  [class~='bg-orange-50'], [class~='bg-orange-50/50'], [class~='bg-orange-100'], [class~='bg-orange-200'],
+  [class~='bg-amber-50'], [class~='bg-amber-50/50'], [class~='bg-amber-50/70'], [class~='bg-amber-100'], [class~='bg-amber-200'],
+  [class~='bg-yellow-50'], [class~='bg-yellow-100'], [class~='bg-yellow-200']
+) { background-color: rgb(120 53 15 / 0.34); }
+
+html.dark :where(
+  [class~='bg-green-50'], [class~='bg-green-50/50'], [class~='bg-green-50/80'], [class~='bg-green-100'], [class~='bg-green-200'],
+  [class~='bg-emerald-50'], [class~='bg-emerald-50/50'], [class~='bg-emerald-50/70'], [class~='bg-emerald-100'], [class~='bg-emerald-200'],
+  [class~='bg-teal-50'], [class~='bg-teal-100'], [class~='bg-teal-200'],
+  [class~='bg-lime-50'], [class~='bg-lime-100'], [class~='bg-lime-200']
+) { background-color: rgb(6 78 59 / 0.36); }
+
+html.dark :where(
+  [class~='bg-cyan-50'], [class~='bg-cyan-50/50'], [class~='bg-cyan-100'], [class~='bg-cyan-200'],
+  [class~='bg-sky-50'], [class~='bg-sky-100'], [class~='bg-sky-200'],
+  [class~='bg-blue-50'], [class~='bg-blue-50/80'], [class~='bg-blue-100'], [class~='bg-blue-200']
+) { background-color: rgb(30 64 175 / 0.3); }
+
+html.dark :where(
+  [class~='bg-indigo-50'], [class~='bg-indigo-50/50'], [class~='bg-indigo-50/70'], [class~='bg-indigo-100'], [class~='bg-indigo-200'],
+  [class~='bg-violet-50'], [class~='bg-violet-100'], [class~='bg-violet-200'],
+  [class~='bg-purple-50'], [class~='bg-purple-50/50'], [class~='bg-purple-100'], [class~='bg-purple-200'],
+  [class~='bg-fuchsia-50'], [class~='bg-fuchsia-100'], [class~='bg-fuchsia-200'],
+  [class~='bg-pink-50'], [class~='bg-pink-100'], [class~='bg-pink-200']
+) { background-color: rgb(76 29 149 / 0.34); }
+
+html.dark :where(
+  [class~='text-red-600'], [class~='text-red-700'], [class~='text-red-800'], [class~='text-red-900'],
+  [class~='text-rose-600'], [class~='text-rose-700'], [class~='text-rose-800'], [class~='text-rose-900']
+) { color: rgb(253 164 175); }
+
+html.dark :where(
+  [class~='text-orange-600'], [class~='text-orange-700'], [class~='text-orange-800'], [class~='text-orange-900'],
+  [class~='text-amber-600'], [class~='text-amber-700'], [class~='text-amber-800'], [class~='text-amber-900'],
+  [class~='text-yellow-600'], [class~='text-yellow-700'], [class~='text-yellow-800'], [class~='text-yellow-900']
+) { color: rgb(253 230 138); }
+
+html.dark :where(
+  [class~='text-green-600'], [class~='text-green-700'], [class~='text-green-800'], [class~='text-green-900'],
+  [class~='text-emerald-600'], [class~='text-emerald-700'], [class~='text-emerald-800'], [class~='text-emerald-900'],
+  [class~='text-teal-600'], [class~='text-teal-700'], [class~='text-teal-800'], [class~='text-teal-900'],
+  [class~='text-lime-600'], [class~='text-lime-700'], [class~='text-lime-800'], [class~='text-lime-900']
+) { color: rgb(110 231 183); }
+
+html.dark :where(
+  [class~='text-cyan-600'], [class~='text-cyan-700'], [class~='text-cyan-800'], [class~='text-cyan-900'],
+  [class~='text-sky-600'], [class~='text-sky-700'], [class~='text-sky-800'], [class~='text-sky-900'],
+  [class~='text-blue-600'], [class~='text-blue-700'], [class~='text-blue-800'], [class~='text-blue-900']
+) { color: rgb(147 197 253); }
+
+html.dark :where(
+  [class~='text-indigo-600'], [class~='text-indigo-700'], [class~='text-indigo-800'], [class~='text-indigo-900'],
+  [class~='text-violet-600'], [class~='text-violet-700'], [class~='text-violet-800'], [class~='text-violet-900'],
+  [class~='text-purple-600'], [class~='text-purple-700'], [class~='text-purple-800'], [class~='text-purple-900'],
+  [class~='text-fuchsia-600'], [class~='text-fuchsia-700'], [class~='text-fuchsia-800'], [class~='text-fuchsia-900'],
+  [class~='text-pink-600'], [class~='text-pink-700'], [class~='text-pink-800'], [class~='text-pink-900']
+) { color: rgb(196 181 253); }
+
+html.dark :where(
+  [class~='border-red-100'], [class~='border-red-200'], [class~='border-red-300'],
+  [class~='border-rose-100'], [class~='border-rose-200'], [class~='border-rose-300']
+) { border-color: rgb(190 18 60 / 0.62); }
+
+html.dark :where(
+  [class~='border-orange-100'], [class~='border-orange-200'], [class~='border-orange-300'],
+  [class~='border-amber-100'], [class~='border-amber-200'], [class~='border-amber-300'],
+  [class~='border-yellow-100'], [class~='border-yellow-200'], [class~='border-yellow-300']
+) { border-color: rgb(180 83 9 / 0.62); }
+
+html.dark :where(
+  [class~='border-green-100'], [class~='border-green-200'], [class~='border-green-300'],
+  [class~='border-emerald-100'], [class~='border-emerald-200'], [class~='border-emerald-300'],
+  [class~='border-teal-100'], [class~='border-teal-200'], [class~='border-teal-300'],
+  [class~='border-lime-100'], [class~='border-lime-200'], [class~='border-lime-300']
+) { border-color: rgb(5 150 105 / 0.58); }
+
+html.dark :where(
+  [class~='border-cyan-100'], [class~='border-cyan-200'], [class~='border-cyan-300'],
+  [class~='border-sky-100'], [class~='border-sky-200'], [class~='border-sky-300'],
+  [class~='border-blue-100'], [class~='border-blue-200'], [class~='border-blue-300']
+) { border-color: rgb(37 99 235 / 0.58); }
+
+html.dark :where(
+  [class~='border-indigo-100'], [class~='border-indigo-200'], [class~='border-indigo-300'],
+  [class~='border-violet-100'], [class~='border-violet-200'], [class~='border-violet-300'],
+  [class~='border-purple-100'], [class~='border-purple-200'], [class~='border-purple-300'],
+  [class~='border-fuchsia-100'], [class~='border-fuchsia-200'], [class~='border-fuchsia-300'],
+  [class~='border-pink-100'], [class~='border-pink-200'], [class~='border-pink-300']
+) { border-color: rgb(139 92 246 / 0.58); }
 
 html.dark :where(input, select, textarea):not([type='checkbox']):not([type='radio']) {
   border-color: rgb(var(--app-border));
@@ -94,6 +193,20 @@ html.dark :where(input, textarea)::placeholder {
   color: rgb(var(--app-text-muted));
 }
 
+html.dark :where(input, textarea):-webkit-autofill,
+html.dark :where(input, textarea):-webkit-autofill:hover,
+html.dark :where(input, textarea):-webkit-autofill:focus {
+  -webkit-text-fill-color: rgb(var(--app-text));
+  caret-color: rgb(var(--app-text));
+  box-shadow: 0 0 0 1000px rgb(9 14 25) inset;
+  transition: background-color 9999s ease-out 0s;
+}
+
+html.dark :where(input[type='date'], input[type='datetime-local'], input[type='time'])::-webkit-calendar-picker-indicator {
+  filter: invert(1);
+  opacity: 0.72;
+}
+
 html.dark option {
   background-color: rgb(var(--app-surface));
   color: rgb(var(--app-text));
@@ -101,8 +214,37 @@ html.dark option {
 
 html.dark [class~='hover:bg-gray-50']:hover,
 html.dark [class~='hover:bg-gray-100']:hover,
-html.dark [class~='hover:bg-gray-200']:hover {
+html.dark [class~='hover:bg-gray-200']:hover,
+html.dark [class~='hover:bg-slate-50']:hover,
+html.dark [class~='hover:bg-slate-100']:hover,
+html.dark [class~='hover:bg-white']:hover,
+html.dark [class~='hover:bg-white/60']:hover {
   background-color: rgb(51 65 85);
+}
+
+html.dark :where(
+  [class~='hover:bg-red-50'], [class~='hover:bg-red-50/50'], [class~='hover:bg-rose-50'], [class~='hover:bg-rose-50/50']
+):hover { background-color: rgb(127 29 29 / 0.48); }
+
+html.dark :where(
+  [class~='hover:bg-orange-50'], [class~='hover:bg-orange-50/50'], [class~='hover:bg-amber-50'], [class~='hover:bg-amber-50/50'], [class~='hover:bg-yellow-50']
+):hover { background-color: rgb(120 53 15 / 0.48); }
+
+html.dark :where(
+  [class~='hover:bg-green-50'], [class~='hover:bg-green-50/50'], [class~='hover:bg-emerald-50'], [class~='hover:bg-emerald-50/50'], [class~='hover:bg-teal-50'], [class~='hover:bg-lime-50']
+):hover { background-color: rgb(6 78 59 / 0.5); }
+
+html.dark :where(
+  [class~='hover:bg-cyan-50'], [class~='hover:bg-cyan-50/50'], [class~='hover:bg-sky-50'], [class~='hover:bg-blue-50'], [class~='hover:bg-blue-50/50']
+):hover { background-color: rgb(30 64 175 / 0.46); }
+
+html.dark :where(
+  [class~='hover:bg-indigo-50'], [class~='hover:bg-indigo-50/50'], [class~='hover:bg-violet-50'], [class~='hover:bg-purple-50'], [class~='hover:bg-purple-50/50'],
+  [class~='hover:bg-fuchsia-50'], [class~='hover:bg-pink-50']
+):hover { background-color: rgb(76 29 149 / 0.5); }
+
+html.dark .theme-category-color {
+  color: rgb(var(--app-text)) !important;
 }
 
 @layer base {

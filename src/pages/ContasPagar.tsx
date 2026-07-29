@@ -585,7 +585,7 @@ export function ContasPagar() {
       accessorFn: row => row.categoria?.nome || '',
       id: 'categoria',
       cell: info => (
-        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium" style={{ backgroundColor: `${info.row.original.categoria?.cor}20`, color: info.row.original.categoria?.cor }}>{info.getValue()}</span>
+        <span className="theme-category-color inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium" style={{ backgroundColor: `${info.row.original.categoria?.cor}20`, color: info.row.original.categoria?.cor }}>{info.getValue()}</span>
       ),
     },
     {
