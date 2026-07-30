@@ -109,6 +109,10 @@ export interface ContaPagar {
   updated_at: string;
   user_id: string;
   categoria?: CategoriaFinanceira;
+  recorrencia_id?: string;
+  competencia?: string;
+  origem?: 'manual' | 'recorrencia' | string;
+  alterada_manualmente?: boolean;
 }
 
 export interface TransacaoFinanceira {

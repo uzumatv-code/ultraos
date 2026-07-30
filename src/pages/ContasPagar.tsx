@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { DollarSign, Search, Plus, Pencil, Trash2, ChevronLeft, ChevronRight, Check, AlertTriangle, TrendingDown, Calendar, CheckCircle2, Square, X } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { apiRequest, supabase } from '../lib/supabase';
 import { toast } from '../components/ToastCustom';
 import { ContaPagarModal } from '../components/ContaPagarModal';
 import { CustomCalendarBills } from '../components/CustomCalendarBills';
@@ -40,99 +40,6 @@ function getMonthRange(date: Date) {
     monthStart: toDateInput(firstDay),
     nextMonthStart: toDateInput(nextMonthFirstDay),
   };
-}
-
-function dateOnly(value?: string) {
-  return String(value || '').split('T')[0];
-}
-
-function parseLocalDate(value?: string) {
-  const [year, month, day] = dateOnly(value).split('-').map(Number);
-  if (!year || !month || !day) return null;
-  return new Date(year, month - 1, day);
-}
-
-function addDays(date: Date, days: number) {
-  const next = new Date(date);
-  next.setDate(next.getDate() + days);
-  return next;
-}
-
-function addMonthsClamped(anchor: Date, months: number) {
-  const originalDay = anchor.getDate();
-  const target = new Date(anchor.getFullYear(), anchor.getMonth() + months, 1);
-  const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
-  target.setDate(Math.min(originalDay, lastDay));
-  return target;
-}
-
-function recurrenceMonths(periodicidade: ContaPagar['periodicidade']) {
-  const intervals: Partial<Record<ContaPagar['periodicidade'], number>> = {
-    mensal: 1,
-    bimestral: 2,
-    trimestral: 3,
-    semestral: 6,
-    anual: 12,
-  };
-  return intervals[periodicidade] || 0;
-}
-
-function recurrenceDays(periodicidade: ContaPagar['periodicidade']) {
-  const intervals: Partial<Record<ContaPagar['periodicidade'], number>> = {
-    diaria: 1,
-    semanal: 7,
-    quinzenal: 15,
-  };
-  return intervals[periodicidade] || 0;
-}
-
-function recurringOccurrencesInMonth(conta: ContaPagar, monthStart: string, nextMonthStart: string) {
-  if (!conta.recorrente || conta.periodicidade === 'unica') return [];
-  const start = parseLocalDate(conta.data_vencimento);
-  const rangeStart = parseLocalDate(monthStart);
-  const rangeEnd = parseLocalDate(nextMonthStart);
-  if (!start || !rangeStart || !rangeEnd || start >= rangeEnd) return [];
-
-  const occurrences: string[] = [];
-  const monthInterval = recurrenceMonths(conta.periodicidade);
-  if (monthInterval) {
-    const monthsDiff = (rangeStart.getFullYear() - start.getFullYear()) * 12 + (rangeStart.getMonth() - start.getMonth());
-    let step = Math.max(0, Math.floor(monthsDiff / monthInterval)) * monthInterval;
-    let cursor = addMonthsClamped(start, step);
-    while (cursor < rangeStart) {
-      step += monthInterval;
-      cursor = addMonthsClamped(start, step);
-    }
-    while (cursor < rangeEnd) {
-      occurrences.push(toDateInput(cursor));
-      step += monthInterval;
-      cursor = addMonthsClamped(start, step);
-    }
-    return occurrences;
-  }
-
-  const dayInterval = recurrenceDays(conta.periodicidade);
-  if (!dayInterval) return [];
-  let cursor = new Date(start);
-  if (cursor < rangeStart) {
-    const diffDays = Math.floor((rangeStart.getTime() - cursor.getTime()) / 86_400_000);
-    cursor = addDays(cursor, Math.floor(diffDays / dayInterval) * dayInterval);
-    while (cursor < rangeStart) cursor = addDays(cursor, dayInterval);
-  }
-  while (cursor < rangeEnd) {
-    occurrences.push(toDateInput(cursor));
-    cursor = addDays(cursor, dayInterval);
-  }
-  return occurrences;
-}
-
-function billOccurrenceKey(conta: Pick<ContaPagar, 'descricao' | 'valor' | 'categoria_id' | 'data_vencimento'>) {
-  return [
-    String(conta.descricao || '').trim().toLowerCase(),
-    String(conta.categoria_id || ''),
-    Number(conta.valor || 0).toFixed(2),
-    dateOnly(conta.data_vencimento),
-  ].join('|');
 }
 
 export function ContasPagar() {
@@ -194,7 +101,10 @@ export function ContasPagar() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Usuário não autenticado');
       const { monthStart, nextMonthStart } = getMonthRange(currentDate);
-      await materializarContasRecorrentes(user.id, monthStart, nextMonthStart);
+      await apiRequest('/api/financeiro/contas-pagar/materializar', {
+        method: 'POST',
+        body: JSON.stringify({ inicio: monthStart, fim: nextMonthStart }),
+      });
 
       // Buscar contas atrasadas
       const { data: contasAtrasadasData } = await supabase
@@ -272,67 +182,13 @@ export function ContasPagar() {
     }
   }
 
-  async function materializarContasRecorrentes(userId: string, monthStart: string, nextMonthStart: string) {
-    const { data: recorrentes, error: recorrentesError } = await supabase
-      .from('contas_pagar')
-      .select('*')
-      .eq('user_id', userId)
-      .eq('recorrente', true)
-      .neq('status', 'cancelado')
-      .lt('data_vencimento', nextMonthStart);
-
-    if (recorrentesError) throw recorrentesError;
-    if (!recorrentes?.length) return;
-
-    const { data: existentes, error: existentesError } = await supabase
-      .from('contas_pagar')
-      .select('descricao, valor, categoria_id, data_vencimento')
-      .eq('user_id', userId)
-      .gte('data_vencimento', monthStart)
-      .lt('data_vencimento', nextMonthStart);
-
-    if (existentesError) throw existentesError;
-
-    const existingKeys = new Set((existentes || []).map((conta) => billOccurrenceKey(conta as ContaPagar)));
-    const today = toDateInput(new Date());
-    const novasContas = [];
-
-    for (const conta of recorrentes as ContaPagar[]) {
-      for (const vencimento of recurringOccurrencesInMonth(conta, monthStart, nextMonthStart)) {
-        if (vencimento === dateOnly(conta.data_vencimento)) continue;
-        const key = billOccurrenceKey({ ...conta, data_vencimento: vencimento });
-        if (existingKeys.has(key)) continue;
-        existingKeys.add(key);
-        novasContas.push({
-          descricao: conta.descricao,
-          valor: conta.valor,
-          data_vencimento: vencimento,
-          categoria_id: conta.categoria_id || null,
-          forma_pagamento: conta.forma_pagamento || null,
-          parcelas: conta.parcelas || 1,
-          recorrente: false,
-          periodicidade: 'unica',
-          observacoes: conta.observacoes
-            ? `${conta.observacoes}\nGerada automaticamente da recorrencia ${conta.periodicidade}.`
-            : `Gerada automaticamente da recorrencia ${conta.periodicidade}.`,
-          status: vencimento < today ? 'atrasado' : 'pendente',
-          user_id: userId,
-        });
-      }
-    }
-
-    if (!novasContas.length) return;
-    const { error } = await supabase.from('contas_pagar').insert(novasContas);
-    if (error) throw error;
-  }
-
   async function handleDeletar(conta: ContaPagar) {
     if (!confirm(`Deseja realmente excluir a conta ${conta.descricao}?`)) return;
 
     try {
       const { count, error } = await supabase
         .from('contas_pagar')
-        .update({ status: 'cancelado' })
+        .update({ status: 'cancelado', alterada_manualmente: Boolean(conta.recorrencia_id) })
         .eq('id', conta.id);
 
       if (error) throw error;
@@ -517,7 +373,7 @@ export function ContasPagar() {
     try {
       const { count, error } = await supabase
         .from('contas_pagar')
-        .update({ status: 'cancelado' })
+        .update({ status: 'cancelado', alterada_manualmente: true })
         .in('id', contasSelecionadas);
 
       if (error) throw error;

@@ -10,6 +10,7 @@ import jwt from 'jsonwebtoken';
 import mysql from 'mysql2/promise';
 import nodemailer from 'nodemailer';
 import { detectImageMime, normalizeDocumentConfig } from './document-customization.mjs';
+import { occurrencesInRange, parseDateOnly, validatePayableInput } from './payable-recurrence.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -4594,6 +4595,224 @@ app.post('/api/ordens/salvar', requireAuth, async (req, res) => {
   } catch (error) {
     await conn.rollback();
     return res.status(error.status || 400).json({ data: null, error: { message: error.message } });
+  } finally {
+    conn.release();
+  }
+});
+
+async function ensureLegacyPayableSeries(conn, userId) {
+  const [legacyRows] = await conn.query(
+    `SELECT * FROM contas_pagar
+      WHERE user_id = ? AND recorrente = 1 AND periodicidade <> 'unica' AND recorrencia_id IS NULL
+      FOR UPDATE`,
+    [userId],
+  );
+  for (const conta of legacyRows) {
+    const seriesId = uuid();
+    await conn.query(
+      `INSERT INTO contas_pagar_recorrencias
+        (id,user_id,conta_origem_id,descricao,valor,categoria_id,forma_pagamento,parcelas,periodicidade,data_inicio,observacoes,ativa,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+       ON DUPLICATE KEY UPDATE updated_at=updated_at`,
+      [seriesId, userId, conta.id, conta.descricao, conta.valor, conta.categoria_id, conta.forma_pagamento,
+        conta.parcelas || 1, conta.periodicidade, String(conta.data_vencimento).slice(0, 10), conta.observacoes,
+        conta.status === 'cancelado' ? 0 : 1, conta.created_at || now(), now()],
+    );
+    const [[series]] = await conn.query(
+      'SELECT id FROM contas_pagar_recorrencias WHERE user_id=? AND conta_origem_id=? LIMIT 1',
+      [userId, conta.id],
+    );
+    await conn.query(
+      `UPDATE contas_pagar SET recorrencia_id=?, competencia=LEFT(data_vencimento,10), origem='recorrencia',
+       recorrente=0, updated_at=? WHERE user_id=? AND id=?`,
+      [series.id, now(), userId, conta.id],
+    );
+  }
+}
+
+async function materializePayableRecurrences(conn, userId, rangeStart, rangeEnd) {
+  await ensureLegacyPayableSeries(conn, userId);
+  const [seriesRows] = await conn.query(
+    `SELECT * FROM contas_pagar_recorrencias
+      WHERE user_id=? AND ativa=1 AND data_inicio < ? AND (data_fim IS NULL OR data_fim >= ?)`,
+    [userId, rangeEnd, rangeStart],
+  );
+  let created = 0;
+  for (const series of seriesRows) {
+    const occurrences = occurrencesInRange({
+      startDate: series.data_inicio,
+      period: series.periodicidade,
+      rangeStart,
+      rangeEnd,
+    });
+    for (const competencia of occurrences) {
+      const [legacyCandidates] = await conn.query(
+        `SELECT id FROM contas_pagar
+          WHERE user_id=? AND recorrencia_id IS NULL AND LEFT(data_vencimento,10)=?
+            AND descricao=? AND valor=? AND COALESCE(categoria_id,'')=COALESCE(?,'')
+            AND observacoes LIKE '%Gerada automaticamente da recorrencia%'
+          ORDER BY created_at LIMIT 1 FOR UPDATE`,
+        [userId, competencia, series.descricao, series.valor, series.categoria_id],
+      );
+      if (legacyCandidates[0]) {
+        await conn.query(
+          `UPDATE contas_pagar SET recorrencia_id=?, competencia=?, origem='recorrencia', updated_at=?
+            WHERE user_id=? AND id=?`,
+          [series.id, competencia, now(), userId, legacyCandidates[0].id],
+        );
+        continue;
+      }
+
+      const id = uuid();
+      const status = competencia < todayDate() ? 'atrasado' : 'pendente';
+      const [result] = await conn.query(
+        `INSERT INTO contas_pagar
+          (id,user_id,descricao,valor,data_vencimento,forma_pagamento,parcelas,status,categoria_id,
+           recorrente,periodicidade,observacoes,recorrencia_id,competencia,origem,alterada_manualmente,created_at,updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,0,?,?)
+         ON DUPLICATE KEY UPDATE
+           descricao=IF(status='cancelado' AND alterada_manualmente=0,VALUES(descricao),descricao),
+           valor=IF(status='cancelado' AND alterada_manualmente=0,VALUES(valor),valor),
+           data_vencimento=IF(status='cancelado' AND alterada_manualmente=0,VALUES(data_vencimento),data_vencimento),
+           forma_pagamento=IF(status='cancelado' AND alterada_manualmente=0,VALUES(forma_pagamento),forma_pagamento),
+           parcelas=IF(status='cancelado' AND alterada_manualmente=0,VALUES(parcelas),parcelas),
+           categoria_id=IF(status='cancelado' AND alterada_manualmente=0,VALUES(categoria_id),categoria_id),
+           periodicidade=IF(status='cancelado' AND alterada_manualmente=0,VALUES(periodicidade),periodicidade),
+           observacoes=IF(status='cancelado' AND alterada_manualmente=0,VALUES(observacoes),observacoes),
+           status=IF(status='cancelado' AND alterada_manualmente=0,VALUES(status),status),
+           updated_at=IF(status='cancelado' AND alterada_manualmente=0,VALUES(updated_at),updated_at)`,
+        [id, userId, series.descricao, series.valor, competencia, series.forma_pagamento, series.parcelas || 1,
+          status, series.categoria_id, series.periodicidade, series.observacoes, series.id, competencia, 'recorrencia', now(), now()],
+      );
+      created += Number(result.affectedRows === 1);
+    }
+  }
+  return created;
+}
+
+app.post('/api/financeiro/contas-pagar/materializar', requireAuth, requireAdmin, async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    const rangeStart = String(req.body?.inicio || '').slice(0, 10);
+    const rangeEnd = String(req.body?.fim || '').slice(0, 10);
+    if (!parseDateOnly(rangeStart) || !parseDateOnly(rangeEnd) || rangeStart >= rangeEnd) {
+      throw new Error('Intervalo de materializacao invalido');
+    }
+    await conn.beginTransaction();
+    const created = await materializePayableRecurrences(conn, req.user.id, rangeStart, rangeEnd);
+    await conn.commit();
+    res.json({ data: { created }, error: null });
+  } catch (error) {
+    await conn.rollback();
+    res.status(400).json({ data: null, error: { message: error.message } });
+  } finally {
+    conn.release();
+  }
+});
+
+app.post('/api/financeiro/contas-pagar', requireAuth, requireAdmin, async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    const input = validatePayableInput(req.body);
+    await conn.beginTransaction();
+    const accountId = uuid();
+    let seriesId = null;
+    if (input.recorrente) {
+      seriesId = uuid();
+      await conn.query(
+        `INSERT INTO contas_pagar_recorrencias
+          (id,user_id,conta_origem_id,descricao,valor,categoria_id,forma_pagamento,parcelas,periodicidade,data_inicio,observacoes,ativa,created_at,updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?,?)`,
+        [seriesId, req.user.id, accountId, input.descricao, input.valor, input.categoria_id, input.forma_pagamento,
+          input.parcelas, input.periodicidade, input.data_vencimento, input.observacoes, now(), now()],
+      );
+    }
+    await conn.query(
+      `INSERT INTO contas_pagar
+        (id,user_id,descricao,valor,data_vencimento,forma_pagamento,parcelas,status,categoria_id,recorrente,
+         periodicidade,observacoes,recorrencia_id,competencia,origem,alterada_manualmente,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,0,?,?)`,
+      [accountId, req.user.id, input.descricao, input.valor, input.data_vencimento, input.forma_pagamento,
+        input.parcelas, input.status, input.categoria_id, input.periodicidade, input.observacoes, seriesId,
+        seriesId ? input.data_vencimento : null, seriesId ? 'recorrencia' : 'manual', now(), now()],
+    );
+    await conn.commit();
+    await writeAudit(req, { action: 'conta_pagar.criar', resource: 'contas_pagar', resourceId: accountId, details: { recorrente: input.recorrente } });
+    res.json({ data: { id: accountId, recorrencia_id: seriesId }, error: null });
+  } catch (error) {
+    await conn.rollback();
+    res.status(400).json({ data: null, error: { message: error.message } });
+  } finally {
+    conn.release();
+  }
+});
+
+app.patch('/api/financeiro/contas-pagar/:id', requireAuth, requireAdmin, async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    const input = validatePayableInput(req.body);
+    const scope = req.body?.escopo === 'futuras' ? 'futuras' : 'ocorrencia';
+    await conn.beginTransaction();
+    await ensureLegacyPayableSeries(conn, req.user.id);
+    const [[current]] = await conn.query('SELECT * FROM contas_pagar WHERE user_id=? AND id=? LIMIT 1 FOR UPDATE', [req.user.id, req.params.id]);
+    if (!current) throw Object.assign(new Error('Conta nao encontrada'), { status: 404 });
+    if (current.status === 'pago' && req.body?.escopo !== 'futuras') {
+      throw Object.assign(new Error('Conta paga nao pode ser alterada. Para mudar apenas o padrao futuro, selecione esta e as proximas.'), { status: 409 });
+    }
+
+    let seriesId = current.recorrencia_id || null;
+    if (!seriesId && input.recorrente) {
+      seriesId = uuid();
+      await conn.query(
+        `INSERT INTO contas_pagar_recorrencias
+          (id,user_id,conta_origem_id,descricao,valor,categoria_id,forma_pagamento,parcelas,periodicidade,data_inicio,observacoes,ativa,created_at,updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?,?)`,
+        [seriesId, req.user.id, current.id, input.descricao, input.valor, input.categoria_id, input.forma_pagamento,
+          input.parcelas, input.periodicidade, input.data_vencimento, input.observacoes, now(), now()],
+      );
+    }
+
+    if (seriesId && scope === 'futuras') {
+      if (input.recorrente) {
+        await conn.query(
+          `UPDATE contas_pagar_recorrencias SET descricao=?,valor=?,categoria_id=?,forma_pagamento=?,parcelas=?,
+           periodicidade=?,data_inicio=?,observacoes=?,ativa=1,updated_at=? WHERE user_id=? AND id=?`,
+          [input.descricao, input.valor, input.categoria_id, input.forma_pagamento, input.parcelas,
+            input.periodicidade, input.data_vencimento, input.observacoes, now(), req.user.id, seriesId],
+        );
+      } else {
+        await conn.query('UPDATE contas_pagar_recorrencias SET ativa=0,data_fim=?,updated_at=? WHERE user_id=? AND id=?',
+          [input.data_vencimento, now(), req.user.id, seriesId]);
+      }
+      await conn.query(
+        `UPDATE contas_pagar SET status='cancelado',updated_at=?
+          WHERE user_id=? AND recorrencia_id=? AND id<>? AND status IN ('pendente','atrasado')
+            AND alterada_manualmente=0 AND LEFT(data_vencimento,10)>=?`,
+        [now(), req.user.id, seriesId, current.id, String(current.data_vencimento).slice(0, 10)],
+      );
+    }
+
+    const keepSeries = Boolean(seriesId && (scope === 'ocorrencia' || input.recorrente));
+    const occurrenceKey = scope === 'ocorrencia'
+      ? (current.competencia || String(current.data_vencimento).slice(0, 10))
+      : input.data_vencimento;
+    if (current.status !== 'pago') {
+      await conn.query(
+        `UPDATE contas_pagar SET descricao=?,valor=?,data_vencimento=?,categoria_id=?,forma_pagamento=?,parcelas=?,
+         observacoes=?,status=?,recorrente=0,periodicidade=?,recorrencia_id=?,competencia=?,origem=?,
+         alterada_manualmente=?,updated_at=? WHERE user_id=? AND id=?`,
+        [input.descricao, input.valor, input.data_vencimento, input.categoria_id, input.forma_pagamento, input.parcelas,
+          input.observacoes, input.status, keepSeries ? input.periodicidade : 'unica', keepSeries ? seriesId : null, keepSeries ? occurrenceKey : null,
+          keepSeries ? 'recorrencia' : 'manual', current.recorrencia_id && scope === 'ocorrencia' ? 1 : 0,
+          now(), req.user.id, current.id],
+      );
+    }
+    await conn.commit();
+    await writeAudit(req, { action: 'conta_pagar.atualizar', resource: 'contas_pagar', resourceId: current.id, details: { escopo: scope, recorrencia_id: seriesId } });
+    res.json({ data: { id: current.id, recorrencia_id: keepSeries ? seriesId : null }, error: null });
+  } catch (error) {
+    await conn.rollback();
+    res.status(error.status || 400).json({ data: null, error: { message: error.message } });
   } finally {
     conn.release();
   }

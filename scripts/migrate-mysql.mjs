@@ -315,6 +315,27 @@ const createTables = [
     INDEX idx_os_pagamentos_transacao (transacao_financeira_id)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 
+  `CREATE TABLE IF NOT EXISTS contas_pagar_recorrencias (
+    id varchar(36) NOT NULL PRIMARY KEY,
+    user_id varchar(36) NOT NULL,
+    conta_origem_id varchar(36) DEFAULT NULL,
+    descricao varchar(255) NOT NULL,
+    valor decimal(10,2) NOT NULL DEFAULT 0.00,
+    categoria_id varchar(36) DEFAULT NULL,
+    forma_pagamento varchar(50) DEFAULT NULL,
+    parcelas int DEFAULT 1,
+    periodicidade varchar(50) NOT NULL,
+    data_inicio varchar(10) NOT NULL,
+    data_fim varchar(10) DEFAULT NULL,
+    observacoes text DEFAULT NULL,
+    ativa tinyint(1) DEFAULT 1,
+    created_at varchar(50) DEFAULT NULL,
+    updated_at varchar(50) DEFAULT NULL,
+    UNIQUE KEY unique_recorrencia_origem_user (user_id, conta_origem_id),
+    INDEX idx_recorrencias_user (user_id),
+    INDEX idx_recorrencias_ativa (user_id, ativa)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
   `CREATE TABLE IF NOT EXISTS os_condicoes_pagamento (
     id varchar(36) NOT NULL PRIMARY KEY,
     user_id varchar(36) NOT NULL,
@@ -824,6 +845,10 @@ const requiredColumns = {
     parcelas: 'int DEFAULT 1',
     comprovante_url: 'varchar(500) DEFAULT NULL',
     updated_at: 'varchar(50) DEFAULT NULL',
+    recorrencia_id: 'varchar(36) DEFAULT NULL',
+    competencia: 'varchar(10) DEFAULT NULL',
+    origem: "varchar(30) DEFAULT 'manual'",
+    alterada_manualmente: 'tinyint(1) DEFAULT 0',
   },
   transacoes_financeiras: {
     conta_pagar_id: 'varchar(36) DEFAULT NULL',
@@ -946,6 +971,8 @@ const indexes = [
   ['usuarios', 'idx_usuarios_conta', 'ALTER TABLE usuarios ADD INDEX idx_usuarios_conta (conta_id)'],
   ['ordens_servico', 'unique_ordem_numero_user', 'ALTER TABLE ordens_servico ADD UNIQUE KEY unique_ordem_numero_user (user_id, numero)'],
   ['contas_receber', 'unique_conta_receber_ordem_user', 'ALTER TABLE contas_receber ADD UNIQUE KEY unique_conta_receber_ordem_user (user_id, ordem_servico_id)'],
+  ['contas_pagar', 'unique_conta_pagar_recorrencia_competencia', 'ALTER TABLE contas_pagar ADD UNIQUE KEY unique_conta_pagar_recorrencia_competencia (user_id, recorrencia_id, competencia)'],
+  ['contas_pagar', 'idx_conta_pagar_recorrencia', 'ALTER TABLE contas_pagar ADD INDEX idx_conta_pagar_recorrencia (user_id, recorrencia_id)'],
   ['avaliacoes_lembretes', 'unique_avaliacao_ordem_user', 'ALTER TABLE avaliacoes_lembretes ADD UNIQUE KEY unique_avaliacao_ordem_user (user_id, ordem_servico_id)'],
   ['remarketing_campanhas', 'unique_remarketing_campanha_user', 'ALTER TABLE remarketing_campanhas ADD UNIQUE KEY unique_remarketing_campanha_user (user_id)'],
   ['comunicacao_preferencias', 'unique_comunicacao_preferencia_cliente', 'ALTER TABLE comunicacao_preferencias ADD UNIQUE KEY unique_comunicacao_preferencia_cliente (user_id, cliente_id)'],
@@ -1165,6 +1192,39 @@ async function backfillPayments(conn) {
   });
 }
 
+async function backfillPayableRecurrences(conn) {
+  await safeStep('migrar modelos de contas recorrentes', async () => {
+    await conn.query(`
+      INSERT INTO contas_pagar_recorrencias
+        (id, user_id, conta_origem_id, descricao, valor, categoria_id, forma_pagamento, parcelas,
+         periodicidade, data_inicio, observacoes, ativa, created_at, updated_at)
+      SELECT UUID(), cp.user_id, cp.id, cp.descricao, cp.valor, cp.categoria_id, cp.forma_pagamento,
+             COALESCE(cp.parcelas, 1), cp.periodicidade, LEFT(cp.data_vencimento, 10), cp.observacoes,
+             CASE WHEN cp.status = 'cancelado' THEN 0 ELSE 1 END,
+             COALESCE(cp.created_at, ?), ?
+        FROM contas_pagar cp
+        LEFT JOIN contas_pagar_recorrencias r
+          ON r.user_id = cp.user_id AND r.conta_origem_id = cp.id
+       WHERE cp.recorrente = 1
+         AND cp.periodicidade <> 'unica'
+         AND cp.recorrencia_id IS NULL
+         AND r.id IS NULL
+    `, [nowSql(), nowSql()]);
+
+    await conn.query(`
+      UPDATE contas_pagar cp
+      JOIN contas_pagar_recorrencias r
+        ON r.user_id = cp.user_id AND r.conta_origem_id = cp.id
+         SET cp.recorrencia_id = r.id,
+             cp.competencia = LEFT(cp.data_vencimento, 10),
+             cp.origem = 'recorrencia',
+             cp.recorrente = 0,
+             cp.updated_at = ?
+       WHERE cp.recorrencia_id IS NULL
+    `, [nowSql()]);
+  });
+}
+
 async function backfillPaymentConditions(conn) {
   await safeStep('vincular pagamentos existentes as condicoes das OS', async () => {
     const [result] = await conn.query(`
@@ -1264,6 +1324,7 @@ try {
   await modifyExistingColumns(conn);
   await addMissingIndexes(conn);
   await normalizeExistingRows(conn);
+  await backfillPayableRecurrences(conn);
   await backfillCompanyTerms(conn);
   await backfillEvaluationReminders(conn);
   await backfillReceivables(conn);

@@ -82,6 +82,10 @@ async function request(path: string, options: RequestInit = {}, timeoutMs = API_
   return json;
 }
 
+export function apiRequest<T = unknown>(path: string, options: RequestInit = {}) {
+  return request(path, options) as Promise<T>;
+}
+
 class QueryBuilder implements PromiseLike<any> {
   private filters: QueryFilter[] = [];
   private orFilters: string[] = [];

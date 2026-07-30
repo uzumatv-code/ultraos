@@ -12,6 +12,25 @@ export function formatCurrency(value: number): string {
   }).format(value);
 }
 
+export function formatMoneyInput(value: number | string | null | undefined): string {
+  const amount = Number(value ?? 0);
+  if (!Number.isFinite(amount)) return '';
+  return amount.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+export function maskMoneyInput(value: string): string {
+  const digits = value.replace(/\D/g, '');
+  if (!digits) return '';
+  return (Number(digits) / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+export function parseMoneyInput(value: string): number {
+  const normalized = value.trim().replace(/\./g, '').replace(',', '.');
+  const amount = Number(normalized);
+  if (!Number.isFinite(amount) || amount < 0) throw new Error('Valor invalido');
+  return Number(amount.toFixed(2));
+}
+
 export function formatDate(date: string | Date): string {
   const parsed = parseLocalDate(date);
   if (!parsed) return '';

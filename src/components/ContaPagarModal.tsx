@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Calendar, Clock, Repeat, DollarSign, Loader2 } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { apiRequest } from '../lib/supabase';
 import { toast } from './ToastCustom';
-import { capitalize } from '../utils/formatters';
+import { capitalize, formatMoneyInput, maskMoneyInput, parseMoneyInput } from '../utils/formatters';
 import type { ContaPagar, CategoriaFinanceira, Periodicidade } from '../types/database';
 
 interface ContaPagarModalProps {
@@ -30,87 +30,56 @@ export function ContaPagarModal({
   const [observacoes, setObservacoes] = useState('');
   const [status, setStatus] = useState<'pendente' | 'atrasado' | 'pago'>('pendente');
   const [loading, setLoading] = useState(false);
+  const [escopoEdicao, setEscopoEdicao] = useState<'ocorrencia' | 'futuras'>('ocorrencia');
+  const pertenceARecorrencia = Boolean(contaParaEditar?.recorrencia_id || contaParaEditar?.recorrente);
 
   useEffect(() => {
     if (contaParaEditar) {
       setDescricao(contaParaEditar.descricao);
-      setValor(contaParaEditar.valor.toString());
-      setDataVencimento(new Date(contaParaEditar.data_vencimento).toISOString().split('T')[0]);
+      setValor(formatMoneyInput(contaParaEditar.valor));
+      setDataVencimento(String(contaParaEditar.data_vencimento).split('T')[0]);
       setCategoriaId(contaParaEditar.categoria_id || '');
-      setRecorrente(contaParaEditar.recorrente);
-      setPeriodicidade(contaParaEditar.periodicidade);
+      setRecorrente(Boolean(contaParaEditar.recorrencia_id || contaParaEditar.recorrente));
+      setPeriodicidade(contaParaEditar.periodicidade === 'unica' ? 'mensal' : contaParaEditar.periodicidade);
       setObservacoes(contaParaEditar.observacoes || '');
       setStatus(contaParaEditar.status as 'pendente' | 'atrasado' | 'pago');
+      setEscopoEdicao('ocorrencia');
     } else {
       limparFormulario();
     }
   }, [contaParaEditar]);
-
-  function formatarValor(value: string) {
-    value = value.replace(/\D/g, '');
-    value = value.replace(/(\d)(\d{2})$/, '$1,$2');
-    value = value.replace(/(?=(\d{3})+(\D))\B/g, '.');
-    return value;
-  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error('Usuário não autenticado');
-
-      const valorNumerico = parseFloat(valor.replace('.', '').replace(',', '.'));
-      if (Number.isNaN(valorNumerico)) {
-        throw new Error('Valor inválido');
-      }
-
-      const vencimento = new Date(dataVencimento);
-      if (Number.isNaN(vencimento.getTime())) {
-        throw new Error('Data de vencimento inválida');
-      }
-
+      const valorNumerico = parseMoneyInput(valor);
       const categoriaValor = categoriaId || null;
-      const periodicidadeValor = recorrente ? periodicidade : 'unica';
       const observacoesValor = observacoes || null;
-
-      const dataVencimentoValue = vencimento.toISOString().split('T')[0];
+      const payload = {
+        descricao: capitalize(descricao),
+        valor: valorNumerico,
+        data_vencimento: dataVencimento,
+        categoria_id: categoriaValor,
+        recorrente,
+        periodicidade: recorrente ? periodicidade : 'unica',
+        observacoes: observacoesValor,
+        status,
+        escopo: pertenceARecorrencia ? escopoEdicao : 'ocorrencia',
+      };
 
       if (contaParaEditar) {
-        const { error } = await supabase
-          .from('contas_pagar')
-          .update({
-            descricao: capitalize(descricao),
-            valor: valorNumerico,
-            data_vencimento: dataVencimentoValue,
-            categoria_id: categoriaValor,
-            recorrente,
-            periodicidade,
-            observacoes: observacoesValor,
-            status
-          })
-          .eq('id', contaParaEditar.id)
-          .eq('user_id', user.id);
-
-        if (error) throw error;
+        await apiRequest(`/api/financeiro/contas-pagar/${contaParaEditar.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify(payload),
+        });
         toast.success('Conta atualizada com sucesso!');
       } else {
-        const { error } = await supabase
-          .from('contas_pagar')
-          .insert([{
-            descricao: capitalize(descricao),
-            valor: valorNumerico,
-            data_vencimento: dataVencimentoValue,
-            categoria_id: categoriaValor,
-            recorrente,
-            periodicidade: periodicidadeValor,
-            observacoes: observacoesValor,
-            status: 'pendente',
-            user_id: user.id
-          }]);
-
-        if (error) throw error;
+        await apiRequest('/api/financeiro/contas-pagar', {
+          method: 'POST',
+          body: JSON.stringify({ ...payload, status: 'pendente' }),
+        });
         toast.success('Conta cadastrada com sucesso!');
       }
 
@@ -133,6 +102,7 @@ export function ContaPagarModal({
     setRecorrente(false);
     setPeriodicidade('mensal');
     setObservacoes('');
+    setEscopoEdicao('ocorrencia');
   }
 
   return (
@@ -182,7 +152,7 @@ export function ContaPagarModal({
                     <input
                       type="text"
                       value={valor}
-                      onChange={(e) => setValor(formatarValor(e.target.value))}
+                      onChange={(e) => setValor(maskMoneyInput(e.target.value))}
                       className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
                       placeholder="0,00"
                       required
@@ -245,6 +215,20 @@ export function ContaPagarModal({
                   </div>
                 )}
 
+                {contaParaEditar && pertenceARecorrencia && (
+                  <fieldset className="space-y-2 rounded-lg border border-gray-200 p-3">
+                    <legend className="px-1 text-sm font-medium text-gray-700">Aplicar alteração</legend>
+                    <label className="flex cursor-pointer items-start gap-2 text-sm text-gray-700">
+                      <input type="radio" name="escopo-edicao" checked={escopoEdicao === 'ocorrencia'} onChange={() => setEscopoEdicao('ocorrencia')} />
+                      <span><strong>Somente esta conta</strong><br /><span className="text-gray-500">Preserva o padrão das próximas ocorrências.</span></span>
+                    </label>
+                    <label className="flex cursor-pointer items-start gap-2 text-sm text-gray-700">
+                      <input type="radio" name="escopo-edicao" checked={escopoEdicao === 'futuras'} onChange={() => setEscopoEdicao('futuras')} />
+                      <span><strong>Esta e as próximas</strong><br /><span className="text-gray-500">Atualiza a série sem alterar contas já pagas.</span></span>
+                    </label>
+                  </fieldset>
+                )}
+
                 <div className="space-y-4 pt-4 border-t border-gray-100">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center space-x-2">
@@ -258,6 +242,7 @@ export function ContaPagarModal({
                         type="checkbox"
                         checked={recorrente}
                         onChange={(e) => setRecorrente(e.target.checked)}
+                        disabled={pertenceARecorrencia && escopoEdicao === 'ocorrencia'}
                         className="sr-only peer"
                       />
                       <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-purple-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
