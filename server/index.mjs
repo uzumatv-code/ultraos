@@ -2028,6 +2028,242 @@ app.get('/api/dashboard/resumo', requireAuth, async (req, res) => {
   }
 });
 
+/**
+ * Alertas do topo da tela em uma única chamada.
+ *
+ * Antes o cabeçalho consultava `ordens_servico` e `contas_pagar` a cada 15 s
+ * pelo browser. Aqui as contagens saem agregadas do banco e só as linhas
+ * realmente exibidas no painel de notificações trafegam.
+ */
+app.get('/api/notificacoes/resumo', requireAuth, async (req, res) => {
+  try {
+    const userId = req.auth.accountId;
+    const canSeeFinance = req.auth.role === 'admin';
+    const today = todayDate();
+    const tomorrow = addDaysToIsoDate(today, 1);
+
+    const ordersPromise = pool.query(
+      `SELECT o.*, c.id AS cliente__id, c.nome AS cliente__nome, c.telefone AS cliente__telefone,
+              i.nome AS instrumento__nome, m.nome AS marca__nome
+         FROM ordens_servico o
+         JOIN clientes c ON c.id = o.cliente_id
+         LEFT JOIN instrumentos i ON i.id = o.instrumento_id
+         LEFT JOIN marcas m ON m.id = o.marca_id
+        WHERE o.user_id = ?
+          AND o.status IN ('pendente','em_andamento','atraso')
+          AND LEFT(o.data_previsao,10) < ?
+        ORDER BY LEFT(o.data_previsao,10) LIMIT 20`,
+      [userId, tomorrow],
+    );
+
+    const countsPromise = pool.query(
+      `SELECT
+         SUM(CASE WHEN LEFT(data_previsao,10) = ? THEN 1 ELSE 0 END) AS entregas_hoje,
+         SUM(CASE WHEN status = 'atraso' OR LEFT(data_previsao,10) < ? THEN 1 ELSE 0 END) AS atrasadas
+       FROM ordens_servico
+      WHERE user_id = ? AND status IN ('pendente','em_andamento','atraso')`,
+      [today, today, userId],
+    );
+
+    const messagesPromise = pool.query(
+      `SELECT COALESCE(SUM(nao_lidas),0) AS total FROM whatsapp_conversas WHERE user_id = ? AND status = 'aberta'`,
+      [userId],
+    );
+
+    const payablesPromise = canSeeFinance
+      ? pool.query(
+          `SELECT cp.*, cf.nome AS categoria__nome, cf.cor AS categoria__cor
+             FROM contas_pagar cp
+             LEFT JOIN categorias_financeiras cf ON cf.id = cp.categoria_id
+            WHERE cp.user_id = ? AND cp.status IN ('pendente','atrasado') AND LEFT(cp.data_vencimento,10) < ?
+            ORDER BY LEFT(cp.data_vencimento,10) LIMIT 20`,
+          [userId, tomorrow],
+        )
+      : Promise.resolve([[]]);
+
+    const payableCountsPromise = canSeeFinance
+      ? pool.query(
+          `SELECT
+             SUM(CASE WHEN LEFT(data_vencimento,10) = ? THEN 1 ELSE 0 END) AS contas_hoje,
+             SUM(CASE WHEN LEFT(data_vencimento,10) < ? THEN 1 ELSE 0 END) AS contas_vencidas
+           FROM contas_pagar
+          WHERE user_id = ? AND status IN ('pendente','atrasado')`,
+          [today, today, userId],
+        )
+      : Promise.resolve([[{}]]);
+
+    const [ordersResult, countsResult, messagesResult, payablesResult, payableCountsResult] = await Promise.all([
+      ordersPromise, countsPromise, messagesPromise, payablesPromise, payableCountsPromise,
+    ]);
+
+    const counts = countsResult[0][0] || {};
+    const payableCounts = payableCountsResult[0][0] || {};
+
+    // Reconstrói os relacionamentos achatados pelo JOIN no formato usado pelo frontend.
+    const ordens = ordersResult[0].map((row) => {
+      const ordem = { ...row };
+      ordem.cliente = { id: row.cliente__id, nome: row.cliente__nome, telefone: row.cliente__telefone };
+      ordem.instrumento = row.instrumento__nome ? { nome: row.instrumento__nome } : null;
+      ordem.marca = row.marca__nome ? { nome: row.marca__nome } : null;
+      for (const key of Object.keys(ordem)) if (key.includes('__')) delete ordem[key];
+      return ordem;
+    });
+
+    const contas = payablesResult[0].map((row) => {
+      const conta = { ...row };
+      conta.categoria = row.categoria__nome ? { nome: row.categoria__nome, cor: row.categoria__cor } : null;
+      for (const key of Object.keys(conta)) if (key.includes('__')) delete conta[key];
+      return conta;
+    });
+
+    return res.json({
+      data: {
+        entregas_hoje: Number(counts.entregas_hoje || 0),
+        atrasadas: Number(counts.atrasadas || 0),
+        contas_hoje: Number(payableCounts.contas_hoje || 0),
+        contas_vencidas: Number(payableCounts.contas_vencidas || 0),
+        mensagens_nao_lidas: Number(messagesResult[0][0]?.total || 0),
+        ordens,
+        contas,
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({ error: { message: error.message } });
+  }
+});
+
+/**
+ * Listagem paginada de ordens de serviço.
+ *
+ * A tela antiga baixava todas as ordens do usuário (centenas de linhas com
+ * cliente, instrumento e marca aninhados) e filtrava no browser. Aqui filtro,
+ * ordenação e paginação acontecem no banco, e a resposta traz também os
+ * totais por situação — o que permite mostrar contadores sem uma segunda volta.
+ */
+app.get('/api/ordens/lista', requireAuth, async (req, res) => {
+  try {
+    const userId = req.auth.accountId;
+    const today = todayDate();
+
+    const search = String(req.query.q || '').trim();
+    const status = String(req.query.status || '');
+    const prazo = String(req.query.prazo || '');
+    const financeiro = String(req.query.financeiro || '');
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(100, Math.max(5, Number(req.query.pageSize) || 20));
+    const sort = String(req.query.sort || 'recentes');
+
+    const where = ['o.user_id = ?'];
+    const params = [userId];
+
+    if (['pendente', 'em_andamento', 'concluido', 'cancelado', 'atraso'].includes(status)) {
+      where.push('o.status = ?');
+      params.push(status);
+    }
+
+    if (prazo === 'hoje') {
+      where.push("LEFT(o.data_previsao,10) = ? AND o.status IN ('pendente','em_andamento','atraso')");
+      params.push(today);
+    } else if (prazo === 'atraso') {
+      where.push("(o.status = 'atraso' OR (o.status IN ('pendente','em_andamento') AND LEFT(o.data_previsao,10) < ?))");
+      params.push(today);
+    } else if (prazo === 'semana') {
+      where.push("LEFT(o.data_previsao,10) BETWEEN ? AND ? AND o.status IN ('pendente','em_andamento','atraso')");
+      params.push(today, addDaysToIsoDate(today, 7));
+    }
+
+    // Saldo em aberto = total - pago; a OS cancelada nunca entra como recebível.
+    const openBalance = "(COALESCE(o.valor_total,0) - COALESCE(o.valor_pago,0))";
+    if (financeiro === 'aberto') {
+      where.push(`o.status <> 'cancelado' AND ${openBalance} > 0.009`);
+    } else if (financeiro === 'pendente') {
+      where.push(`o.status <> 'cancelado' AND COALESCE(o.valor_pago,0) <= 0.009 AND COALESCE(o.valor_total,0) > 0.009`);
+    } else if (financeiro === 'parcial') {
+      where.push(`o.status <> 'cancelado' AND COALESCE(o.valor_pago,0) > 0.009 AND ${openBalance} > 0.009`);
+    } else if (financeiro === 'pago') {
+      where.push(`o.status <> 'cancelado' AND ${openBalance} <= 0.009`);
+    }
+
+    if (search) {
+      const digits = search.replace(/\D/g, '');
+      const like = `%${search}%`;
+      const clauses = ['c.nome LIKE ?', 'o.modelo LIKE ?', 'm.nome LIKE ?', 'i.nome LIKE ?', 'c.telefone LIKE ?'];
+      params.push(like, like, like, like, like);
+      if (digits) {
+        clauses.push('o.numero = ?');
+        params.push(Number(digits));
+      }
+      where.push(`(${clauses.join(' OR ')})`);
+    }
+
+    const orderBy =
+      sort === 'prazo' ? 'LEFT(o.data_previsao,10) ASC, o.numero ASC'
+      : sort === 'valor' ? 'COALESCE(o.valor_total,0) DESC'
+      : sort === 'numero' ? 'o.numero DESC'
+      : 'o.created_at DESC, o.numero DESC';
+
+    const whereSql = where.join(' AND ');
+    const from = `FROM ordens_servico o
+       JOIN clientes c ON c.id = o.cliente_id
+       LEFT JOIN instrumentos i ON i.id = o.instrumento_id
+       LEFT JOIN marcas m ON m.id = o.marca_id`;
+
+    const [rowsResult, countResult, facetsResult] = await Promise.all([
+      pool.query(
+        `SELECT o.*, c.nome AS cliente__nome, c.telefone AS cliente__telefone, c.id AS cliente__id,
+                i.nome AS instrumento__nome, m.nome AS marca__nome
+           ${from}
+          WHERE ${whereSql}
+          ORDER BY ${orderBy}
+          LIMIT ? OFFSET ?`,
+        [...params, pageSize, (page - 1) * pageSize],
+      ),
+      pool.query(`SELECT COUNT(*) AS total ${from} WHERE ${whereSql}`, params),
+      pool.query(
+        `SELECT
+           COUNT(*) AS total,
+           SUM(CASE WHEN status='pendente' THEN 1 ELSE 0 END) AS pendente,
+           SUM(CASE WHEN status='em_andamento' THEN 1 ELSE 0 END) AS em_andamento,
+           SUM(CASE WHEN status='concluido' THEN 1 ELSE 0 END) AS concluido,
+           SUM(CASE WHEN status='cancelado' THEN 1 ELSE 0 END) AS cancelado,
+           SUM(CASE WHEN status='atraso' OR (status IN ('pendente','em_andamento') AND LEFT(data_previsao,10) < ?) THEN 1 ELSE 0 END) AS atraso
+         FROM ordens_servico WHERE user_id = ?`,
+        [today, userId],
+      ),
+    ]);
+
+    const rows = rowsResult[0].map((row) => {
+      const ordem = { ...row };
+      ordem.cliente = { id: row.cliente__id, nome: row.cliente__nome, telefone: row.cliente__telefone };
+      ordem.instrumento = row.instrumento__nome ? { nome: row.instrumento__nome } : null;
+      ordem.marca = row.marca__nome ? { nome: row.marca__nome } : null;
+      for (const key of Object.keys(ordem)) if (key.includes('__')) delete ordem[key];
+      return ordem;
+    });
+
+    const facets = facetsResult[0][0] || {};
+
+    return res.json({
+      data: {
+        rows,
+        page,
+        page_size: pageSize,
+        total: Number(countResult[0][0]?.total || 0),
+        facets: {
+          total: Number(facets.total || 0),
+          pendente: Number(facets.pendente || 0),
+          em_andamento: Number(facets.em_andamento || 0),
+          concluido: Number(facets.concluido || 0),
+          cancelado: Number(facets.cancelado || 0),
+          atraso: Number(facets.atraso || 0),
+        },
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({ error: { message: error.message } });
+  }
+});
+
 function addFilter(where, params, cols, filter) {
   let { column, operator, value } = filter;
   if (column?.includes('.')) return;
@@ -4689,6 +4925,432 @@ async function materializePayableRecurrences(conn, userId, rangeStart, rangeEnd)
   }
   return created;
 }
+
+/* ==========================================================================
+   Consolidação financeira
+   --------------------------------------------------------------------------
+   Duas verdades convivem no financeiro de uma oficina e precisam ser lidas
+   separadamente, nunca somadas:
+
+   • CAIXA (realizado): o que entrou e saiu da conta — `transacoes_financeiras`,
+     pela data do movimento. Responde "quanto sobrou este mês".
+   • COMPETÊNCIA (previsto): o que foi gerado no período, pago ou não —
+     `contas_receber` e `contas_pagar`, pela data de vencimento. Responde
+     "o mês fechou no azul".
+
+   A dupla contagem é evitada por construção: toda conta a pagar quitada gera
+   uma transação de despesa vinculada (`conta_pagar_id`), então o caixa lê
+   apenas transações, e a competência lê apenas contas. Nenhum indicador
+   mistura as duas origens.
+   ========================================================================== */
+
+/** Classificação contábil de cada categoria, com fallback pelo tipo. */
+const DRE_GROUPS = {
+  receita_servico: { sign: 1, label: 'Receita de serviços' },
+  receita_outras: { sign: 1, label: 'Outras receitas' },
+  custo_direto: { sign: -1, label: 'Custos diretos' },
+  despesa_operacional: { sign: -1, label: 'Despesas operacionais' },
+  despesa_administrativa: { sign: -1, label: 'Despesas administrativas' },
+  despesa_financeira: { sign: -1, label: 'Despesas financeiras' },
+  investimento: { sign: -1, label: 'Investimentos' },
+};
+
+function monthKey(dateOnly) {
+  return String(dateOnly).slice(0, 7);
+}
+
+function shiftMonth(monthText, offset) {
+  const [year, month] = monthText.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1 + offset, 1));
+  return date.toISOString().slice(0, 7);
+}
+
+function monthBounds(monthText) {
+  const [year, month] = monthText.split('-').map(Number);
+  return {
+    start: `${year}-${String(month).padStart(2, '0')}-01`,
+    next: new Date(Date.UTC(year, month, 1)).toISOString().slice(0, 10),
+  };
+}
+
+/**
+ * Descobre (uma única vez) se uma coluna existe.
+ *
+ * A classificação contábil `grupo_dre` chega pela migração. Sem esta checagem,
+ * um deploy que suba antes da migração derrubaria a tela financeira inteira com
+ * "Unknown column". Com ela, o relatório continua funcionando e cai no
+ * agrupamento por tipo até a migração rodar.
+ */
+async function hasColumn(table, column) {
+  try {
+    return (await getColumns(table)).has(column);
+  } catch {
+    return false;
+  }
+}
+
+app.get('/api/financeiro/resumo', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const userId = req.auth.accountId;
+    const today = todayDate();
+    const month = /^\d{4}-\d{2}$/.test(String(req.query.mes || '')) ? String(req.query.mes) : monthKey(today);
+    const { start, next } = monthBounds(month);
+    const previous = monthBounds(shiftMonth(month, -1));
+    const seriesStart = monthBounds(shiftMonth(month, -11)).start;
+
+    // Mantém OS, recebíveis e pagamentos coerentes antes de qualquer leitura.
+    await reconcileReceivables(pool, userId);
+
+    // Sem a coluna de classificação, tudo cai no grupo padrão de cada natureza.
+    const hasDreColumn = await hasColumn('categorias_financeiras', 'grupo_dre');
+    const revenueGroupExpr = hasDreColumn ? "COALESCE(cf.grupo_dre, 'receita_servico')" : "'receita_servico'";
+    const expenseGroupExpr = hasDreColumn ? "COALESCE(cf.grupo_dre, 'despesa_operacional')" : "'despesa_operacional'";
+
+    const [
+      cashResult, previousCashResult, accrualResult, payableAccrualResult,
+      receivableResult, agingResult, payableResult, seriesCashResult,
+      projectionReceivableResult, projectionPayableResult,
+      revenueCategoriesResult, expenseCategoriesResult, indicatorsResult,
+    ] = await Promise.all([
+      // Caixa do mês: entradas e saídas efetivamente movimentadas.
+      pool.query(
+        `SELECT
+           COALESCE(SUM(CASE WHEN tipo='receita' THEN valor ELSE 0 END),0) AS entradas,
+           COALESCE(SUM(CASE WHEN tipo='despesa' THEN valor ELSE 0 END),0) AS saidas,
+           COUNT(*) AS lancamentos
+         FROM transacoes_financeiras
+        WHERE user_id=? AND LEFT(data,10)>=? AND LEFT(data,10)<?`,
+        [userId, start, next],
+      ),
+      pool.query(
+        `SELECT
+           COALESCE(SUM(CASE WHEN tipo='receita' THEN valor ELSE 0 END),0) AS entradas,
+           COALESCE(SUM(CASE WHEN tipo='despesa' THEN valor ELSE 0 END),0) AS saidas
+         FROM transacoes_financeiras
+        WHERE user_id=? AND LEFT(data,10)>=? AND LEFT(data,10)<?`,
+        [userId, previous.start, previous.next],
+      ),
+      // Competência — receita: recebíveis gerados com vencimento no mês.
+      pool.query(
+        `SELECT
+           ${revenueGroupExpr} AS grupo,
+           COALESCE(SUM(cr.valor),0) AS valor,
+           COUNT(*) AS quantidade
+         FROM contas_receber cr
+         LEFT JOIN categorias_financeiras cf ON cf.id = cr.categoria_id
+        WHERE cr.user_id=? AND cr.status <> 'cancelado'
+          AND LEFT(cr.data_vencimento,10)>=? AND LEFT(cr.data_vencimento,10)<?
+        GROUP BY grupo`,
+        [userId, start, next],
+      ),
+      // Competência — despesa: contas com vencimento no mês, pagas ou não.
+      pool.query(
+        `SELECT
+           ${expenseGroupExpr} AS grupo,
+           COALESCE(SUM(cp.valor),0) AS valor,
+           COUNT(*) AS quantidade
+         FROM contas_pagar cp
+         LEFT JOIN categorias_financeiras cf ON cf.id = cp.categoria_id
+        WHERE cp.user_id=? AND cp.status <> 'cancelado'
+          AND LEFT(cp.data_vencimento,10)>=? AND LEFT(cp.data_vencimento,10)<?
+        GROUP BY grupo`,
+        [userId, start, next],
+      ),
+      // Carteira de recebíveis (independe do mês selecionado).
+      pool.query(
+        `SELECT
+           COALESCE(SUM(GREATEST(valor-COALESCE(valor_recebido,0),0)),0) AS aberto,
+           COALESCE(SUM(CASE WHEN LEFT(data_vencimento,10)<? THEN GREATEST(valor-COALESCE(valor_recebido,0),0) ELSE 0 END),0) AS vencido,
+           COUNT(*) AS quantidade,
+           SUM(CASE WHEN LEFT(data_vencimento,10)<? THEN 1 ELSE 0 END) AS quantidade_vencida
+         FROM contas_receber
+        WHERE user_id=? AND status IN ('pendente','parcial','atrasado')`,
+        [today, today, userId],
+      ),
+      // Aging da inadimplência — quanto tempo o dinheiro está parado.
+      pool.query(
+        `SELECT
+           CASE
+             WHEN LEFT(data_vencimento,10) >= ? THEN 'a_vencer'
+             WHEN DATEDIFF(?, LEFT(data_vencimento,10)) <= 15 THEN 'd1_15'
+             WHEN DATEDIFF(?, LEFT(data_vencimento,10)) <= 30 THEN 'd16_30'
+             WHEN DATEDIFF(?, LEFT(data_vencimento,10)) <= 60 THEN 'd31_60'
+             ELSE 'd60_mais'
+           END AS faixa,
+           COALESCE(SUM(GREATEST(valor-COALESCE(valor_recebido,0),0)),0) AS valor,
+           COUNT(*) AS quantidade
+         FROM contas_receber
+        WHERE user_id=? AND status IN ('pendente','parcial','atrasado')
+        GROUP BY faixa`,
+        [today, today, today, today, userId],
+      ),
+      pool.query(
+        `SELECT
+           COALESCE(SUM(CASE WHEN status IN ('pendente','atrasado') THEN valor ELSE 0 END),0) AS aberto,
+           COALESCE(SUM(CASE WHEN status IN ('pendente','atrasado') AND LEFT(data_vencimento,10)<? THEN valor ELSE 0 END),0) AS vencido,
+           COALESCE(SUM(CASE WHEN status='pago' AND LEFT(data_vencimento,10)>=? AND LEFT(data_vencimento,10)<? THEN valor ELSE 0 END),0) AS pago_mes,
+           SUM(CASE WHEN status IN ('pendente','atrasado') AND LEFT(data_vencimento,10)<? THEN 1 ELSE 0 END) AS quantidade_vencida
+         FROM contas_pagar WHERE user_id=? AND status <> 'cancelado'`,
+        [today, start, next, today, userId],
+      ),
+      // Série de 12 meses do caixa realizado.
+      pool.query(
+        `SELECT LEFT(data,7) AS mes,
+                COALESCE(SUM(CASE WHEN tipo='receita' THEN valor ELSE 0 END),0) AS entradas,
+                COALESCE(SUM(CASE WHEN tipo='despesa' THEN valor ELSE 0 END),0) AS saidas
+           FROM transacoes_financeiras
+          WHERE user_id=? AND LEFT(data,10)>=? AND LEFT(data,10)<?
+          GROUP BY mes ORDER BY mes`,
+        [userId, seriesStart, next],
+      ),
+      // Projeção: o que vence nos próximos 90 dias, entrada e saída.
+      pool.query(
+        `SELECT
+           CASE
+             WHEN LEFT(data_vencimento,10) < ? THEN 'vencido'
+             WHEN DATEDIFF(LEFT(data_vencimento,10), ?) <= 30 THEN 'd30'
+             WHEN DATEDIFF(LEFT(data_vencimento,10), ?) <= 60 THEN 'd60'
+             WHEN DATEDIFF(LEFT(data_vencimento,10), ?) <= 90 THEN 'd90'
+             ELSE 'futuro'
+           END AS janela,
+           COALESCE(SUM(GREATEST(valor-COALESCE(valor_recebido,0),0)),0) AS valor
+         FROM contas_receber
+        WHERE user_id=? AND status IN ('pendente','parcial','atrasado')
+        GROUP BY janela`,
+        [today, today, today, today, userId],
+      ),
+      pool.query(
+        `SELECT
+           CASE
+             WHEN LEFT(data_vencimento,10) < ? THEN 'vencido'
+             WHEN DATEDIFF(LEFT(data_vencimento,10), ?) <= 30 THEN 'd30'
+             WHEN DATEDIFF(LEFT(data_vencimento,10), ?) <= 60 THEN 'd60'
+             WHEN DATEDIFF(LEFT(data_vencimento,10), ?) <= 90 THEN 'd90'
+             ELSE 'futuro'
+           END AS janela,
+           COALESCE(SUM(valor),0) AS valor
+         FROM contas_pagar
+        WHERE user_id=? AND status IN ('pendente','atrasado')
+        GROUP BY janela`,
+        [today, today, today, today, userId],
+      ),
+      pool.query(
+        `SELECT COALESCE(cf.nome,'Sem categoria') AS nome, COALESCE(cf.cor,'#8B5CF6') AS cor,
+                COALESCE(SUM(t.valor),0) AS valor
+           FROM transacoes_financeiras t
+           LEFT JOIN categorias_financeiras cf ON cf.id = t.categoria_id
+          WHERE t.user_id=? AND t.tipo='receita' AND LEFT(t.data,10)>=? AND LEFT(t.data,10)<?
+          GROUP BY nome, cor ORDER BY valor DESC LIMIT 8`,
+        [userId, start, next],
+      ),
+      pool.query(
+        `SELECT COALESCE(cf.nome,'Sem categoria') AS nome, COALESCE(cf.cor,'#FB7185') AS cor,
+                COALESCE(SUM(t.valor),0) AS valor
+           FROM transacoes_financeiras t
+           LEFT JOIN categorias_financeiras cf ON cf.id = t.categoria_id
+          WHERE t.user_id=? AND t.tipo='despesa' AND LEFT(t.data,10)>=? AND LEFT(t.data,10)<?
+          GROUP BY nome, cor ORDER BY valor DESC LIMIT 8`,
+        [userId, start, next],
+      ),
+      // Ticket médio e prazo médio de recebimento das OS concluídas no mês.
+      pool.query(
+        `SELECT
+           COUNT(*) AS os_concluidas,
+           COALESCE(AVG(NULLIF(valor_total,0)),0) AS ticket_medio,
+           COALESCE(SUM(valor_total),0) AS valor_produzido,
+           COALESCE(AVG(CASE WHEN data_ultimo_pagamento IS NOT NULL AND data_entrada IS NOT NULL
+                             THEN DATEDIFF(LEFT(data_ultimo_pagamento,10), LEFT(data_entrada,10)) END),0) AS prazo_medio_recebimento
+         FROM ordens_servico
+        WHERE user_id=? AND status='concluido'
+          AND LEFT(COALESCE(data_entrega,updated_at),10)>=? AND LEFT(COALESCE(data_entrega,updated_at),10)<?`,
+        [userId, start, next],
+      ),
+    ]);
+
+    const cash = cashResult[0][0] || {};
+    const previousCash = previousCashResult[0][0] || {};
+    const receivable = receivableResult[0][0] || {};
+    const payable = payableResult[0][0] || {};
+    const indicators = indicatorsResult[0][0] || {};
+
+    // Demonstrativo por grupo, com sinal contábil vindo de DRE_GROUPS.
+    const dre = {};
+    for (const key of Object.keys(DRE_GROUPS)) dre[key] = { valor: 0, quantidade: 0, label: DRE_GROUPS[key].label };
+    for (const row of [...accrualResult[0], ...payableAccrualResult[0]]) {
+      const key = DRE_GROUPS[row.grupo] ? row.grupo : row.grupo?.startsWith('receita') ? 'receita_outras' : 'despesa_operacional';
+      dre[key].valor = money(dre[key].valor + Number(row.valor || 0));
+      dre[key].quantidade += Number(row.quantidade || 0);
+    }
+
+    const receitaCompetencia = money(dre.receita_servico.valor + dre.receita_outras.valor);
+    const custoCompetencia = money(dre.custo_direto.valor);
+    const despesaCompetencia = money(
+      dre.despesa_operacional.valor + dre.despesa_administrativa.valor + dre.despesa_financeira.valor,
+    );
+    const resultadoCompetencia = money(receitaCompetencia - custoCompetencia - despesaCompetencia);
+
+    const aging = { a_vencer: 0, d1_15: 0, d16_30: 0, d31_60: 0, d60_mais: 0 };
+    const agingCount = { a_vencer: 0, d1_15: 0, d16_30: 0, d31_60: 0, d60_mais: 0 };
+    for (const row of agingResult[0]) {
+      aging[row.faixa] = money(row.valor);
+      agingCount[row.faixa] = Number(row.quantidade || 0);
+    }
+
+    const windows = { vencido: 0, d30: 0, d60: 0, d90: 0, futuro: 0 };
+    const inflow = { ...windows };
+    const outflow = { ...windows };
+    for (const row of projectionReceivableResult[0]) inflow[row.janela] = money(row.valor);
+    for (const row of projectionPayableResult[0]) outflow[row.janela] = money(row.valor);
+
+    // Série contínua: meses sem movimento aparecem zerados, e não somem do gráfico.
+    const seriesMap = new Map(seriesCashResult[0].map((row) => [row.mes, row]));
+    const serie = Array.from({ length: 12 }, (_, index) => {
+      const key = shiftMonth(month, index - 11);
+      const row = seriesMap.get(key) || {};
+      const entradas = money(row.entradas);
+      const saidas = money(row.saidas);
+      return { mes: key, entradas, saidas, resultado: money(entradas - saidas) };
+    });
+
+    const entradas = money(cash.entradas);
+    const saidas = money(cash.saidas);
+    const aberto = money(receivable.aberto);
+    const vencido = money(receivable.vencido);
+
+    return res.json({
+      data: {
+        periodo: { mes: month, inicio: start, fim_exclusivo: next, hoje: today },
+        caixa: {
+          entradas,
+          saidas,
+          resultado: money(entradas - saidas),
+          lancamentos: Number(cash.lancamentos || 0),
+          entradas_mes_anterior: money(previousCash.entradas),
+          saidas_mes_anterior: money(previousCash.saidas),
+        },
+        competencia: {
+          receita: receitaCompetencia,
+          custo_direto: custoCompetencia,
+          despesa: despesaCompetencia,
+          investimento: money(dre.investimento.valor),
+          resultado: resultadoCompetencia,
+          margem: receitaCompetencia > 0 ? Number(((resultadoCompetencia / receitaCompetencia) * 100).toFixed(1)) : 0,
+          grupos: Object.entries(dre).map(([key, value]) => ({
+            chave: key,
+            label: value.label,
+            sinal: DRE_GROUPS[key].sign,
+            valor: value.valor,
+            quantidade: value.quantidade,
+          })),
+        },
+        recebiveis: {
+          aberto,
+          vencido,
+          a_vencer: money(aberto - vencido),
+          quantidade: Number(receivable.quantidade || 0),
+          quantidade_vencida: Number(receivable.quantidade_vencida || 0),
+          inadimplencia: aberto > 0 ? Number(((vencido / aberto) * 100).toFixed(1)) : 0,
+          aging: [
+            { chave: 'a_vencer', label: 'A vencer', valor: aging.a_vencer, quantidade: agingCount.a_vencer },
+            { chave: 'd1_15', label: '1 a 15 dias', valor: aging.d1_15, quantidade: agingCount.d1_15 },
+            { chave: 'd16_30', label: '16 a 30 dias', valor: aging.d16_30, quantidade: agingCount.d16_30 },
+            { chave: 'd31_60', label: '31 a 60 dias', valor: aging.d31_60, quantidade: agingCount.d31_60 },
+            { chave: 'd60_mais', label: 'Mais de 60 dias', valor: aging.d60_mais, quantidade: agingCount.d60_mais },
+          ],
+        },
+        pagaveis: {
+          aberto: money(payable.aberto),
+          vencido: money(payable.vencido),
+          a_vencer: money(Number(payable.aberto || 0) - Number(payable.vencido || 0)),
+          pago_mes: money(payable.pago_mes),
+          quantidade_vencida: Number(payable.quantidade_vencida || 0),
+        },
+        projecao: [
+          { chave: 'vencido', label: 'Vencido', entradas: inflow.vencido, saidas: outflow.vencido },
+          { chave: 'd30', label: 'Próximos 30 dias', entradas: inflow.d30, saidas: outflow.d30 },
+          { chave: 'd60', label: '31 a 60 dias', entradas: inflow.d60, saidas: outflow.d60 },
+          { chave: 'd90', label: '61 a 90 dias', entradas: inflow.d90, saidas: outflow.d90 },
+        ].map((item) => ({ ...item, saldo: money(item.entradas - item.saidas) })),
+        serie,
+        categorias: {
+          receitas: revenueCategoriesResult[0].map((row) => ({ nome: row.nome, cor: row.cor, valor: money(row.valor) })),
+          despesas: expenseCategoriesResult[0].map((row) => ({ nome: row.nome, cor: row.cor, valor: money(row.valor) })),
+        },
+        indicadores: {
+          os_concluidas: Number(indicators.os_concluidas || 0),
+          ticket_medio: money(indicators.ticket_medio),
+          valor_produzido: money(indicators.valor_produzido),
+          prazo_medio_recebimento: Math.round(Number(indicators.prazo_medio_recebimento || 0)),
+        },
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({ error: { message: error.message } });
+  }
+});
+
+/** Recebíveis e contas a pagar em aberto, paginados, para as abas de cobrança. */
+app.get('/api/financeiro/carteira', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const userId = req.auth.accountId;
+    const today = todayDate();
+    const tipo = req.query.tipo === 'pagar' ? 'pagar' : 'receber';
+    const situacao = String(req.query.situacao || 'aberto');
+    const limit = Math.min(200, Math.max(10, Number(req.query.limit) || 50));
+
+    if (tipo === 'receber') {
+      const where = ["cr.user_id = ?", "cr.status IN ('pendente','parcial','atrasado')"];
+      const params = [userId];
+      if (situacao === 'vencido') {
+        where.push('LEFT(cr.data_vencimento,10) < ?');
+        params.push(today);
+      } else if (situacao === 'a_vencer') {
+        where.push('LEFT(cr.data_vencimento,10) >= ?');
+        params.push(today);
+      }
+
+      const [rows] = await pool.query(
+        `SELECT cr.id, cr.descricao, cr.valor, cr.valor_recebido, cr.data_vencimento, cr.status,
+                cr.ordem_servico_id, cr.forma_pagamento,
+                GREATEST(cr.valor - COALESCE(cr.valor_recebido,0),0) AS saldo,
+                DATEDIFF(?, LEFT(cr.data_vencimento,10)) AS dias_atraso,
+                c.nome AS cliente_nome, c.telefone AS cliente_telefone, o.numero AS ordem_numero
+           FROM contas_receber cr
+           LEFT JOIN clientes c ON c.user_id = cr.user_id AND c.id = cr.cliente_id
+           LEFT JOIN ordens_servico o ON o.user_id = cr.user_id AND o.id = cr.ordem_servico_id
+          WHERE ${where.join(' AND ')}
+          ORDER BY LEFT(cr.data_vencimento,10) ASC LIMIT ?`,
+        [today, ...params, limit],
+      );
+      return res.json({ data: { tipo, rows } });
+    }
+
+    const where = ["cp.user_id = ?", "cp.status IN ('pendente','atrasado')"];
+    const params = [userId];
+    if (situacao === 'vencido') {
+      where.push('LEFT(cp.data_vencimento,10) < ?');
+      params.push(today);
+    } else if (situacao === 'a_vencer') {
+      where.push('LEFT(cp.data_vencimento,10) >= ?');
+      params.push(today);
+    }
+
+    const [rows] = await pool.query(
+      `SELECT cp.id, cp.descricao, cp.valor, cp.data_vencimento, cp.status, cp.forma_pagamento,
+              cp.recorrente, cp.periodicidade,
+              DATEDIFF(?, LEFT(cp.data_vencimento,10)) AS dias_atraso,
+              cf.nome AS categoria_nome, cf.cor AS categoria_cor
+         FROM contas_pagar cp
+         LEFT JOIN categorias_financeiras cf ON cf.id = cp.categoria_id
+        WHERE ${where.join(' AND ')}
+        ORDER BY LEFT(cp.data_vencimento,10) ASC LIMIT ?`,
+      [today, ...params, limit],
+    );
+    return res.json({ data: { tipo, rows } });
+  } catch (error) {
+    return res.status(500).json({ error: { message: error.message } });
+  }
+});
 
 app.post('/api/financeiro/contas-pagar/materializar', requireAuth, requireAdmin, async (req, res) => {
   const conn = await pool.getConnection();

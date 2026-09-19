@@ -1,11 +1,30 @@
-import { useState, useEffect, useMemo } from 'react';
-import { motion } from 'framer-motion';
-import { PenTool as Tool, Search, Plus, Trash2, ChevronLeft, ChevronRight, Send, Edit, Printer, Star, FileText, DollarSign, History } from 'lucide-react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+/**
+ * Ordens de serviço.
+ *
+ * Mudanças estruturais em relação à versão anterior:
+ *  - filtro, ordenação e paginação acontecem no servidor (`/api/ordens/lista`);
+ *    a tela não baixa mais a base inteira a cada visita;
+ *  - o estado de busca/filtros vive na URL, então a lista é compartilhável e
+ *    sobrevive ao "voltar" do navegador;
+ *  - o status deixou de ser um <select> disfarçado de etiqueta: mudar status é
+ *    uma ação explícita, e cancelar pede confirmação;
+ *  - as ações de linha ficam num menu, no lugar de seis ícones concorrendo
+ *    pela atenção;
+ *  - a visão "bancada" (kanban) mostra a carga real de trabalho por etapa.
+ */
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ArrowUpDown, CheckCircle2, ChevronLeft, ChevronRight, DollarSign, Edit3,
+  FileText, History, LayoutGrid, MoreHorizontal, Printer, Search,
+  Send, Star, Trash2, Wrench, X,
+} from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
+import { apiRequest } from '../lib/api-client';
 import { toast } from '../components/ToastCustom';
 import { alerts } from '../utils/alerts';
-import { formatDate, formatCurrency } from '../utils/formatters';
+import { formatCurrency, formatDateOnly } from '../utils/formatters';
 import { todayLocalDate } from '../utils/dates';
 import { WhatsAppService } from '../utils/whatsapp-service';
 import { EvaluationReminderService } from '../utils/evaluation-reminder-service';
@@ -13,393 +32,149 @@ import { NFSeService } from '../utils/nfse-service';
 import { PrintOrdemModal } from '../components/PrintOrdemModal';
 import type { OrdemServico } from '../types/database';
 import { useAuth } from '../contexts/AuthContext';
+import { useUrlState } from '../hooks/useUrlState';
+import { Badge, EmptyState, Panel, SearchField, Segmented, Skeleton, Table, Td, UIButton } from '../components/ui';
 import {
-  useReactTable,
-  getCoreRowModel,
-  getPaginationRowModel,
-  flexRender,
-  ColumnDef,
-} from '@tanstack/react-table';
+  effectiveOrderStatus, FinancialStatusBadge, OrderStatusBadge, orderFinancialState,
+  orderStatusLabel, type OrderStatus,
+} from '../components/ui/status';
 
-type StatusFilter = '' | OrdemServico['status'];
-type FinancialStatus = 'pendente' | 'parcial' | 'pago' | 'cancelado';
-type FinancialFilter = '' | FinancialStatus | 'aberto';
-type DeadlineFilter = '' | 'hoje' | 'atraso';
+type ListResponse = {
+  rows: OrdemServico[];
+  page: number;
+  page_size: number;
+  total: number;
+  facets: { total: number; pendente: number; em_andamento: number; concluido: number; cancelado: number; atraso: number };
+};
 
-function getFinancialStatus(ordem: OrdemServico) {
-  const total = Number(ordem.valor_total ?? (Number(ordem.valor_servicos || 0) - Number(ordem.desconto || 0)));
-  const paid = Number(ordem.valor_pago || 0);
-  if (ordem.status === 'cancelado') return { value: 'cancelado' as const, label: 'Cancelado', className: 'bg-gray-100 text-gray-700', remaining: 0 };
-  if (total <= 0 || paid >= total) return { value: 'pago' as const, label: 'Pago', className: 'bg-green-100 text-green-800', remaining: 0 };
-  if (paid > 0) return { value: 'parcial' as const, label: 'Parcial', className: 'bg-blue-100 text-blue-800', remaining: Math.max(0, total - paid) };
-  return { value: 'pendente' as const, label: 'Pendente', className: 'bg-yellow-100 text-yellow-800', remaining: Math.max(0, total - paid) };
-}
+const defaults = {
+  q: '',
+  status: '',
+  prazo: '',
+  financeiro: '',
+  sort: 'recentes',
+  page: '1',
+  view: 'lista',
+};
+
+const statusOptions = [
+  { value: '', label: 'Todos' },
+  { value: 'pendente', label: 'Pendente' },
+  { value: 'em_andamento', label: 'Em andamento' },
+  { value: 'concluido', label: 'Concluído' },
+  { value: 'cancelado', label: 'Cancelado' },
+];
+
+const prazoOptions = [
+  { value: '', label: 'Qualquer prazo' },
+  { value: 'hoje', label: 'Entrega hoje' },
+  { value: 'semana', label: 'Próximos 7 dias' },
+  { value: 'atraso', label: 'Em atraso' },
+];
+
+const financeiroOptions = [
+  { value: '', label: 'Todo o financeiro' },
+  { value: 'aberto', label: 'Com saldo em aberto' },
+  { value: 'pendente', label: 'Sem pagamento' },
+  { value: 'parcial', label: 'Pagamento parcial' },
+  { value: 'pago', label: 'Quitadas' },
+];
+
+const sortOptions = [
+  { value: 'recentes', label: 'Mais recentes' },
+  { value: 'prazo', label: 'Prazo mais próximo' },
+  { value: 'numero', label: 'Número da OS' },
+  { value: 'valor', label: 'Maior valor' },
+];
+
+const boardColumns: Array<{ status: OrderStatus; label: string }> = [
+  { status: 'atraso', label: 'Em atraso' },
+  { status: 'pendente', label: 'Aguardando' },
+  { status: 'em_andamento', label: 'Na bancada' },
+  { status: 'concluido', label: 'Concluídas' },
+];
 
 export function Ordens() {
   const { can } = useAuth();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  const [ordens, setOrdens] = useState<OrdemServico[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [globalFilter, setGlobalFilter] = useState('');
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => {
-    const value = searchParams.get('status');
-    return ['pendente', 'em_andamento', 'concluido', 'cancelado', 'atraso'].includes(value || '') ? value as StatusFilter : '';
-  });
-  const [financialFilter, setFinancialFilter] = useState<FinancialFilter>(() => {
-    const value = searchParams.get('financeiro');
-    return ['pendente', 'parcial', 'pago', 'cancelado', 'aberto'].includes(value || '') ? value as FinancialFilter : '';
-  });
-  const [deadlineFilter, setDeadlineFilter] = useState<DeadlineFilter>(() => {
-    const value = searchParams.get('prazo');
-    return value === 'hoje' || value === 'atraso' ? value : '';
-  });
-  const [pagina, setPagina] = useState(0);
-  const [showPrintModal, setShowPrintModal] = useState(false);
-  const [ordemParaImprimir, setOrdemParaImprimir] = useState<OrdemServico | null>(null);
-  const itensPorPagina = 10;
+  const { state, setState, reset, isFiltered } = useUrlState(defaults);
 
-  async function buscarOrdens() {
+  const [data, setData] = useState<ListResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [searchDraft, setSearchDraft] = useState(state.q);
+  const [printOrder, setPrintOrder] = useState<OrdemServico | null>(null);
+
+  const isBoard = state.view === 'bancada';
+
+  const load = useCallback(async () => {
     setLoading(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error('Usuário não autenticado');
-      const query = supabase
-        .from('ordens_servico')
-        .select(`*,cliente:clientes(*),instrumento:instrumentos(*),marca:marcas(*)`)
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false });
-      const { data, error } = await query;
-      if (error) throw error;
-      setOrdens(data || []);
+      const params = new URLSearchParams({
+        q: state.q,
+        status: isBoard ? '' : state.status,
+        prazo: state.prazo,
+        financeiro: state.financeiro,
+        sort: isBoard ? 'prazo' : state.sort,
+        page: isBoard ? '1' : state.page,
+        pageSize: isBoard ? '100' : '20',
+      });
+      setData(await apiRequest<ListResponse>(`/api/ordens/lista?${params.toString()}`));
     } catch (error) {
-      toast.error('Erro ao carregar ordens de serviço');
+      toast.error(error instanceof Error ? error.message : 'Erro ao carregar ordens de serviço');
     } finally {
       setLoading(false);
     }
-  }
+  }, [isBoard, state.financeiro, state.page, state.prazo, state.q, state.sort, state.status]);
 
-  // Carregar todas as ordens do Supabase apenas uma vez
   useEffect(() => {
-    buscarOrdens();
-  }, []);
+    void load();
+  }, [load]);
 
-  // Filtros client-side, pois a tela já carrega todas as ordens do usuário.
-  const filteredOrdens = useMemo(() => {
-    const search = globalFilter.trim().toLowerCase();
+  // Busca com atraso para não disparar uma consulta por tecla digitada.
+  useEffect(() => {
+    if (searchDraft === state.q) return;
+    const timer = window.setTimeout(() => setState({ q: searchDraft, page: '1' }), 350);
+    return () => window.clearTimeout(timer);
+  }, [searchDraft, setState, state.q]);
 
-    return ordens.filter(ordem => {
-      if (statusFilter && ordem.status !== statusFilter) return false;
-      const financialStatus = getFinancialStatus(ordem).value;
-      if (financialFilter === 'aberto' && !['pendente', 'parcial'].includes(financialStatus)) return false;
-      if (financialFilter && financialFilter !== 'aberto' && financialStatus !== financialFilter) return false;
-      const dueDate = String(ordem.data_previsao || '').slice(0, 10);
-      const today = todayLocalDate();
-      if (deadlineFilter === 'hoje' && dueDate !== today) return false;
-      if (deadlineFilter === 'atraso' && !(ordem.status === 'atraso' || (['pendente', 'em_andamento'].includes(ordem.status) && dueDate && dueDate < today))) return false;
-      if (!search) return true;
+  async function changeStatus(ordem: OrdemServico, next: OrderStatus) {
+    if (next === ordem.status) return;
 
-      const values = [
-        ordem.numero,
-        ordem.cliente?.nome,
-        ordem.instrumento?.nome,
-        ordem.marca?.nome,
-        ordem.modelo,
-        ordem.status,
-        ordem.observacoes,
-        formatDate(ordem.data_previsao)
-      ].join(' ').toLowerCase();
-      return values.includes(search);
-    });
-  }, [ordens, globalFilter, statusFilter, financialFilter, deadlineFilter]);
-
-  // Paginação client-side
-  const paginatedOrdens = useMemo(() => {
-    const start = pagina * itensPorPagina;
-    return filteredOrdens.slice(start, start + itensPorPagina);
-  }, [filteredOrdens, pagina, itensPorPagina]);
-
-  const totalPaginas = Math.ceil(filteredOrdens.length / itensPorPagina);
-
-  const statusColors = {
-    pendente: 'bg-yellow-100 text-yellow-800',
-    em_andamento: 'bg-blue-100 text-blue-800',
-    concluido: 'bg-green-100 text-green-800',
-    cancelado: 'bg-red-100 text-red-800',
-    atraso: 'bg-orange-100 text-orange-800'
-  };
-
-  const statusLabels = {
-    pendente: 'Pendente',
-    em_andamento: 'Em Andamento',
-    concluido: 'Concluído',
-    cancelado: 'Cancelado'
-  };
-
-  function getAuthHeaders() {
-    const sessionRaw = localStorage.getItem('mysql-auth-session');
-    const token = sessionRaw ? JSON.parse(sessionRaw)?.access_token : null;
-    return {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {})
-    };
-  }
-
-  async function registrarPagamentoOS(ordem: OrdemServico, valor?: number, formaPagamento?: string, observacoes = 'Pagamento registrado pela tela de OS') {
-    const response = await fetch(`/api/financeiro/os/${ordem.id}/pagamentos`, {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify({
-        valor,
-        forma_pagamento: formaPagamento || ordem.forma_pagamento,
-        observacoes
-      })
-    });
-    const json = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(json.error?.message || 'Erro ao registrar pagamento');
-    return json.data;
-  }
-
-  // Definição das colunas para TanStack Table v8+
-  const columns = useMemo<ColumnDef<OrdemServico, any>[]>(() => [
-      {
-        header: 'OS',
-        accessorKey: 'numero',
-        cell: info => `#${info.getValue()}`,
-        size: 40,
-      },
-      {
-        header: 'Cliente',
-        accessorFn: row => row.cliente?.nome || '',
-        id: 'cliente',
-        size: 120,
-      },
-      {
-        header: 'Equipamento',
-        accessorFn: row => `${row.instrumento?.nome || ''} ${row.marca?.nome || ''}\n${row.modelo || ''}`,
-        id: 'instrumento',
-        size: 120,
-        cell: info => (
-          <span style={{ whiteSpace: 'pre-line' }}>{info.getValue()}</span>
-        ),
-      },
-      {
-        header: 'Previsão',
-        accessorKey: 'data_previsao',
-        cell: info => formatDate(info.getValue()),
-        size: 80,
-      },
-      {
-        header: 'Status',
-        accessorKey: 'status',
-        cell: info => (
-          <select
-            value={info.row.original.status}
-            onChange={e => handleChangeStatus(info.row.original, e.target.value as 'pendente' | 'em_andamento' | 'concluido' | 'cancelado')}
-            className={`text-xs font-medium px-2 py-0.5 rounded-full ${statusColors[info.row.original.status]}`}
-            style={{ minWidth: 90 }}
-          >
-            <option value="pendente">Pendente</option>
-            <option value="em_andamento">Em Andamento</option>
-            <option value="concluido">Concluído</option>
-            {can('ordens.cancel') && <option value="cancelado">Cancelado</option>}
-          </select>
-        ),
-        size: 90,
-      },
-      {
-        header: 'Financeiro',
-        id: 'financeiro',
-        cell: info => {
-          const financial = getFinancialStatus(info.row.original);
-          return (
-            <div className="space-y-1">
-              <span className={`inline-flex rounded-full px-2 py-1 text-xs font-medium ${financial.className}`}>
-                {financial.label}
-              </span>
-              {financial.remaining > 0 && (
-                <p className="text-xs text-gray-500">Falta {formatCurrency(financial.remaining)}</p>
-              )}
-            </div>
-          );
-        },
-        size: 90,
-      },
-      {
-        header: 'Ações',
-        id: 'acoes',
-        cell: info => (
-          <div className="flex items-center justify-end gap-1">
-            <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => navigate(`/ordens/${info.row.original.id}/historico`)} className="p-1 text-amber-600 hover:bg-amber-50 rounded-lg transition-all duration-200" title="Histórico, ocorrências e aditivos"><History className="w-4 h-4" /></motion.button>
-            <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => navigate(`/ordens/editar/${info.row.original.id}`)} className="p-1 text-purple-600 dark:text-purple-400 hover:text-purple-900 dark:hover:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded-lg transition-all duration-200" title="Editar ordem"><Edit className="w-4 h-4" /></motion.button>
-            <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => { setOrdemParaImprimir(info.row.original); setShowPrintModal(true); }} className="p-1 text-purple-600 dark:text-purple-400 hover:text-purple-900 dark:hover:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded-lg transition-all duration-200" title="Imprimir ordem"><Printer className="w-4 h-4" /></motion.button>
-            <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => handleWhatsAppShare(info.row.original)} className="p-1 text-green-600 dark:text-green-400 hover:text-green-900 dark:hover:text-green-300 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-lg transition-all duration-200" title="Enviar mensagem WhatsApp"><Send className="w-4 h-4" /></motion.button>
-            {can('financeiro.write') && <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => handleRegistrarPagamento(info.row.original)} className="p-1 text-emerald-600 dark:text-emerald-400 hover:text-emerald-900 dark:hover:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 rounded-lg transition-all duration-200" title="Registrar pagamento"><DollarSign className="w-4 h-4" /></motion.button>}
-            {can('ordens.delete') && <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => handleExcluir(info.row.original)} className="p-1 text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-all duration-200" title="Excluir ordem"><Trash2 className="w-4 h-4" /></motion.button>}
-          </div>
-        ),
-        size: 90,
-      },
-    ].filter((column) => can('financeiro.read') || column.id !== 'financeiro'), [can, navigate, setOrdemParaImprimir, setShowPrintModal, handleWhatsAppShare, handleExcluir, handleChangeStatus]);
-
-  async function handleExcluir(ordem: OrdemServico) {
-    const result = await alerts.confirm({
-      title: 'Excluir ordem',
-      text: `Deseja excluir a ordem #${ordem.numero}?`,
-      icon: 'warning',
-      confirmButtonText: 'Excluir'
-    });
-
-    if (!result.isConfirmed) return;
-
-    try {
-      const { error } = await supabase
-        .from('ordens_servico')
-        .delete()
-        .eq('id', ordem.id);
-
-      if (error) throw error;
-
-      await alerts.success('Ordem de serviço excluída com sucesso!');
-      await buscarOrdens();
-    } catch (error) {
-      console.error('Erro ao excluir ordem:', error);
-      alerts.error('Erro ao excluir ordem de serviço');
+    if (next === 'cancelado') {
+      const confirmed = await alerts.confirm({
+        title: 'Cancelar ordem',
+        text: `A OS #${ordem.numero} será marcada como cancelada. Confirma?`,
+        icon: 'warning',
+        confirmButtonText: 'Cancelar OS',
+      });
+      if (!confirmed.isConfirmed) return;
     }
-  }
 
-  const table = useReactTable({
-    data: paginatedOrdens,
-    columns,
-    state: {
-      globalFilter,
-      pagination: { pageIndex: pagina, pageSize: itensPorPagina },
-    },
-    getCoreRowModel: getCoreRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-    manualPagination: true,
-    pageCount: totalPaginas,
-  });
-
-  async function handleChangeStatus(ordem: OrdemServico, newStatus: 'pendente' | 'em_andamento' | 'concluido' | 'cancelado') {
     try {
-      const payload = newStatus === 'concluido'
-        ? { status: newStatus, data_entrega: todayLocalDate() }
-        : { status: newStatus };
-
-      const { error } = await supabase
-        .from('ordens_servico')
-        .update(payload)
-        .eq('id', ordem.id);
-
+      const payload = next === 'concluido' ? { status: next, data_entrega: todayLocalDate() } : { status: next };
+      const { error } = await supabase.from('ordens_servico').update(payload).eq('id', ordem.id);
       if (error) throw error;
 
-      // If changing to completed status, send WhatsApp message
-      if (newStatus === 'concluido' && ordem.cliente?.telefone) {
+      if (next === 'concluido' && ordem.cliente?.telefone) {
         try {
           await WhatsAppService.sendCompletionMessage(ordem);
-          toast.success('Status atualizado e mensagem enviada!');
-        } catch (whatsappError: any) {
-          console.error('Erro ao enviar mensagem WhatsApp:', whatsappError);
-          toast.success('Status atualizado! (Erro ao enviar WhatsApp)');
+          toast.success('Status atualizado e cliente avisado no WhatsApp.');
+        } catch {
+          toast.success('Status atualizado. O aviso no WhatsApp não saiu.');
         }
       } else {
-        toast.success('Status atualizado com sucesso!');
+        toast.success(`OS #${ordem.numero} agora está como ${orderStatusLabel(next).toLowerCase()}.`);
       }
-
-      buscarOrdens();
+      await load();
     } catch (error) {
-      console.error('Erro ao atualizar status:', error);
-      toast.error('Erro ao atualizar status');
+      toast.error(error instanceof Error ? error.message : 'Erro ao atualizar status');
     }
   }
 
-  async function handleWhatsAppShare(ordem: OrdemServico) {
-    if (!ordem.cliente) {
-      toast.error('Cliente não encontrado');
-      return;
-    }
-
-    try {
-      await WhatsAppService.sendOrderMessage(ordem);
-      toast.success('Mensagem enviada com sucesso!');
-    } catch (error: any) {
-      console.error('Erro ao enviar mensagem:', error);
-      toast.error('Erro ao enviar mensagem: ' + error.message);
-    }
-  }
-
-  async function handleSendEvaluationRequest(ordem: OrdemServico) {
-    if (!ordem.cliente) {
-      toast.error('Cliente não encontrado');
-      return;
-    }
-
-    if (!ordem.cliente.telefone) {
-      toast.error('Cliente não possui telefone cadastrado');
-      return;
-    }
-
-    try {
-      // Enviar solicitação via WhatsApp
-      const success = await EvaluationReminderService.sendEvaluationForOrder(ordem);
-      if (!success) throw new Error('Não foi possível enviar a solicitação');
-
-      // Atualizar a lista local de ordens
-      await buscarOrdens();
-      
-      toast.success('Solicitação de avaliação enviada com sucesso!');
-    } catch (error: any) {
-      console.error('Erro ao enviar solicitação de avaliação:', error);
-      toast.error('Erro ao enviar solicitação de avaliação: ' + error.message);
-    }
-  }
-
-  async function handleGerarNFSe(ordem: OrdemServico) {
-    if (ordem.status !== 'concluido') {
-      toast.error('Apenas ordens concluídas podem gerar NFS-e');
-      return;
-    }
-
-    const result = await alerts.confirm({
-      title: 'Gerar NFS-e',
-      text: `Deseja gerar a Nota Fiscal de Serviço para a ordem #${ordem.numero}?`,
-      icon: 'question'
-    });
-
-    if (!result.isConfirmed) return;
-
-    try {
-      toast.info('Gerando NFS-e...');
-      const notaFiscal = await NFSeService.gerarNFSe(ordem.id);
-      
-      await alerts.success('NFS-e gerada com sucesso!');
-      
-      // Navegar para a página de notas fiscais
-      navigate(`/notas-fiscais/${notaFiscal.id}`);
-    } catch (error: any) {
-      console.error('Erro ao gerar NFS-e:', error);
-      
-      if (error.message.includes('Configure os dados fiscais')) {
-        const goToConfig = await alerts.confirm({
-          title: 'Configuração necessária',
-          text: 'É necessário configurar os dados fiscais da empresa primeiro. Deseja ir para as configurações?',
-          icon: 'warning'
-        });
-        
-        if (goToConfig.isConfirmed) {
-          navigate('/perfil');
-        }
-      } else {
-        alerts.error(error.message || 'Erro ao gerar NFS-e');
-      }
-    }
-  }
-
-  async function handleRegistrarPagamento(ordem: OrdemServico) {
-    const financial = getFinancialStatus(ordem);
+  async function registerPayment(ordem: OrdemServico) {
+    const financial = orderFinancialState(ordem);
     if (financial.remaining <= 0) {
-      toast.success('Esta OS ja esta quitada');
+      toast.success('Esta OS já está quitada.');
       return;
     }
 
@@ -407,369 +182,615 @@ export function Ordens() {
     if (!result.isConfirmed || !result.value) return;
 
     try {
-      await registrarPagamentoOS(ordem, result.value.value, result.value.method);
-      toast.success('Pagamento registrado com sucesso!');
-      buscarOrdens();
-    } catch (error: any) {
-      console.error('Erro ao registrar pagamento:', error);
-      toast.error(error.message || 'Erro ao registrar pagamento');
+      await apiRequest(`/api/financeiro/os/${ordem.id}/pagamentos`, {
+        method: 'POST',
+        body: JSON.stringify({
+          valor: result.value.value,
+          forma_pagamento: result.value.method,
+          observacoes: 'Pagamento registrado pela lista de ordens',
+        }),
+      });
+      toast.success('Pagamento registrado.');
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Erro ao registrar pagamento');
     }
   }
 
-  async function handleVisualizarNFSe(ordemId: string) {
+  async function sendWhatsApp(ordem: OrdemServico) {
+    if (!ordem.cliente) {
+      toast.error('Cliente não encontrado.');
+      return;
+    }
     try {
-      const notaFiscal = await NFSeService.buscarPorOrdemServico(ordemId);
-      if (notaFiscal) {
-        navigate(`/notas-fiscais/${notaFiscal.id}`);
-      } else {
-        toast.error('Nota fiscal não encontrada');
-      }
+      await WhatsAppService.sendOrderMessage(ordem);
+      toast.success('Mensagem enviada.');
     } catch (error) {
-      toast.error('Erro ao buscar nota fiscal');
+      toast.error(`Erro ao enviar mensagem: ${error instanceof Error ? error.message : ''}`);
     }
   }
+
+  async function requestEvaluation(ordem: OrdemServico) {
+    if (!ordem.cliente?.telefone) {
+      toast.error('Cliente sem telefone cadastrado.');
+      return;
+    }
+    try {
+      const ok = await EvaluationReminderService.sendEvaluationForOrder(ordem);
+      if (!ok) throw new Error('Não foi possível enviar a solicitação');
+      toast.success('Solicitação de avaliação enviada.');
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Erro ao solicitar avaliação');
+    }
+  }
+
+  async function generateInvoice(ordem: OrdemServico) {
+    if (ordem.status !== 'concluido') {
+      toast.error('Apenas ordens concluídas geram NFS-e.');
+      return;
+    }
+    const confirmed = await alerts.confirm({
+      title: 'Gerar NFS-e',
+      text: `Emitir a nota fiscal de serviço da OS #${ordem.numero}?`,
+      icon: 'question',
+    });
+    if (!confirmed.isConfirmed) return;
+
+    try {
+      const nota = await NFSeService.gerarNFSe(ordem.id);
+      await alerts.success('NFS-e gerada com sucesso.');
+      navigate(`/notas-fiscais/${nota.id}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Erro ao gerar NFS-e';
+      if (message.includes('Configure os dados fiscais')) {
+        const goToConfig = await alerts.confirm({
+          title: 'Configuração necessária',
+          text: 'Os dados fiscais da empresa ainda não foram preenchidos. Abrir as configurações?',
+          icon: 'warning',
+        });
+        if (goToConfig.isConfirmed) navigate('/configuracoes');
+        return;
+      }
+      alerts.error(message);
+    }
+  }
+
+  async function removeOrder(ordem: OrdemServico) {
+    const confirmed = await alerts.confirm({
+      title: 'Excluir ordem',
+      text: `A OS #${ordem.numero} e seu histórico serão removidos. Esta ação não pode ser desfeita.`,
+      icon: 'warning',
+      confirmButtonText: 'Excluir',
+    });
+    if (!confirmed.isConfirmed) return;
+
+    try {
+      const { error } = await supabase.from('ordens_servico').delete().eq('id', ordem.id);
+      if (error) throw error;
+      await alerts.success('Ordem excluída.');
+      await load();
+    } catch (error) {
+      alerts.error(error instanceof Error ? error.message : 'Erro ao excluir ordem');
+    }
+  }
+
+  const rows = useMemo(() => data?.rows ?? [], [data]);
+  const totalPages = data ? Math.max(1, Math.ceil(data.total / data.page_size)) : 1;
+  const currentPage = Number(state.page) || 1;
+
+  const boardGroups = useMemo(() => {
+    const groups = new Map<OrderStatus, OrdemServico[]>();
+    boardColumns.forEach((column) => groups.set(column.status, []));
+    rows.forEach((ordem) => {
+      const status = effectiveOrderStatus(ordem);
+      if (groups.has(status)) groups.get(status)!.push(ordem);
+    });
+    return groups;
+  }, [rows]);
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
-      <div className="responsive-page">
-        <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <motion.div 
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
-            className="flex items-center gap-3"
-          >
-            <motion.div 
-              whileHover={{ scale: 1.1, rotate: 5 }}
-              className="h-11 w-11 sm:h-12 sm:w-12 shrink-0 bg-gradient-to-br from-indigo-500 to-violet-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/30"
-            >
-              <Tool className="w-6 h-6 text-white" />
-            </motion.div>
-            <div className="min-w-0"><p className="command-eyebrow">Operação</p><h1 className="responsive-heading text-slate-950 dark:text-white">Ordens de Serviço</h1><p className="command-page-description">Priorize atrasos, acompanhe a bancada e conclua atendimentos.</p></div>
-          </motion.div>
-          <motion.div 
-            initial={{ opacity: 0, x: 20 }}
-            animate={{ opacity: 1, x: 0 }}
-            className="flex w-full flex-col gap-3 lg:w-auto lg:flex-row"
-          >
-            <div className="flex min-w-0 flex-1 flex-wrap gap-3">
-              <div className="relative min-w-0 flex-1 sm:min-w-64 lg:w-80">
-                <Search className="w-5 h-5 text-gray-400 dark:text-gray-500 absolute left-3 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  placeholder="Buscar por qualquer campo..."
-                  value={globalFilter}
-                  onChange={e => {
-                    setGlobalFilter(e.target.value);
-                    setPagina(0);
-                  }}
-                  className="pl-10 pr-4 py-2 border border-gray-200 dark:border-purple-500/20 rounded-lg focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 focus:border-indigo-500 w-full bg-white/50 dark:bg-gray-900/50 backdrop-blur-lg transition-all duration-200 text-gray-900 dark:text-gray-100"
-                />
-              </div>
-              <div className="min-w-40 flex-1 sm:flex-none">
-                <label htmlFor="status-filter" className="sr-only">Filtrar por status</label>
-                <select
-                  id="status-filter"
-                  value={statusFilter}
-                  onChange={e => {
-                    setStatusFilter(e.target.value as StatusFilter);
-                    setPagina(0);
-                  }}
-                  className="w-full rounded-lg border border-gray-200 bg-white/50 px-3 py-2 text-gray-900 backdrop-blur-lg transition-all duration-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 dark:border-purple-500/20 dark:bg-gray-900/50 dark:text-gray-100 dark:focus:ring-indigo-400"
-                >
-                  <option value="">Todos os status</option>
-                  <option value="pendente">Pendente</option>
-                  <option value="em_andamento">Em Andamento</option>
-                  <option value="concluido">Concluído</option>
-                  <option value="cancelado">Cancelado</option>
-                  <option value="atraso">Em atraso</option>
-                </select>
-              </div>
-              {can('financeiro.read') && (
-                <div className="min-w-40 flex-1 sm:flex-none">
-                  <label htmlFor="financial-filter" className="sr-only">Filtrar por situação financeira</label>
-                  <select
-                    id="financial-filter"
-                    value={financialFilter}
-                    onChange={e => {
-                      setFinancialFilter(e.target.value as FinancialFilter);
-                      setPagina(0);
-                    }}
-                    className="w-full rounded-lg border border-gray-200 bg-white/50 px-3 py-2 text-gray-900 backdrop-blur-lg transition-all duration-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 dark:border-purple-500/20 dark:bg-gray-900/50 dark:text-gray-100 dark:focus:ring-indigo-400"
-                  >
-                    <option value="">Todo o financeiro</option>
-                    <option value="aberto">Em aberto</option>
-                    <option value="pendente">Pendente</option>
-                    <option value="parcial">Parcial</option>
-                    <option value="pago">Pago</option>
-                    <option value="cancelado">Cancelado</option>
-                  </select>
-                </div>
-              )}
-              <div className="min-w-40 flex-1 sm:flex-none">
-                <label htmlFor="deadline-filter" className="sr-only">Filtrar por prazo</label>
-                <select id="deadline-filter" value={deadlineFilter} onChange={e => { setDeadlineFilter(e.target.value as DeadlineFilter); setPagina(0); }} className="w-full rounded-lg border border-gray-200 bg-white/50 px-3 py-2 text-gray-900 backdrop-blur-lg transition-all duration-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 dark:border-purple-500/20 dark:bg-gray-900/50 dark:text-gray-100 dark:focus:ring-indigo-400">
-                  <option value="">Todos os prazos</option>
-                  <option value="hoje">Entrega hoje</option>
-                  <option value="atraso">Em atraso</option>
-                </select>
-              </div>
-            </div>
-            <div className="flex flex-col gap-2 sm:flex-row">
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={() => navigate('/ordens/nova')}
-                className="w-full sm:w-auto px-4 py-2 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 text-white font-medium rounded-lg transition-all duration-300 flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/30 dark:shadow-indigo-500/20"
-              >
-                <Plus className="w-5 h-5" />
-                <span>Nova Ordem</span>
-              </motion.button>
-            </div>
-          </motion.div>
+    <main className="ui-page space-y-4">
+      <header className="ui-page-header">
+        <div className="min-w-0">
+          <p className="ui-page-eyebrow">Operação</p>
+          <h1 className="ui-page-title">Ordens de serviço</h1>
+          <p className="ui-page-description">
+            {data
+              ? `${data.facets.total} ordens no total · ${data.facets.atraso} em atraso · ${data.facets.em_andamento} na bancada`
+              : 'Carregando indicadores…'}
+          </p>
         </div>
-        
-        {/* Visualização em Cards para Mobile */}
-        <div className="lg:hidden space-y-4">
-          {loading ? (
-            <div className="glass dark:glass-dark rounded-xl p-12 text-center">
-              <div className="flex items-center justify-center space-x-2">
-                <motion.div
-                  animate={{ y: [0, -10, 0] }}
-                  transition={{ duration: 0.6, repeat: Infinity, delay: 0 }}
-                  className="w-3 h-3 bg-indigo-500 rounded-full"
-                />
-                <motion.div
-                  animate={{ y: [0, -10, 0] }}
-                  transition={{ duration: 0.6, repeat: Infinity, delay: 0.2 }}
-                  className="w-3 h-3 bg-indigo-500 rounded-full"
-                />
-                <motion.div
-                  animate={{ y: [0, -10, 0] }}
-                  transition={{ duration: 0.6, repeat: Infinity, delay: 0.4 }}
-                  className="w-3 h-3 bg-indigo-500 rounded-full"
-                />
-              </div>
-            </div>
-          ) : paginatedOrdens.length === 0 ? (
-            <div className="glass dark:glass-dark rounded-xl p-6 text-center text-gray-500 dark:text-gray-400">
-              Nenhuma ordem de serviço encontrada
-            </div>
-          ) : (
-            paginatedOrdens.map((ordem) => (
-              <motion.div 
-                key={ordem.id} 
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                whileHover={{ scale: 1.02 }}
-                className="glass dark:glass-dark rounded-xl shadow-lg dark:shadow-2xl p-4 border border-gray-100 dark:border-purple-500/10"
-              >
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between mb-3">
-                  <div className="flex-1 min-w-0">
-                    <h3 className="font-semibold text-gray-900 dark:text-gray-100">OS #{ordem.numero}</h3>
-                    <p className="text-sm text-gray-600 dark:text-gray-400">{ordem.cliente?.nome}</p>
-                  </div>
-                  <select
-                    value={ordem.status}
-                    onChange={e => handleChangeStatus(ordem, e.target.value as any)}
-                    className={`text-xs font-medium px-2.5 py-1 rounded-full ${statusColors[ordem.status]}`}
-                  >
-                    <option value="pendente">Pendente</option>
-                    <option value="em_andamento">Em Andamento</option>
-                    <option value="concluido">Concluído</option>
-                    {can('ordens.cancel') && <option value="cancelado">Cancelado</option>}
-                  </select>
-                </div>
-                
-                <div className="space-y-2 mb-4 text-sm">
-                  <p><span className="font-medium text-gray-700 dark:text-gray-300">Equipamento:</span> <span className="text-gray-600 dark:text-gray-400">{ordem.instrumento?.nome} - {ordem.marca?.nome}</span></p>
-                  <p><span className="font-medium text-gray-700 dark:text-gray-300">Entrada:</span> <span className="text-gray-600 dark:text-gray-400">{formatDate(ordem.data_entrada)}</span></p>
-                  <p><span className="font-medium text-gray-700 dark:text-gray-300">Previsão:</span> <span className="text-gray-600 dark:text-gray-400">{formatDate(ordem.data_previsao)}</span></p>
-                  {can('financeiro.read') && <p><span className="font-medium text-gray-700 dark:text-gray-300">Valor:</span> <span className="text-gray-600 dark:text-gray-400">{formatCurrency(ordem.valor_servicos - (ordem.desconto || 0))}</span></p>}
-                </div>
-                
-                <div className="grid grid-cols-3 gap-2 border-t border-gray-100 pt-3 sm:grid-cols-6 dark:border-gray-800">
-                  <motion.button
-                    whileHover={{ scale: 1.05 }}
-                    whileTap={{ scale: 0.95 }}
-                    onClick={() => navigate(`/ordens/editar/${ordem.id}`)} 
-                    className="flex-1 p-2 text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded-lg transition-all"
-                    title="Editar"
-                  >
-                    <Edit className="w-5 h-5 mx-auto" />
-                  </motion.button>
-                  <motion.button
-                    whileHover={{ scale: 1.05 }}
-                    whileTap={{ scale: 0.95 }}
-                    onClick={() => { setOrdemParaImprimir(ordem); setShowPrintModal(true); }} 
-                    className="flex-1 p-2 text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded-lg transition-all"
-                    title="Imprimir"
-                  >
-                    <Printer className="w-5 h-5 mx-auto" />
-                  </motion.button>
-                  <motion.button
-                    whileHover={{ scale: 1.05 }}
-                    whileTap={{ scale: 0.95 }}
-                    onClick={() => handleWhatsAppShare(ordem)}
-                    className="flex-1 p-2 text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-lg transition-all"
-                    title="WhatsApp"
-                  >
-                    <Send className="w-5 h-5 mx-auto" />
-                  </motion.button>
-                  <motion.button
-                    whileHover={{ scale: 1.05 }}
-                    whileTap={{ scale: 0.95 }}
-                    onClick={() => handleSendEvaluationRequest(ordem)} 
-                    className={`flex-1 p-2 rounded-lg transition-all ${
-                      ordem.status === 'concluido' && !ordem.solicita_avaliacao
-                        ? 'text-yellow-600 dark:text-yellow-400 hover:bg-yellow-50 dark:hover:bg-yellow-900/20' 
-                        : 'text-gray-400 dark:text-gray-600 cursor-not-allowed'
-                    }`}
-                    title={
-                      ordem.solicita_avaliacao 
-                        ? 'Avaliação já solicitada' 
-                        : ordem.status === 'concluido' 
-                          ? 'Solicitar avaliação' 
-                          : 'Disponível apenas para ordens concluídas'
-                    }
-                    disabled={ordem.status !== 'concluido' || ordem.solicita_avaliacao === true}
-                  >
-                    <Star className="w-5 h-5 mx-auto" />
-                  </motion.button>
-                  {can('nfse.manage') && <motion.button
-                    whileHover={{ scale: 1.05 }}
-                    whileTap={{ scale: 0.95 }}
-                    onClick={() => ordem.status === 'concluido' && handleGerarNFSe(ordem)} 
-                    className={`flex-1 p-2 rounded-lg transition-all ${
-                      ordem.status === 'concluido' 
-                        ? 'text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20' 
-                        : 'text-gray-400 dark:text-gray-600 cursor-not-allowed'
-                    }`}
-                    title="NFS-e"
-                    disabled={ordem.status !== 'concluido'}
-                  >
-                    <FileText className="w-5 h-5 mx-auto" />
-                  </motion.button>}
-                  {can('ordens.delete') && <motion.button
-                    whileHover={{ scale: 1.05 }}
-                    whileTap={{ scale: 0.95 }}
-                    onClick={() => handleExcluir(ordem)} 
-                    className="flex-1 p-2 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-all"
-                    title="Excluir"
-                  >
-                    <Trash2 className="w-5 h-5 mx-auto" />
-                  </motion.button>}
-                </div>
-              </motion.div>
-            ))
-          )}
+        <div className="ui-page-actions">
+          <Segmented
+            value={state.view}
+            onChange={(view) => setState({ view, page: '1' })}
+            options={[
+              { value: 'lista', label: 'Lista' },
+              { value: 'bancada', label: 'Bancada' },
+            ]}
+          />
+          <UIButton variant="primary" size="sm" icon={LayoutGrid} onClick={() => navigate('/ordens/nova')}>
+            Nova ordem
+          </UIButton>
         </div>
+      </header>
 
-        {/* Visualização em Tabela para Desktop */}
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="hidden lg:block glass dark:glass-dark rounded-2xl shadow-lg dark:shadow-2xl overflow-hidden border border-gray-100 dark:border-purple-500/10"
-        >
-          <div className="responsive-table-wrap">
-            <table className="w-full table-fixed min-w-[700px]">
-              <thead>
-                {table.getHeaderGroups().map(headerGroup => (
-                  <tr key={headerGroup.id} className="border-b border-gray-100 dark:border-gray-800 bg-gradient-to-r from-indigo-50/50 to-violet-50/50 dark:from-indigo-900/10 dark:to-violet-900/10">
-                    {headerGroup.headers.map(header => (
-                      <th key={header.id} className="px-6 py-4 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
-                        {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                      </th>
-                    ))}
-                  </tr>
-                ))}
-              </thead>
-              <tbody className="divide-y divide-gray-100 dark:divide-gray-800 bg-white/50 dark:bg-gray-900/20">
-                {loading ? (
-                  <tr>
-                    <td colSpan={columns.length} className="px-6 py-12 text-center">
-                      <div className="flex items-center justify-center space-x-2">
-                        <motion.div
-                          animate={{ y: [0, -10, 0] }}
-                          transition={{ duration: 0.6, repeat: Infinity, delay: 0 }}
-                          className="w-2 h-2 bg-indigo-500 rounded-full"
-                        />
-                        <motion.div
-                          animate={{ y: [0, -10, 0] }}
-                          transition={{ duration: 0.6, repeat: Infinity, delay: 0.2 }}
-                          className="w-2 h-2 bg-indigo-500 rounded-full"
-                        />
-                        <motion.div
-                          animate={{ y: [0, -10, 0] }}
-                          transition={{ duration: 0.6, repeat: Infinity, delay: 0.4 }}
-                          className="w-2 h-2 bg-indigo-500 rounded-full"
-                        />
-                      </div>
-                    </td>
-                  </tr>
-                ) : table.getRowModel().rows.length === 0 ? (
-                  <tr><td colSpan={columns.length} className="px-6 py-8 text-center text-gray-500 dark:text-gray-400">Nenhuma ordem de serviço encontrada</td></tr>
-                ) : (
-                  table.getRowModel().rows.map(row => (
-                    <motion.tr 
-                      key={row.id} 
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      className="hover:bg-indigo-50/50 dark:hover:bg-indigo-900/10 transition-colors duration-200"
-                    >
-                      {row.getVisibleCells().map(cell => (
-                        <td key={cell.id} className="px-2 py-2 whitespace-nowrap text-xs text-gray-900 dark:text-gray-100 max-w-[180px] overflow-hidden text-ellipsis">
-                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                        </td>
-                      ))}
-                    </motion.tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Paginação com TanStack Table */}
-          <div className="px-4 sm:px-6 py-4 bg-gradient-to-r from-indigo-50/50 to-violet-50/50 dark:from-indigo-900/10 dark:to-violet-900/10 border-t border-gray-100 dark:border-gray-800 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-sm text-gray-700 dark:text-gray-300">
-              Mostrando {paginatedOrdens.length} de {filteredOrdens.length} resultados
-            </p>
-            <div className="flex items-center space-x-2">
-              <motion.button
-                whileHover={{ scale: 1.1 }}
-                whileTap={{ scale: 0.9 }}
-                onClick={() => setPagina(p => Math.max(0, p - 1))} 
-                disabled={pagina === 0} 
-                className="p-2 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-900/20 disabled:opacity-50 disabled:hover:bg-transparent transition-colors duration-200 text-gray-700 dark:text-gray-300"
-              >
-                <ChevronLeft className="w-5 h-5" />
-              </motion.button>
-              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                Página {pagina + 1} de {totalPaginas}
-              </span>
-              <motion.button
-                whileHover={{ scale: 1.1 }}
-                whileTap={{ scale: 0.9 }}
-                onClick={() => setPagina(p => Math.min(totalPaginas - 1, p + 1))} 
-                disabled={pagina >= totalPaginas - 1} 
-                className="p-2 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-900/20 disabled:opacity-50 disabled:hover:bg-transparent transition-colors duration-200 text-gray-700 dark:text-gray-300"
-              >
-                <ChevronRight className="w-5 h-5" />
-              </motion.button>
-            </div>
-          </div>
-        </motion.div>
-      </div>
-      
-      {ordemParaImprimir && (
-        <PrintOrdemModal
-          isOpen={showPrintModal}
-          onClose={() => {
-            setShowPrintModal(false);
-            setOrdemParaImprimir(null);
-          }}
-          ordem={ordemParaImprimir}
+      {/* Filtros */}
+      <div className="ui-toolbar">
+        <SearchField
+          value={searchDraft}
+          onChange={setSearchDraft}
+          icon={Search}
+          placeholder="Número, cliente, telefone, marca ou modelo…"
+          className="min-w-56 flex-1"
         />
+
+        {!isBoard && (
+          <select className="ui-field w-auto min-w-36" value={state.status} onChange={(event) => setState({ status: event.target.value, page: '1' })} aria-label="Filtrar por status">
+            {statusOptions.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        )}
+
+        <select className="ui-field w-auto min-w-36" value={state.prazo} onChange={(event) => setState({ prazo: event.target.value, page: '1' })} aria-label="Filtrar por prazo">
+          {prazoOptions.map((option) => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </select>
+
+        {can('financeiro.read') && (
+          <select className="ui-field w-auto min-w-40" value={state.financeiro} onChange={(event) => setState({ financeiro: event.target.value, page: '1' })} aria-label="Filtrar por situação financeira">
+            {financeiroOptions.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        )}
+
+        {!isBoard && (
+          <label className="flex items-center gap-2 text-xs text-ink-muted">
+            <ArrowUpDown className="h-3.5 w-3.5" />
+            <select className="ui-field w-auto min-w-36" value={state.sort} onChange={(event) => setState({ sort: event.target.value, page: '1' })} aria-label="Ordenar">
+              {sortOptions.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+        )}
+
+        {isFiltered && (
+          <UIButton
+            variant="ghost"
+            size="sm"
+            icon={X}
+            onClick={() => {
+              setSearchDraft('');
+              reset();
+            }}
+          >
+            Limpar
+          </UIButton>
+        )}
+      </div>
+
+      {loading && !data ? (
+        <Skeleton className="h-96" />
+      ) : isBoard ? (
+        <BoardView
+          columns={boardColumns}
+          groups={boardGroups}
+          canSeeFinance={can('financeiro.read')}
+          onOpen={(ordem) => navigate(`/ordens/${ordem.id}/historico`)}
+          truncated={Boolean(data && data.total > data.rows.length)}
+        />
+      ) : rows.length === 0 ? (
+        <Panel flush>
+          <EmptyState
+            icon={Wrench}
+            title={isFiltered ? 'Nenhuma ordem para estes filtros' : 'Nenhuma ordem cadastrada'}
+            description={isFiltered ? 'Ajuste ou limpe os filtros para ver outros resultados.' : 'Abra a primeira ordem de serviço para começar.'}
+            action={
+              isFiltered ? (
+                <UIButton size="sm" onClick={() => { setSearchDraft(''); reset(); }}>Limpar filtros</UIButton>
+              ) : (
+                <UIButton variant="primary" size="sm" onClick={() => navigate('/ordens/nova')}>Nova ordem</UIButton>
+              )
+            }
+          />
+        </Panel>
+      ) : (
+        <>
+          {/* Desktop */}
+          <div className="hidden lg:block">
+            <Panel flush>
+              <Table>
+                <thead>
+                  <tr>
+                    <th className="w-20">OS</th>
+                    <th>Cliente</th>
+                    <th>Equipamento</th>
+                    <th className="w-28">Previsão</th>
+                    <th className="w-36">Situação</th>
+                    {can('financeiro.read') && <th className="w-40">Financeiro</th>}
+                    <th className="w-12" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((ordem) => {
+                    const financial = orderFinancialState(ordem);
+                    const overdue = effectiveOrderStatus(ordem) === 'atraso';
+                    return (
+                      <tr key={ordem.id}>
+                        <Td>
+                          <button
+                            type="button"
+                            onClick={() => navigate(`/ordens/${ordem.id}/historico`)}
+                            className="font-semibold tabular-nums text-brand-soft hover:underline"
+                          >
+                            #{ordem.numero}
+                          </button>
+                        </Td>
+                        <Td>
+                          <p className="truncate font-medium text-ink">{ordem.cliente?.nome}</p>
+                          <p className="truncate text-xs text-ink-subtle">{ordem.cliente?.telefone}</p>
+                        </Td>
+                        <Td>
+                          <p className="truncate text-ink">{[ordem.instrumento?.nome, ordem.marca?.nome].filter(Boolean).join(' · ')}</p>
+                          {ordem.modelo && <p className="truncate text-xs text-ink-subtle">{ordem.modelo}</p>}
+                        </Td>
+                        <Td>
+                          <span className={`tabular-nums ${overdue ? 'font-semibold text-signal-danger' : 'text-ink-muted'}`}>
+                            {formatDateOnly(ordem.data_previsao)}
+                          </span>
+                        </Td>
+                        <Td>
+                          <StatusControl ordem={ordem} onChange={changeStatus} canCancel={can('ordens.cancel')} />
+                        </Td>
+                        {can('financeiro.read') && (
+                          <Td>
+                            <div className="flex flex-col items-start gap-1">
+                              <FinancialStatusBadge status={financial.status} />
+                              <span className="text-xs tabular-nums text-ink-subtle">
+                                {financial.remaining > 0 ? `Falta ${formatCurrency(financial.remaining)}` : formatCurrency(financial.total)}
+                              </span>
+                            </div>
+                          </Td>
+                        )}
+                        <Td>
+                          <RowMenu
+                            ordem={ordem}
+                            can={can}
+                            onHistory={() => navigate(`/ordens/${ordem.id}/historico`)}
+                            onEdit={() => navigate(`/ordens/editar/${ordem.id}`)}
+                            onPrint={() => setPrintOrder(ordem)}
+                            onWhatsApp={() => void sendWhatsApp(ordem)}
+                            onEvaluation={() => void requestEvaluation(ordem)}
+                            onInvoice={() => void generateInvoice(ordem)}
+                            onPayment={() => void registerPayment(ordem)}
+                            onDelete={() => void removeOrder(ordem)}
+                          />
+                        </Td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </Table>
+            </Panel>
+          </div>
+
+          {/* Mobile */}
+          <div className="space-y-3 lg:hidden">
+            {rows.map((ordem) => {
+              const financial = orderFinancialState(ordem);
+              return (
+                <article key={ordem.id} className="ui-record">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-ink">
+                        OS #{ordem.numero} · {ordem.cliente?.nome}
+                      </p>
+                      <p className="truncate text-xs text-ink-muted">
+                        {[ordem.instrumento?.nome, ordem.marca?.nome, ordem.modelo].filter(Boolean).join(' ')}
+                      </p>
+                    </div>
+                    <OrderStatusBadge ordem={ordem} />
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-muted">
+                    <span>
+                      Previsão <strong className="tabular-nums text-ink">{formatDateOnly(ordem.data_previsao)}</strong>
+                    </span>
+                    {can('financeiro.read') && (
+                      <span className="flex items-center gap-1.5">
+                        <FinancialStatusBadge status={financial.status} />
+                        {financial.remaining > 0 && <span className="tabular-nums">Falta {formatCurrency(financial.remaining)}</span>}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap gap-2 border-t border-hairline pt-3">
+                    <UIButton size="sm" icon={History} onClick={() => navigate(`/ordens/${ordem.id}/historico`)}>
+                      Histórico
+                    </UIButton>
+                    <UIButton size="sm" icon={Edit3} onClick={() => navigate(`/ordens/editar/${ordem.id}`)}>
+                      Editar
+                    </UIButton>
+                    <UIButton size="sm" icon={Send} onClick={() => void sendWhatsApp(ordem)}>
+                      WhatsApp
+                    </UIButton>
+                    {can('financeiro.write') && financial.remaining > 0 && (
+                      <UIButton size="sm" variant="success" icon={DollarSign} onClick={() => void registerPayment(ordem)}>
+                        Receber
+                      </UIButton>
+                    )}
+                    <RowMenu
+                      ordem={ordem}
+                      can={can}
+                      onHistory={() => navigate(`/ordens/${ordem.id}/historico`)}
+                      onEdit={() => navigate(`/ordens/editar/${ordem.id}`)}
+                      onPrint={() => setPrintOrder(ordem)}
+                      onWhatsApp={() => void sendWhatsApp(ordem)}
+                      onEvaluation={() => void requestEvaluation(ordem)}
+                      onInvoice={() => void generateInvoice(ordem)}
+                      onPayment={() => void registerPayment(ordem)}
+                      onDelete={() => void removeOrder(ordem)}
+                    />
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+
+          {/* Paginação */}
+          {data && data.total > data.page_size && (
+            <div className="flex items-center justify-between gap-3 px-1">
+              <p className="text-xs text-ink-muted">
+                {(currentPage - 1) * data.page_size + 1}–{Math.min(currentPage * data.page_size, data.total)} de{' '}
+                <strong className="tabular-nums text-ink">{data.total}</strong>
+              </p>
+              <div className="flex items-center gap-2">
+                <UIButton size="sm" icon={ChevronLeft} disabled={currentPage <= 1} onClick={() => setState({ page: String(currentPage - 1) })} aria-label="Página anterior" />
+                <span className="text-xs tabular-nums text-ink-muted">
+                  {currentPage} / {totalPages}
+                </span>
+                <UIButton size="sm" icon={ChevronRight} disabled={currentPage >= totalPages} onClick={() => setState({ page: String(currentPage + 1) })} aria-label="Próxima página" />
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {printOrder && <PrintOrdemModal isOpen onClose={() => setPrintOrder(null)} ordem={printOrder} />}
+    </main>
+  );
+}
+
+/* ------------------------------------------------------------ Status */
+
+function StatusControl({
+  ordem,
+  onChange,
+  canCancel,
+}: {
+  ordem: OrdemServico;
+  onChange: (ordem: OrdemServico, status: OrderStatus) => void;
+  canCancel: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useOutsideClick(ref, () => setOpen(false));
+
+  const options: OrderStatus[] = ['pendente', 'em_andamento', 'concluido', ...(canCancel ? (['cancelado'] as OrderStatus[]) : [])];
+
+  return (
+    <div className="relative" ref={ref}>
+      <button type="button" onClick={() => setOpen((value) => !value)} className="text-left" aria-haspopup="menu" aria-expanded={open}>
+        <OrderStatusBadge ordem={ordem} />
+      </button>
+      {open && (
+        <div role="menu" className="absolute left-0 z-20 mt-1.5 w-44 overflow-hidden rounded-md border border-hairline bg-surface-raised py-1 shadow-glass-lg">
+          <p className="px-3 py-1.5 text-2xs uppercase tracking-[0.12em] text-ink-subtle">Mudar situação</p>
+          {options.map((option) => (
+            <button
+              key={option}
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                onChange(ordem, option);
+              }}
+              disabled={option === ordem.status}
+              className="flex w-full items-center justify-between px-3 py-2 text-left text-sm text-ink-muted transition hover:bg-surface-muted hover:text-ink disabled:opacity-40"
+            >
+              {orderStatusLabel(option)}
+              {option === ordem.status && <CheckCircle2 className="h-3.5 w-3.5 text-signal-success" />}
+            </button>
+          ))}
+        </div>
       )}
     </div>
   );
+}
+
+/* ------------------------------------------------------------ Menu de linha */
+
+function RowMenu({
+  ordem,
+  can,
+  onHistory,
+  onEdit,
+  onPrint,
+  onWhatsApp,
+  onEvaluation,
+  onInvoice,
+  onPayment,
+  onDelete,
+}: {
+  ordem: OrdemServico;
+  can: (permission: Parameters<ReturnType<typeof useAuth>['can']>[0]) => boolean;
+  onHistory: () => void;
+  onEdit: () => void;
+  onPrint: () => void;
+  onWhatsApp: () => void;
+  onEvaluation: () => void;
+  onInvoice: () => void;
+  onPayment: () => void;
+  onDelete: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useOutsideClick(ref, () => setOpen(false));
+
+  const items = [
+    { label: 'Histórico e aditivos', icon: History, action: onHistory, show: true },
+    { label: 'Editar ordem', icon: Edit3, action: onEdit, show: true },
+    { label: 'Imprimir', icon: Printer, action: onPrint, show: true },
+    { label: 'Enviar no WhatsApp', icon: Send, action: onWhatsApp, show: true },
+    {
+      label: ordem.solicita_avaliacao ? 'Avaliação já solicitada' : 'Solicitar avaliação',
+      icon: Star,
+      action: onEvaluation,
+      show: true,
+      disabled: ordem.status !== 'concluido' || ordem.solicita_avaliacao === true,
+    },
+    { label: 'Gerar NFS-e', icon: FileText, action: onInvoice, show: can('nfse.manage'), disabled: ordem.status !== 'concluido' },
+    { label: 'Registrar pagamento', icon: DollarSign, action: onPayment, show: can('financeiro.write') },
+    { label: 'Excluir', icon: Trash2, action: onDelete, show: can('ordens.delete'), danger: true },
+  ].filter((item) => item.show);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="ui-btn ui-btn-ghost ui-btn-icon-sm"
+        aria-label={`Ações da OS ${ordem.numero}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        <MoreHorizontal className="h-4 w-4" />
+      </button>
+      {open && (
+        <div role="menu" className="absolute right-0 z-20 mt-1.5 w-56 overflow-hidden rounded-md border border-hairline bg-surface-raised py-1 shadow-glass-lg">
+          {items.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.label}
+                type="button"
+                role="menuitem"
+                disabled={item.disabled}
+                onClick={() => {
+                  setOpen(false);
+                  item.action();
+                }}
+                className={`flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm transition disabled:opacity-40 ${
+                  item.danger
+                    ? 'text-signal-danger hover:bg-signal-danger/10'
+                    : 'text-ink-muted hover:bg-surface-muted hover:text-ink'
+                }`}
+              >
+                <Icon className="h-3.5 w-3.5 shrink-0" />
+                {item.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------ Bancada */
+
+function BoardView({
+  columns,
+  groups,
+  canSeeFinance,
+  onOpen,
+  truncated,
+}: {
+  columns: Array<{ status: OrderStatus; label: string }>;
+  groups: Map<OrderStatus, OrdemServico[]>;
+  canSeeFinance: boolean;
+  onOpen: (ordem: OrdemServico) => void;
+  truncated: boolean;
+}) {
+  return (
+    <div className="space-y-3">
+      {truncated && (
+        <p className="text-xs text-ink-muted">
+          Mostrando as 100 ordens mais próximas do prazo. Use os filtros para recortar o período.
+        </p>
+      )}
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        {columns.map((column) => {
+          const items = groups.get(column.status) ?? [];
+          return (
+            <section key={column.status} className="ui-panel ui-panel-flush flex flex-col">
+              <header className="flex items-center justify-between gap-2 border-b border-hairline px-3 py-2.5">
+                <span className="flex items-center gap-2">
+                  <span className="text-sm font-semibold text-ink">{column.label}</span>
+                  <Badge tone={column.status === 'atraso' ? 'danger' : column.status === 'concluido' ? 'success' : 'neutral'}>
+                    {items.length}
+                  </Badge>
+                </span>
+              </header>
+              <div className="max-h-[32rem] space-y-2 overflow-y-auto p-2">
+                {items.length === 0 ? (
+                  <p className="px-2 py-6 text-center text-xs text-ink-subtle">Nada nesta etapa.</p>
+                ) : (
+                  items.map((ordem) => {
+                    const financial = orderFinancialState(ordem);
+                    return (
+                      <button
+                        key={ordem.id}
+                        type="button"
+                        onClick={() => onOpen(ordem)}
+                        className="w-full rounded-md border border-hairline bg-surface p-3 text-left transition hover:border-brand/45 hover:bg-brand/5"
+                      >
+                        <div className="flex items-baseline justify-between gap-2">
+                          <span className="text-xs font-bold tabular-nums text-brand-soft">#{ordem.numero}</span>
+                          <span className={`text-xs tabular-nums ${column.status === 'atraso' ? 'text-signal-danger' : 'text-ink-subtle'}`}>
+                            {formatDateOnly(ordem.data_previsao)}
+                          </span>
+                        </div>
+                        <p className="mt-1 truncate text-sm font-medium text-ink">{ordem.cliente?.nome}</p>
+                        <p className="truncate text-xs text-ink-muted">
+                          {[ordem.instrumento?.nome, ordem.marca?.nome, ordem.modelo].filter(Boolean).join(' ')}
+                        </p>
+                        {canSeeFinance && financial.remaining > 0 && (
+                          <p className="mt-2 text-xs tabular-nums text-signal-warning">Falta {formatCurrency(financial.remaining)}</p>
+                        )}
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </section>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------ Utilitário */
+
+function useOutsideClick(ref: React.RefObject<HTMLElement>, handler: () => void) {
+  useEffect(() => {
+    function onPointerDown(event: MouseEvent | TouchEvent) {
+      if (ref.current && !ref.current.contains(event.target as Node)) handler();
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') handler();
+    }
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [handler, ref]);
 }

@@ -18,9 +18,9 @@ export function getTheme(): Theme {
 }
 
 export function initializeTheme(): Theme {
+  // Dark é o tema padrão do sistema; a escolha do usuário sempre prevalece.
   const savedTheme = localStorage.getItem('theme');
-  const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-  const theme = savedTheme ? normalizeTheme(savedTheme) : (systemPrefersDark ? 'dark' : 'light');
+  const theme = savedTheme ? normalizeTheme(savedTheme) : 'dark';
   localStorage.setItem('theme', theme);
   applyTheme(theme);
   return theme;

@@ -814,7 +814,13 @@ const requiredColumns = {
   instrumentos: { updated_at: 'varchar(50) DEFAULT NULL' },
   servicos: { updated_at: 'varchar(50) DEFAULT NULL' },
   problemas: { updated_at: 'varchar(50) DEFAULT NULL' },
-  categorias_financeiras: { updated_at: 'varchar(50) DEFAULT NULL' },
+  categorias_financeiras: {
+    updated_at: 'varchar(50) DEFAULT NULL',
+    // Classificação contábil: permite montar a DRE sem depender do nome da categoria.
+    grupo_dre: "varchar(40) DEFAULT NULL",
+    centro_custo: 'varchar(60) DEFAULT NULL',
+    ativa: 'tinyint(1) DEFAULT 1',
+  },
   ordens_servico: {
     instrumento_id: 'varchar(36) DEFAULT NULL',
     equipamento_id: 'varchar(36) DEFAULT NULL',
@@ -849,6 +855,7 @@ const requiredColumns = {
     competencia: 'varchar(10) DEFAULT NULL',
     origem: "varchar(30) DEFAULT 'manual'",
     alterada_manualmente: 'tinyint(1) DEFAULT 0',
+    centro_custo: 'varchar(60) DEFAULT NULL',
   },
   transacoes_financeiras: {
     conta_pagar_id: 'varchar(36) DEFAULT NULL',
@@ -857,6 +864,10 @@ const requiredColumns = {
     comprovante_url: 'varchar(500) DEFAULT NULL',
     origem: "varchar(50) DEFAULT 'manual'",
     updated_at: 'varchar(50) DEFAULT NULL',
+    // Separa quando o valor foi gerado (competência) de quando circulou (caixa).
+    data_competencia: 'varchar(10) DEFAULT NULL',
+    centro_custo: 'varchar(60) DEFAULT NULL',
+    conta_receber_id: 'varchar(36) DEFAULT NULL',
   },
   contas_receber: {
     categoria_id: 'varchar(36) DEFAULT NULL',
@@ -979,6 +990,14 @@ const indexes = [
   ['remarketing_lembretes', 'unique_remarketing_ciclo', 'ALTER TABLE remarketing_lembretes ADD UNIQUE KEY unique_remarketing_ciclo (user_id, campanha_id, ordem_servico_id)'],
   ['financeiro_ia_autorizados', 'unique_financeiro_ia_phone_user', 'ALTER TABLE financeiro_ia_autorizados ADD UNIQUE KEY unique_financeiro_ia_phone_user (user_id, telefone)'],
   ['configuracoes_empresa', 'unique_config_empresa_user', 'ALTER TABLE configuracoes_empresa ADD UNIQUE KEY unique_config_empresa_user (user_id)'],
+  // Índices compostos para os relatórios financeiros: as consultas do
+  // `/api/financeiro/resumo` sempre filtram por usuário + intervalo de datas.
+  ['transacoes_financeiras', 'idx_transacoes_user_data', 'ALTER TABLE transacoes_financeiras ADD INDEX idx_transacoes_user_data (user_id, data)'],
+  ['transacoes_financeiras', 'idx_transacoes_user_tipo_data', 'ALTER TABLE transacoes_financeiras ADD INDEX idx_transacoes_user_tipo_data (user_id, tipo, data)'],
+  ['contas_pagar', 'idx_contas_pagar_user_status_venc', 'ALTER TABLE contas_pagar ADD INDEX idx_contas_pagar_user_status_venc (user_id, status, data_vencimento)'],
+  ['contas_receber', 'idx_contas_receber_user_status_venc', 'ALTER TABLE contas_receber ADD INDEX idx_contas_receber_user_status_venc (user_id, status, data_vencimento)'],
+  ['ordens_servico', 'idx_ordens_user_status_previsao', 'ALTER TABLE ordens_servico ADD INDEX idx_ordens_user_status_previsao (user_id, status, data_previsao)'],
+  ['categorias_financeiras', 'idx_categorias_user_grupo', 'ALTER TABLE categorias_financeiras ADD INDEX idx_categorias_user_grupo (user_id, grupo_dre)'],
   ['configuracoes_whatsapp', 'unique_config_whatsapp_user', 'ALTER TABLE configuracoes_whatsapp ADD UNIQUE KEY unique_config_whatsapp_user (user_id)'],
   ['system_settings', 'unique_system_settings_user', 'ALTER TABLE system_settings ADD UNIQUE KEY unique_system_settings_user (user_id)'],
   ['templates_mensagem', 'unique_template_tipo_user', 'ALTER TABLE templates_mensagem ADD UNIQUE KEY unique_template_tipo_user (user_id, tipo)'],
@@ -1118,6 +1137,63 @@ async function backfillEvaluationReminders(conn) {
     `, [nowSql(), nowSql()]);
     if (Number(result.affectedRows || 0) > 0) console.log(`Backfill avaliacoes_lembretes: ${result.affectedRows}`);
   });
+}
+
+/**
+ * Classifica as categorias financeiras existentes nos grupos da DRE.
+ *
+ * Só preenche o que está em branco: uma classificação ajustada à mão pelo
+ * usuário nunca é sobrescrita por uma execução posterior da migração.
+ * A heurística usa o nome da categoria e serve como ponto de partida — a tela
+ * de categorias permite corrigir caso a caso.
+ */
+async function classifyFinancialCategories(conn) {
+  if (!(await tableExists(conn, 'categorias_financeiras'))) return;
+  if (!(await columnExists(conn, 'categorias_financeiras', 'grupo_dre'))) return;
+
+  await safeStep('classificar categorias na DRE', async () => {
+    const [result] = await conn.query(`
+      UPDATE categorias_financeiras
+         SET grupo_dre = CASE
+           WHEN tipo = 'receita' THEN
+             CASE WHEN nome LIKE '%servic%' OR nome LIKE '%conserto%' OR nome LIKE '%manuten%' OR nome LIKE '%reparo%'
+                  THEN 'receita_servico' ELSE 'receita_outras' END
+           WHEN nome LIKE '%peca%' OR nome LIKE '%material%' OR nome LIKE '%insumo%' OR nome LIKE '%corda%'
+                OR nome LIKE '%produto%' OR nome LIKE '%mercadoria%' OR nome LIKE '%compra%'
+             THEN 'custo_direto'
+           WHEN nome LIKE '%salario%' OR nome LIKE '%pro-labore%' OR nome LIKE '%prolabore%' OR nome LIKE '%contab%'
+                OR nome LIKE '%imposto%' OR nome LIKE '%tribut%' OR nome LIKE '%taxa%' OR nome LIKE '%honorar%'
+                OR nome LIKE '%folha%' OR nome LIKE '%encargo%'
+             THEN 'despesa_administrativa'
+           WHEN nome LIKE '%juro%' OR nome LIKE '%tarifa%' OR nome LIKE '%banc%' OR nome LIKE '%cartao%'
+                OR nome LIKE '%emprestimo%' OR nome LIKE '%multa%' OR nome LIKE '%financiamento%'
+             THEN 'despesa_financeira'
+           WHEN nome LIKE '%equipamento%' OR nome LIKE '%ferramenta%' OR nome LIKE '%maquina%'
+                OR nome LIKE '%investimento%' OR nome LIKE '%obra%' OR nome LIKE '%reforma%' OR nome LIKE '%movel%'
+             THEN 'investimento'
+           ELSE 'despesa_operacional'
+         END,
+         ativa = COALESCE(ativa, 1),
+         updated_at = ?
+       WHERE grupo_dre IS NULL OR grupo_dre = ''
+    `, [nowSql()]);
+    if (Number(result.affectedRows || 0) > 0) console.log(`Categorias classificadas na DRE: ${result.affectedRows}`);
+  });
+
+  if (await columnExists(conn, 'transacoes_financeiras', 'data_competencia')) {
+    await safeStep('preencher competencia das transacoes', async () => {
+      // Sem informação melhor, competência = data do movimento. O que vier de
+      // uma conta a pagar herda o vencimento, que é a competência correta.
+      const [result] = await conn.query(`
+        UPDATE transacoes_financeiras t
+        LEFT JOIN contas_pagar cp ON cp.id = t.conta_pagar_id
+           SET t.data_competencia = COALESCE(LEFT(cp.data_vencimento,10), LEFT(t.data,10)),
+               t.updated_at = COALESCE(t.updated_at, ?)
+         WHERE t.data_competencia IS NULL OR t.data_competencia = ''
+      `, [nowSql()]);
+      if (Number(result.affectedRows || 0) > 0) console.log(`Competencia preenchida: ${result.affectedRows}`);
+    });
+  }
 }
 
 async function backfillReceivables(conn) {
@@ -1327,6 +1403,7 @@ try {
   await backfillPayableRecurrences(conn);
   await backfillCompanyTerms(conn);
   await backfillEvaluationReminders(conn);
+  await classifyFinancialCategories(conn);
   await backfillReceivables(conn);
   await backfillPayments(conn);
   await backfillPaymentConditions(conn);

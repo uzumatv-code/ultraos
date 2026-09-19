@@ -2,8 +2,7 @@ import React, { Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { motion } from 'framer-motion';
-import { Header } from './components/Header';
-import { BottomNavigation } from './components/BottomNavigation';
+import { AppShell } from './components/AppShell';
 import { ReminderProvider } from './contexts/ReminderContext';
 import { AuthProvider, Permission, useAuth } from './contexts/AuthContext';
 
@@ -34,9 +33,9 @@ const Conversas = lazy(() => import('./pages/Conversas').then((module) => ({ def
 function RouteFallback() {
   return (
     <div className="flex min-h-[50vh] items-center justify-center" role="status" aria-live="polite">
-      <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-5 py-4 text-sm font-medium text-slate-600 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
-        <span className="h-5 w-5 animate-spin rounded-full border-2 border-slate-200 border-t-violet-600 dark:border-slate-700 dark:border-t-violet-400" aria-hidden="true" />
-        Carregando conteúdo…
+      <div className="flex items-center gap-3 rounded-lg border border-hairline bg-surface-raised px-5 py-4 text-sm font-medium text-ink-muted shadow-hairline">
+        <span className="h-4 w-4 animate-spin rounded-full border-2 border-hairline border-t-brand" aria-hidden="true" />
+        Carregando…
       </div>
     </div>
   );
@@ -47,37 +46,16 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
   if (loading) {
     return (
-      <div className="min-h-screen gradient-bg flex items-center justify-center">
-        <motion.div 
-          initial={{ scale: 0.9, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          className="glass rounded-3xl p-10 shadow-glass-lg"
+      <div className="flex min-h-screen items-center justify-center bg-canvas">
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="flex flex-col items-center gap-4 rounded-lg border border-hairline bg-surface-raised px-10 py-8 shadow-glass"
         >
-          <div className="flex flex-col items-center gap-4">
-            <motion.div
-              animate={{ 
-                rotate: 360,
-                scale: [1, 1.1, 1]
-              }}
-              transition={{ 
-                rotate: { duration: 0.2, ease: "linear" },
-                scale: { duration: 0.2, ease: "easeOut" }
-              }}
-              className="w-16 h-16 gradient-primary rounded-2xl shadow-neon"
-            />
-            <motion.div
-              animate={{ opacity: [0.5, 1, 0.5] }}
-              transition={{ duration: 0.2 }}
-              className="h-2 w-32 bg-primary-200 rounded-full overflow-hidden"
-            >
-              <motion.div
-                animate={{ x: ['-100%', '200%'] }}
-                transition={{ duration: 0.2, ease: "easeOut" }}
-                className="h-full w-1/2 gradient-primary"
-              />
-            </motion.div>
-            <p className="text-sm font-medium text-gray-600 dark:text-gray-300">Carregando...</p>
-          </div>
+          <span className="flex h-12 w-12 items-center justify-center rounded-lg border border-brand/30 bg-brand/15">
+            <span className="h-5 w-5 animate-spin rounded-full border-2 border-brand/30 border-t-brand" />
+          </span>
+          <p className="text-sm font-medium text-ink-muted">Preparando sua operação…</p>
         </motion.div>
       </div>
     );
@@ -98,18 +76,11 @@ function RequirePermission({ permission, children }: { permission: Permission; c
 
 function Layout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-screen w-full bg-[rgb(var(--app-canvas))]">
-      <Header />
-      <motion.div 
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.2 }}
-        className="pb-[calc(5rem+env(safe-area-inset-bottom))] pt-16 lg:pb-0 lg:pl-64 lg:pt-16"
-      >
+    <AppShell>
+      <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.18 }}>
         {children}
       </motion.div>
-      <BottomNavigation />
-    </div>
+    </AppShell>
   );
 }
 
@@ -349,49 +320,32 @@ function App() {
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
       </Routes>
       </Suspense>
-      <Toaster 
+      <Toaster
         position="top-right"
         toastOptions={{
           duration: 4000,
-          className: '',
           style: {
-            borderRadius: '12px',
-            padding: '14px 16px',
+            borderRadius: 'var(--ui-radius-md)',
+            padding: '12px 14px',
             fontSize: '14px',
             fontWeight: '500',
-            background: 'rgb(var(--app-surface))',
-            color: 'rgb(var(--app-text))',
-            border: '1px solid rgb(var(--app-border))',
-            boxShadow: 'var(--app-shadow)',
+            background: 'rgb(var(--ui-surface-2))',
+            color: 'rgb(var(--ui-text))',
+            border: '1px solid rgb(var(--ui-border))',
+            boxShadow: 'var(--ui-shadow-lg)',
           },
           success: {
-            duration: 4000,
-            style: {
-              borderLeft: '4px solid #16C784',
-            },
-            iconTheme: {
-              primary: '#16C784',
-              secondary: '#ecfdf5',
-            },
+            style: { borderLeft: '3px solid rgb(var(--ui-success))' },
+            iconTheme: { primary: 'rgb(var(--ui-success))', secondary: 'rgb(var(--ui-surface-2))' },
           },
           error: {
             duration: 5000,
-            style: {
-              borderLeft: '4px solid #FF4D67',
-            },
-            iconTheme: {
-              primary: '#FF4D67',
-              secondary: '#fef2f2',
-            },
+            style: { borderLeft: '3px solid rgb(var(--ui-danger))' },
+            iconTheme: { primary: 'rgb(var(--ui-danger))', secondary: 'rgb(var(--ui-surface-2))' },
           },
           loading: {
-            style: {
-              borderLeft: '4px solid #7c3aed',
-            },
-            iconTheme: {
-              primary: '#7c3aed',
-              secondary: '#f5f3ff',
-            },
+            style: { borderLeft: '3px solid rgb(var(--ui-brand))' },
+            iconTheme: { primary: 'rgb(var(--ui-brand))', secondary: 'rgb(var(--ui-surface-2))' },
           },
         }}
       />

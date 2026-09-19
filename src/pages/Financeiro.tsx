@@ -1,869 +1,809 @@
+/**
+ * Visão financeira.
+ *
+ * O erro estrutural da versão anterior era somar coisas que não se somam:
+ * a receita vinha do caixa (transações lançadas) e a despesa vinha da
+ * competência (contas a pagar do mês, pagas ou não). O "resultado" exibido
+ * não correspondia nem ao dinheiro em conta nem ao resultado do período, e
+ * despesas avulsas — lançadas fora do Contas a Pagar — simplesmente sumiam.
+ *
+ * Aqui os dois regimes aparecem separados e rotulados:
+ *
+ *   CAIXA         o que entrou e saiu no mês (transações financeiras).
+ *   COMPETÊNCIA   o que o mês gerou, pago ou não (recebíveis e pagáveis
+ *                 pelo vencimento), organizado em DRE.
+ *
+ * Além disso: aging da inadimplência, projeção de 30/60/90 dias e indicadores
+ * de produção (ticket médio, prazo médio de recebimento). Todos os números
+ * vêm agregados de `/api/financeiro/resumo` — o navegador não soma mais nada.
+ */
+
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  BarElement,
-  LineElement,
-  PointElement,
-  Tooltip,
-  Legend,
-  ArcElement,
-  Filler,
+  ArcElement, BarElement, CategoryScale, Chart as ChartJS, Filler, Legend,
+  LineElement, LinearScale, PointElement, Tooltip,
 } from 'chart.js';
-import { Bar, Doughnut, Line } from 'react-chartjs-2';
+import { Bar, Doughnut } from 'react-chartjs-2';
 import {
-  ArrowDownRight,
-  ArrowRight,
-  ArrowUpRight,
-  CalendarDays,
-  CheckCircle,
-  FileText,
-  Filter,
-  Plus,
-  Receipt,
-  Search,
-  Tags,
-  Upload,
-  Wallet,
+  AlertTriangle, ArrowDownRight, ArrowUpRight, CalendarRange, CheckCircle2,
+  ChevronLeft, ChevronRight, Clock, FileText, Plus, Receipt, Tags, TrendingUp,
+  Upload, Wallet,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
+import { apiRequest } from '../lib/api-client';
 import { toast } from '../components/ToastCustom';
-import { formatCurrency } from '../utils/formatters';
+import { formatCurrency, formatDateOnly } from '../utils/formatters';
 import { TransacaoModal } from '../components/TransacaoModal';
 import { CategoriaFinanceiraModal } from '../components/CategoriaFinanceiraModal';
 import { ImportarCSVModal } from '../components/ImportarCSVModal';
-import { getTheme, themeChangeEvent, type Theme } from '../lib/theme';
-import type { CategoriaFinanceira, ContaPagar, ContaReceber, TransacaoFinanceira } from '../types/database';
+import { baseChartOptions, useChartPalette } from '../lib/chart-theme';
+import { Badge, EmptyState, Kpi, Meter, Panel, Segmented, Skeleton, Table, Td, UIButton, toneText, type Tone } from '../components/ui';
+import type { CategoriaFinanceira } from '../types/database';
 
-ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  BarElement,
-  LineElement,
-  PointElement,
-  Tooltip,
-  Legend,
-  ArcElement,
-  Filler,
-);
+ChartJS.register(CategoryScale, LinearScale, BarElement, LineElement, PointElement, Tooltip, Legend, ArcElement, Filler);
 
-type TipoFiltro = 'todos' | 'receita' | 'despesa';
-type FluxoMensal = { label: string; receitas: number; despesas: number; pago: number };
-type CategoriaResumo = { nome: string; valor: number; cor: string };
-
-function toDateInput(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-function formatDateBR(value?: string) {
-  if (!value) return 'Sem data';
-  const [datePart] = value.split('T');
-  const [year, month, day] = datePart.split('-');
-  if (!year || !month || !day) return new Date(value).toLocaleDateString('pt-BR');
-  return `${day}/${month}/${year}`;
-}
-
-function getMonthRange(date: Date) {
-  const start = new Date(date.getFullYear(), date.getMonth(), 1);
-  const end = new Date(date.getFullYear(), date.getMonth() + 1, 0);
-  const nextStart = new Date(date.getFullYear(), date.getMonth() + 1, 1);
-  return { start: toDateInput(start), end: toDateInput(end), nextStart: toDateInput(nextStart) };
-}
-
-function getLastSixMonthRange() {
-  const start = new Date();
-  start.setMonth(start.getMonth() - 5);
-  start.setDate(1);
-  const end = new Date();
-  const nextEnd = new Date(end.getFullYear(), end.getMonth(), end.getDate() + 1);
-  return { start: toDateInput(start), end: toDateInput(end), nextEnd: toDateInput(nextEnd) };
-}
-
-function parseDate(value?: string) {
-  if (!value) return null;
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-
-function parseDueDate(value?: string) {
-  if (!value) return null;
-  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (!match) return parseDate(value);
-  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-
-function monthLabel(date: Date) {
-  return date.toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '');
-}
-
-function buildFluxoMensal(transacoes: TransacaoFinanceira[], contas: ContaPagar[]) {
-  const months: FluxoMensal[] = Array.from({ length: 6 }, (_, index) => {
-    const date = new Date();
-    date.setMonth(date.getMonth() - (5 - index));
-    return { label: monthLabel(date), receitas: 0, despesas: 0, pago: 0 };
-  });
-
-  const first = new Date();
-  first.setMonth(first.getMonth() - 5);
-
-  transacoes.forEach((transacao) => {
-    const data = parseDate(transacao.data);
-    if (!data) return;
-    const index = (data.getFullYear() - first.getFullYear()) * 12 + data.getMonth() - first.getMonth();
-    if (index < 0 || index > 5) return;
-
-    if (transacao.tipo === 'receita') months[index].receitas += Number(transacao.valor || 0);
-  });
-
-  contas.forEach((conta) => {
-    const vencimento = parseDueDate(conta.data_vencimento);
-    if (!vencimento || conta.status === 'cancelado') return;
-    const index = (vencimento.getFullYear() - first.getFullYear()) * 12 + vencimento.getMonth() - first.getMonth();
-    if (index < 0 || index > 5) return;
-
-    const valor = Number(conta.valor || 0);
-    months[index].despesas += valor;
-    if (conta.status === 'pago') months[index].pago += valor;
-  });
-
-  return months;
-}
-
-function summarizeAccountsByCategory(contas: ContaPagar[]) {
-  const map = new Map<string, CategoriaResumo>();
-  contas
-    .filter((conta) => conta.status !== 'cancelado')
-    .forEach((conta) => {
-      const nome = conta.categoria?.nome || 'Sem categoria';
-      const current = map.get(nome) || { nome, valor: 0, cor: conta.categoria?.cor || '#64748B' };
-      current.valor += Number(conta.valor || 0);
-      map.set(nome, current);
-    });
-
-  return [...map.values()].sort((a, b) => b.valor - a.valor).slice(0, 6);
-}
-
-function summarizeByCategory(transacoes: TransacaoFinanceira[], tipo: 'receita' | 'despesa') {
-  const map = new Map<string, CategoriaResumo>();
-  transacoes
-    .filter((transacao) => transacao.tipo === tipo)
-    .forEach((transacao) => {
-      const nome = transacao.categoria?.nome || 'Sem categoria';
-      const current = map.get(nome) || { nome, valor: 0, cor: transacao.categoria?.cor || '#64748B' };
-      current.valor += Number(transacao.valor || 0);
-      map.set(nome, current);
-    });
-
-  return [...map.values()].sort((a, b) => b.valor - a.valor).slice(0, 6);
-}
-
-function StatCard({
-  title,
-  value,
-  description,
-  tone,
-  icon,
-  action,
-  onClick,
-}: {
-  title: string;
-  value: string;
-  description: string;
-  tone: 'green' | 'red' | 'blue' | 'amber';
-  icon: React.ReactNode;
-  action: string;
-  onClick: () => void;
-}) {
-  const toneMap = {
-    green: 'command-tone-success',
-    red: 'command-tone-danger',
-    blue: 'command-tone-info',
-    amber: 'command-tone-warning',
+type Resumo = {
+  periodo: { mes: string; inicio: string; fim_exclusivo: string; hoje: string };
+  caixa: { entradas: number; saidas: number; resultado: number; lancamentos: number; entradas_mes_anterior: number; saidas_mes_anterior: number };
+  competencia: {
+    receita: number; custo_direto: number; despesa: number; investimento: number;
+    resultado: number; margem: number;
+    grupos: Array<{ chave: string; label: string; sinal: number; valor: number; quantidade: number }>;
   };
+  recebiveis: {
+    aberto: number; vencido: number; a_vencer: number; quantidade: number;
+    quantidade_vencida: number; inadimplencia: number;
+    aging: Array<{ chave: string; label: string; valor: number; quantidade: number }>;
+  };
+  pagaveis: { aberto: number; vencido: number; a_vencer: number; pago_mes: number; quantidade_vencida: number };
+  projecao: Array<{ chave: string; label: string; entradas: number; saidas: number; saldo: number }>;
+  serie: Array<{ mes: string; entradas: number; saidas: number; resultado: number }>;
+  categorias: { receitas: Array<{ nome: string; cor: string; valor: number }>; despesas: Array<{ nome: string; cor: string; valor: number }> };
+  indicadores: { os_concluidas: number; ticket_medio: number; valor_produzido: number; prazo_medio_recebimento: number };
+};
 
-  return (
-    <button type="button" onClick={onClick} className="command-metric min-h-0">
-      <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <p className="command-metric-label">{title}</p>
-          <p className="command-metric-value">{value}</p>
-          <p className="command-metric-context">{description}</p>
-        </div>
-        <span className={`command-icon command-icon-md ${toneMap[tone]}`}>{icon}</span>
-      </div>
-      <span className="command-metric-action">{action}<ArrowRight className="h-3.5 w-3.5" /></span>
-    </button>
-  );
+type Receivable = {
+  id: string; descricao: string; valor: number; valor_recebido: number; saldo: number;
+  data_vencimento: string; status: string; ordem_servico_id?: string; forma_pagamento?: string;
+  dias_atraso: number; cliente_nome?: string; cliente_telefone?: string; ordem_numero?: number;
+};
+
+type Payable = {
+  id: string; descricao: string; valor: number; data_vencimento: string; status: string;
+  forma_pagamento?: string; recorrente?: number; dias_atraso: number;
+  categoria_nome?: string; categoria_cor?: string;
+};
+
+type TabId = 'visao' | 'resultado' | 'receber' | 'pagar' | 'projecao';
+
+const tabs: Array<{ value: TabId; label: string }> = [
+  { value: 'visao', label: 'Visão geral' },
+  { value: 'resultado', label: 'Resultado' },
+  { value: 'receber', label: 'A receber' },
+  { value: 'pagar', label: 'A pagar' },
+  { value: 'projecao', label: 'Projeção' },
+];
+
+function currentMonthKey() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function shiftMonth(monthText: string, offset: number) {
+  const [year, month] = monthText.split('-').map(Number);
+  const date = new Date(year, month - 1 + offset, 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function monthLabel(monthText: string) {
+  const [year, month] = monthText.split('-').map(Number);
+  return new Date(year, month - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+}
+
+function shortMonth(monthText: string) {
+  const [year, month] = monthText.split('-').map(Number);
+  return new Date(year, month - 1, 1).toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '');
+}
+
+function variation(current: number, previous: number) {
+  if (!previous) return null;
+  return Number((((current - previous) / previous) * 100).toFixed(1));
 }
 
 export function Financeiro() {
   const navigate = useNavigate();
-  const [transacoes, setTransacoes] = useState<TransacaoFinanceira[]>([]);
-  const [transacoesMes, setTransacoesMes] = useState<TransacaoFinanceira[]>([]);
-  const [transacoesGrafico, setTransacoesGrafico] = useState<TransacaoFinanceira[]>([]);
-  const [categorias, setCategorias] = useState<CategoriaFinanceira[]>([]);
-  const [contasMes, setContasMes] = useState<ContaPagar[]>([]);
-  const [contasGrafico, setContasGrafico] = useState<ContaPagar[]>([]);
-  const [contasPendentes, setContasPendentes] = useState<ContaPagar[]>([]);
-  const [contasAtrasadas, setContasAtrasadas] = useState<ContaPagar[]>([]);
-  const [contasReceber, setContasReceber] = useState<ContaReceber[]>([]);
+  const { palette } = useChartPalette();
+
+  const [month, setMonth] = useState(currentMonthKey);
+  const [tab, setTab] = useState<TabId>('visao');
+  const [resumo, setResumo] = useState<Resumo | null>(null);
   const [loading, setLoading] = useState(true);
-  const [currentDate, setCurrentDate] = useState(new Date());
-  const [modalTransacaoAberto, setModalTransacaoAberto] = useState(false);
-  const [modalCategoriaAberto, setModalCategoriaAberto] = useState(false);
-  const [modalImportarCSVAberto, setModalImportarCSVAberto] = useState(false);
-  const [showAllReceivables, setShowAllReceivables] = useState(false);
-  const [isDarkTheme, setIsDarkTheme] = useState(() => getTheme() === 'dark');
-  const [transacaoParaEditar, setTransacaoParaEditar] = useState<TransacaoFinanceira>();
-  const [busca, setBusca] = useState('');
-  const [tipoFiltro, setTipoFiltro] = useState<TipoFiltro>('todos');
-  const [categoriaFiltro, setCategoriaFiltro] = useState('');
+  const [receivables, setReceivables] = useState<Receivable[]>([]);
+  const [payables, setPayables] = useState<Payable[]>([]);
+  const [walletLoading, setWalletLoading] = useState(false);
+  const [categorias, setCategorias] = useState<CategoriaFinanceira[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
 
-  const { start: monthStart, nextStart: nextMonthStart } = useMemo(() => getMonthRange(currentDate), [currentDate]);
-  const periodoLabel = currentDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+  const [transacaoOpen, setTransacaoOpen] = useState(false);
+  const [categoriaOpen, setCategoriaOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
 
-  const buscarDados = useCallback(async () => {
+  const loadResumo = useCallback(async () => {
     setLoading(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user?.id) {
-        navigate('/login');
-        return;
-      }
-
-      const chartRange = getLastSixMonthRange();
-
-      const categoriasQuery = supabase
-        .from('categorias_financeiras')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('nome');
-
-      let transacoesQuery = supabase
-        .from('transacoes_financeiras')
-        .select('*, categoria:categorias_financeiras(*)')
-        .eq('user_id', user.id)
-        .gte('data', monthStart)
-        .lt('data', nextMonthStart)
-        .order('data', { ascending: false });
-
-      if (busca.trim()) transacoesQuery = transacoesQuery.ilike('descricao', `%${busca.trim()}%`);
-      if (tipoFiltro !== 'todos') transacoesQuery = transacoesQuery.eq('tipo', tipoFiltro);
-      if (categoriaFiltro) transacoesQuery = transacoesQuery.eq('categoria_id', categoriaFiltro);
-
-      const transacoesMesQuery = supabase
-        .from('transacoes_financeiras')
-        .select('*, categoria:categorias_financeiras(*)')
-        .eq('user_id', user.id)
-        .gte('data', monthStart)
-        .lt('data', nextMonthStart)
-        .order('data', { ascending: false });
-
-      const transacoesGraficoQuery = supabase
-        .from('transacoes_financeiras')
-        .select('*, categoria:categorias_financeiras(*)')
-        .eq('user_id', user.id)
-        .gte('data', chartRange.start)
-        .lt('data', chartRange.nextEnd)
-        .order('data', { ascending: true });
-
-      const contasQuery = supabase
-        .from('contas_pagar')
-        .select('*, categoria:categorias_financeiras(*)')
-        .eq('user_id', user.id)
-        .in('status', ['pendente', 'atrasado'])
-        .gte('data_vencimento', monthStart)
-        .lt('data_vencimento', nextMonthStart)
-        .order('data_vencimento', { ascending: true });
-
-      const contasMesQuery = supabase
-        .from('contas_pagar')
-        .select('*, categoria:categorias_financeiras(*)')
-        .eq('user_id', user.id)
-        .neq('status', 'cancelado')
-        .gte('data_vencimento', monthStart)
-        .lt('data_vencimento', nextMonthStart)
-        .order('data_vencimento', { ascending: true });
-
-      const contasGraficoQuery = supabase
-        .from('contas_pagar')
-        .select('*, categoria:categorias_financeiras(*)')
-        .eq('user_id', user.id)
-        .neq('status', 'cancelado')
-        .gte('data_vencimento', chartRange.start)
-        .lt('data_vencimento', chartRange.nextEnd)
-        .order('data_vencimento', { ascending: true });
-
-      const contasAtrasadasQuery = supabase
-        .from('contas_pagar')
-        .select('*, categoria:categorias_financeiras(*)')
-        .eq('user_id', user.id)
-        .in('status', ['pendente', 'atrasado'])
-        .lt('data_vencimento', toDateInput(new Date()))
-        .order('data_vencimento', { ascending: true });
-
-      const contasReceberQuery = supabase
-        .from('contas_receber')
-        .select('*, cliente:clientes(*), ordem_servico:ordens_servico(*)')
-        .eq('user_id', user.id)
-        .in('status', ['pendente', 'parcial', 'atrasado'])
-        .order('data_vencimento', { ascending: true });
-
-      const [
-        { data: categoriasData, error: categoriasError },
-        { data: transacoesData, error: transacoesError },
-        { data: transacoesMesData, error: transacoesMesError },
-        { data: graficoData, error: graficoError },
-        { data: contasData, error: contasError },
-        { data: contasMesData, error: contasMesError },
-        { data: contasGraficoData, error: contasGraficoError },
-        { data: contasAtrasadasData, error: contasAtrasadasError },
-        { data: contasReceberData, error: contasReceberError },
-      ] = await Promise.all([
-        categoriasQuery,
-        transacoesQuery,
-        transacoesMesQuery,
-        transacoesGraficoQuery,
-        contasQuery,
-        contasMesQuery,
-        contasGraficoQuery,
-        contasAtrasadasQuery,
-        contasReceberQuery,
-      ]);
-
-      if (categoriasError) throw categoriasError;
-      if (transacoesError) throw transacoesError;
-      if (transacoesMesError) throw transacoesMesError;
-      if (graficoError) throw graficoError;
-      if (contasError) throw contasError;
-      if (contasMesError) throw contasMesError;
-      if (contasGraficoError) throw contasGraficoError;
-      if (contasAtrasadasError) throw contasAtrasadasError;
-      if (contasReceberError) throw contasReceberError;
-
-      setCategorias(categoriasData || []);
-      setTransacoes(transacoesData || []);
-      setTransacoesMes(transacoesMesData || []);
-      setTransacoesGrafico(graficoData || []);
-      setContasPendentes(contasData || []);
-      setContasMes(contasMesData || []);
-      setContasGrafico(contasGraficoData || []);
-      setContasAtrasadas(contasAtrasadasData || []);
-      setContasReceber(contasReceberData || []);
+      setResumo(await apiRequest<Resumo>(`/api/financeiro/resumo?mes=${month}`));
     } catch (error) {
-      console.error('Erro ao carregar financeiro:', error);
-      toast.error('Erro ao carregar dados financeiros');
+      toast.error(error instanceof Error ? error.message : 'Erro ao carregar o financeiro');
     } finally {
       setLoading(false);
     }
-  }, [busca, categoriaFiltro, monthStart, navigate, nextMonthStart, tipoFiltro]);
+  }, [month]);
 
-  useEffect(() => {
-    buscarDados();
-  }, [buscarDados]);
-
-  useEffect(() => {
-    const handleThemeChange = (event: Event) => {
-      setIsDarkTheme((event as CustomEvent<Theme>).detail === 'dark');
-    };
-    window.addEventListener(themeChangeEvent, handleThemeChange);
-    return () => window.removeEventListener(themeChangeEvent, handleThemeChange);
+  const loadWallet = useCallback(async () => {
+    setWalletLoading(true);
+    try {
+      const [receber, pagar] = await Promise.all([
+        apiRequest<{ rows: Receivable[] }>('/api/financeiro/carteira?tipo=receber&limit=100'),
+        apiRequest<{ rows: Payable[] }>('/api/financeiro/carteira?tipo=pagar&limit=100'),
+      ]);
+      setReceivables(receber.rows);
+      setPayables(pagar.rows);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Erro ao carregar a carteira');
+    } finally {
+      setWalletLoading(false);
+    }
   }, []);
 
-  const receitasMes = useMemo(
-    () => transacoesMes.filter((item) => item.tipo === 'receita').reduce((acc, item) => acc + Number(item.valor || 0), 0),
-    [transacoesMes],
-  );
-
-  const despesasMes = useMemo(
-    () => contasMes.reduce((acc, conta) => acc + Number(conta.valor || 0), 0),
-    [contasMes],
-  );
-
-  const totalPagoMes = useMemo(
-    () => contasMes.filter((conta) => conta.status === 'pago').reduce((acc, conta) => acc + Number(conta.valor || 0), 0),
-    [contasMes],
-  );
-
-  const saldoMes = receitasMes - despesasMes;
-
-  const totalContasPendentes = useMemo(
-    () => contasPendentes.reduce((acc, conta) => acc + Number(conta.valor || 0), 0),
-    [contasPendentes],
-  );
-
-  const totalReceberPendente = useMemo(
-    () => contasReceber.reduce((acc, conta) => acc + Math.max(0, Number(conta.valor || 0) - Number(conta.valor_recebido || 0)), 0),
-    [contasReceber],
-  );
-
-  const lucroLiquido = saldoMes;
-
-  const fluxoMensal = useMemo(() => buildFluxoMensal(transacoesGrafico, contasGrafico), [contasGrafico, transacoesGrafico]);
-  const receitasPorCategoria = useMemo(() => summarizeByCategory(transacoesMes, 'receita'), [transacoesMes]);
-  const despesasPorCategoria = useMemo(() => summarizeAccountsByCategory(contasMes), [contasMes]);
-  const ultimasTransacoes = transacoes.slice(0, 8);
-  const proximasContas = contasPendentes.slice(0, 6);
-  const proximosRecebimentos = showAllReceivables ? contasReceber : contasReceber.slice(0, 6);
-
-  const lineData = {
-    labels: fluxoMensal.map((item) => item.label),
-    datasets: [
-      {
-        label: 'Receitas',
-        data: fluxoMensal.map((item) => item.receitas),
-        borderColor: '#059669',
-        backgroundColor: 'rgba(5, 150, 105, 0.12)',
-        fill: true,
-        tension: 0.35,
-      },
-      {
-        label: 'Despesas',
-        data: fluxoMensal.map((item) => item.despesas),
-        borderColor: '#dc2626',
-        backgroundColor: 'rgba(220, 38, 38, 0.10)',
-        fill: true,
-        tension: 0.35,
-      },
-      {
-        label: 'Pago',
-        data: fluxoMensal.map((item) => item.pago),
-        borderColor: '#7c3aed',
-        backgroundColor: 'rgba(124, 58, 237, 0.10)',
-        fill: false,
-        tension: 0.35,
-      },
-    ],
-  };
-
-  const doughnutData = {
-    labels: receitasPorCategoria.map((item) => item.nome),
-    datasets: [{
-      data: receitasPorCategoria.map((item) => item.valor),
-      backgroundColor: receitasPorCategoria.map((item) => item.cor),
-      borderWidth: 0,
-    }],
-  };
-
-  const barData = {
-    labels: despesasPorCategoria.map((item) => item.nome),
-    datasets: [{
-      label: 'Despesas',
-      data: despesasPorCategoria.map((item) => item.valor),
-      backgroundColor: despesasPorCategoria.map((item) => item.cor),
-      borderRadius: 6,
-    }],
-  };
-
-  const chartOptions = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: {
-        position: 'bottom' as const,
-        labels: { color: isDarkTheme ? '#cbd5e1' : '#475569' },
-      },
-      tooltip: {
-        backgroundColor: isDarkTheme ? '#0f172a' : '#ffffff',
-        titleColor: isDarkTheme ? '#f8fafc' : '#0f172a',
-        bodyColor: isDarkTheme ? '#cbd5e1' : '#475569',
-        borderColor: isDarkTheme ? '#334155' : '#e2e8f0',
-        borderWidth: 1,
-      },
-    },
-    scales: {
-      x: {
-        ticks: { color: isDarkTheme ? '#94a3b8' : '#64748b' },
-        grid: { color: isDarkTheme ? 'rgba(51, 65, 85, 0.55)' : 'rgba(226, 232, 240, 0.8)' },
-      },
-      y: {
-        ticks: { color: isDarkTheme ? '#94a3b8' : '#64748b' },
-        grid: { color: isDarkTheme ? 'rgba(51, 65, 85, 0.55)' : 'rgba(226, 232, 240, 0.8)' },
-      },
-    },
-  };
-
-  function changeMonth(offset: number) {
-    setCurrentDate((current) => new Date(current.getFullYear(), current.getMonth() + offset, 1));
-  }
-
-  function authHeaders() {
-    const sessionRaw = localStorage.getItem('mysql-auth-session');
-    const token = sessionRaw ? JSON.parse(sessionRaw)?.access_token : null;
-    return {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {})
-    };
-  }
-
-  async function pagarConta(conta: ContaPagar) {
+  const loadCategorias = useCallback(async () => {
     try {
-      const response = await fetch(`/api/financeiro/contas-pagar/${conta.id}/pagar`, {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify({ forma_pagamento: conta.forma_pagamento })
-      });
-      const json = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(json.error?.message || 'Erro ao pagar conta');
-      toast.success('Conta paga e despesa lancada');
-      buscarDados();
-    } catch (error: unknown) {
-      console.error('Erro ao pagar conta:', error);
-      toast.error(error instanceof Error ? error.message : 'Erro ao pagar conta');
+      const { data } = await supabase.from('categorias_financeiras').select('*').order('nome');
+      setCategorias(data || []);
+    } catch {
+      // Categorias só afetam os modais de lançamento.
     }
+  }, []);
+
+  useEffect(() => {
+    void loadResumo();
+  }, [loadResumo]);
+
+  useEffect(() => {
+    void loadWallet();
+    void loadCategorias();
+  }, [loadWallet, loadCategorias]);
+
+  async function refreshAll() {
+    await Promise.all([loadResumo(), loadWallet()]);
   }
 
-  async function receberConta(conta: ContaReceber) {
+  async function receberConta(conta: Receivable) {
     if (!conta.ordem_servico_id) {
-      toast.error('Recebivel sem OS vinculada');
+      toast.error('Este recebível não está vinculado a uma OS.');
       return;
     }
-
+    setBusy(conta.id);
     try {
-      const saldo = Math.max(0, Number(conta.valor || 0) - Number(conta.valor_recebido || 0));
-      const response = await fetch(`/api/financeiro/os/${conta.ordem_servico_id}/pagamentos`, {
+      await apiRequest(`/api/financeiro/os/${conta.ordem_servico_id}/pagamentos`, {
         method: 'POST',
-        headers: authHeaders(),
         body: JSON.stringify({
-          valor: saldo,
+          valor: conta.saldo,
           forma_pagamento: conta.forma_pagamento,
-          observacoes: 'Recebimento registrado pela tela financeira'
-        })
+          observacoes: 'Recebimento registrado na visão financeira',
+        }),
       });
-      const json = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(json.error?.message || 'Erro ao receber conta');
-      toast.success('Recebimento lancado como receita');
-      buscarDados();
-    } catch (error: unknown) {
-      console.error('Erro ao receber conta:', error);
-      toast.error(error instanceof Error ? error.message : 'Erro ao receber conta');
+      toast.success('Recebimento lançado no caixa.');
+      await refreshAll();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Erro ao registrar recebimento');
+    } finally {
+      setBusy(null);
     }
   }
 
+  async function pagarConta(conta: Payable) {
+    setBusy(conta.id);
+    try {
+      await apiRequest(`/api/financeiro/contas-pagar/${conta.id}/pagar`, {
+        method: 'POST',
+        body: JSON.stringify({ forma_pagamento: conta.forma_pagamento }),
+      });
+      toast.success('Conta paga e despesa lançada no caixa.');
+      await refreshAll();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Erro ao pagar conta');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const chartOptions = useMemo(() => baseChartOptions(palette), [palette]);
+
+  const serieData = useMemo(() => {
+    if (!resumo) return null;
+    return {
+      labels: resumo.serie.map((item) => shortMonth(item.mes)),
+      datasets: [
+        {
+          label: 'Entradas',
+          data: resumo.serie.map((item) => item.entradas),
+          backgroundColor: palette.successSoft,
+          borderColor: palette.success,
+          borderWidth: 1,
+          borderRadius: 4,
+        },
+        {
+          label: 'Saídas',
+          data: resumo.serie.map((item) => item.saidas),
+          backgroundColor: palette.dangerSoft,
+          borderColor: palette.danger,
+          borderWidth: 1,
+          borderRadius: 4,
+        },
+      ],
+    };
+  }, [palette, resumo]);
+
+  const donutOptions = useMemo(
+    () => ({
+      ...chartOptions,
+      cutout: '62%',
+      scales: undefined,
+    }),
+    [chartOptions],
+  );
+
+  if (loading && !resumo) {
+    return (
+      <main className="ui-page space-y-4">
+        <Skeleton className="h-16 w-72" />
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {Array.from({ length: 4 }, (_, index) => (
+            <Skeleton key={index} className="h-32" />
+          ))}
+        </div>
+        <Skeleton className="h-80" />
+      </main>
+    );
+  }
+
+  if (!resumo) return null;
+
+  const entradaVar = variation(resumo.caixa.entradas, resumo.caixa.entradas_mes_anterior);
+  const isCurrentMonth = month === currentMonthKey();
+
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
-      <div className="responsive-page">
-        <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <p className="command-eyebrow">Gestão financeira</p>
-            <h1 className="mt-1 text-2xl sm:text-3xl font-semibold text-gray-950 dark:text-white">Financeiro</h1>
-            <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-              Caixa, recebimentos, despesas, vencimentos e categorias em uma visão operacional.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap sm:items-center">
-            <button onClick={() => changeMonth(-1)} className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-200">
-              Mês anterior
+    <main className="ui-page space-y-4">
+      <header className="ui-page-header">
+        <div className="min-w-0">
+          <p className="ui-page-eyebrow">Gestão financeira</p>
+          <h1 className="ui-page-title">Financeiro</h1>
+          <p className="ui-page-description">
+            Caixa e competência lado a lado, sem misturar o que entrou com o que foi gerado.
+          </p>
+        </div>
+        <div className="ui-page-actions">
+          <div className="flex items-center gap-1 rounded-md border border-hairline bg-surface-raised p-1">
+            <button type="button" onClick={() => setMonth(shiftMonth(month, -1))} className="app-icon-button h-8 w-8" aria-label="Mês anterior">
+              <ChevronLeft className="h-4 w-4" />
             </button>
-            <div className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-semibold capitalize text-gray-900 dark:border-gray-800 dark:bg-gray-900 dark:text-white">
-              {periodoLabel}
-            </div>
-            <button onClick={() => changeMonth(1)} className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-200">
-              Próximo mês
+            <span className="min-w-36 text-center text-sm font-semibold text-ink first-letter:uppercase">{monthLabel(month)}</span>
+            <button
+              type="button"
+              onClick={() => setMonth(shiftMonth(month, 1))}
+              className="app-icon-button h-8 w-8"
+              aria-label="Próximo mês"
+              disabled={isCurrentMonth}
+            >
+              <ChevronRight className="h-4 w-4" />
             </button>
           </div>
+          <UIButton size="sm" icon={Tags} onClick={() => setCategoriaOpen(true)}>Categorias</UIButton>
+          <UIButton size="sm" icon={Upload} onClick={() => setImportOpen(true)}>Importar</UIButton>
+          <UIButton size="sm" variant="primary" icon={Plus} onClick={() => setTransacaoOpen(true)}>Lançar</UIButton>
         </div>
+      </header>
 
-        <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-          <StatCard title="Receitas do mês" value={formatCurrency(receitasMes)} description="Entradas registradas no período" action="Ver movimentações" onClick={() => navigate('/transacoes')} tone="green" icon={<ArrowUpRight className="h-5 w-5" />} />
-          <StatCard title="Despesas do mês" value={formatCurrency(despesasMes)} description={`${contasMes.length} conta(s) do Contas a Pagar`} action="Revisar despesas" onClick={() => navigate('/contas')} tone="red" icon={<ArrowDownRight className="h-5 w-5" />} />
-          <StatCard title="Já pago no mês" value={formatCurrency(totalPagoMes)} description={`${contasMes.filter((conta) => conta.status === 'pago').length} conta(s) paga(s)`} action="Conferir pagamentos" onClick={() => navigate('/contas')} tone="blue" icon={<CheckCircle className="h-5 w-5" />} />
-          <StatCard title="Resultado do mês" value={formatCurrency(lucroLiquido)} description="Receitas menos despesas do mês" action="Analisar fluxo" onClick={() => document.getElementById('fluxo-financeiro')?.scrollIntoView({ behavior: 'smooth' })} tone={saldoMes >= 0 ? 'blue' : 'amber'} icon={<Wallet className="h-5 w-5" />} />
-          <StatCard title="Contas a pagar" value={formatCurrency(totalContasPendentes)} description={`${contasPendentes.length} conta(s) no mês`} action="Abrir contas" onClick={() => navigate('/contas')} tone="red" icon={<ArrowDownRight className="h-5 w-5" />} />
-          <StatCard title="A receber" value={formatCurrency(totalReceberPendente)} description={`${contasReceber.length} recebível(is) em aberto`} action="Registrar pagamento" onClick={() => navigate('/ordens?financeiro=aberto')} tone="amber" icon={<Receipt className="h-5 w-5" />} />
-        </div>
+      <Segmented value={tab} onChange={setTab} options={tabs} className="w-full overflow-x-auto sm:w-auto" />
 
-        <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
-          <div id="fluxo-financeiro" className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900 lg:col-span-2">
-            <div className="mb-4 flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-semibold text-gray-950 dark:text-white">Fluxo dos ultimos 6 meses</h2>
-                <p className="text-sm text-gray-500 dark:text-gray-400">Comparativo entre entradas e saidas.</p>
-              </div>
-              <CalendarDays className="h-5 w-5 text-gray-400" />
-            </div>
-            <div className="h-72">
-              <Line data={lineData} options={chartOptions} />
-            </div>
-          </div>
+      {/* ------------------------------------------------------- Visão geral */}
+      {tab === 'visao' && (
+        <div className="space-y-4">
+          <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <Kpi
+              label="Entrou no caixa"
+              value={formatCurrency(resumo.caixa.entradas)}
+              context={entradaVar === null ? `${resumo.caixa.lancamentos} lançamento(s) no mês` : `${entradaVar > 0 ? '+' : ''}${entradaVar}% vs. mês anterior`}
+              icon={ArrowUpRight}
+              tone="success"
+            />
+            <Kpi
+              label="Saiu do caixa"
+              value={formatCurrency(resumo.caixa.saidas)}
+              context="Pagamentos efetivamente realizados"
+              icon={ArrowDownRight}
+              tone="danger"
+            />
+            <Kpi
+              label="Sobrou no mês"
+              value={formatCurrency(resumo.caixa.resultado)}
+              context="Entradas menos saídas — dinheiro real"
+              icon={Wallet}
+              tone={resumo.caixa.resultado >= 0 ? 'success' : 'danger'}
+              emphasis
+            />
+            <Kpi
+              label="Inadimplência"
+              value={`${resumo.recebiveis.inadimplencia}%`}
+              context={`${formatCurrency(resumo.recebiveis.vencido)} vencidos em ${resumo.recebiveis.quantidade_vencida} título(s)`}
+              icon={AlertTriangle}
+              tone={resumo.recebiveis.inadimplencia > 20 ? 'danger' : resumo.recebiveis.inadimplencia > 0 ? 'warning' : 'success'}
+              linkLabel="Ver carteira"
+              onClick={() => setTab('receber')}
+            />
+          </section>
 
-          <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-            <h2 className="text-lg font-semibold text-gray-950 dark:text-white">Saude do caixa</h2>
-            <div className="mt-4 space-y-4">
-              <div className="rounded-lg bg-gray-50 p-4 dark:bg-gray-950">
-                <p className="text-sm text-gray-500">Contas a pagar no mes</p>
-                <p className="mt-1 text-xl font-semibold text-gray-950 dark:text-white">{formatCurrency(totalContasPendentes)}</p>
-                <p className="mt-1 text-xs text-gray-500">{contasPendentes.length} conta(s) pendente(s)</p>
-              </div>
-              <div className="rounded-lg bg-gray-50 p-4 dark:bg-gray-950">
-                <p className="text-sm text-gray-500">Pago no mes</p>
-                <p className="mt-1 text-xl font-semibold text-emerald-600">{formatCurrency(totalPagoMes)}</p>
-                <p className="mt-1 text-xs text-gray-500">Conforme o status do Contas a Pagar</p>
-              </div>
-              <div className="rounded-lg bg-gray-50 p-4 dark:bg-gray-950">
-                <p className="text-sm text-gray-500">Recebiveis em aberto</p>
-                <p className="mt-1 text-xl font-semibold text-amber-600">{formatCurrency(totalReceberPendente)}</p>
-                <p className="mt-1 text-xs text-gray-500">{contasReceber.length} recebivel(is)</p>
-              </div>
-              <div className="rounded-lg bg-gray-50 p-4 dark:bg-gray-950">
-                <p className="text-sm text-gray-500">Contas atrasadas</p>
-                <p className="mt-1 text-xl font-semibold text-rose-600">{contasAtrasadas.length}</p>
-              </div>
-              <button onClick={() => navigate('/contas')} className="flex w-full items-center justify-between rounded-lg border border-gray-200 px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-800 dark:text-gray-200 dark:hover:bg-gray-800">
-                Abrir contas a pagar
-                <ArrowRight className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-        </div>
+          <section className="grid gap-4 xl:grid-cols-[1.6fr_1fr]">
+            <Panel title="Caixa dos últimos 12 meses" subtitle="Entradas e saídas efetivamente movimentadas" icon={TrendingUp}>
+              <div className="h-72">{serieData && <Bar data={serieData} options={chartOptions} />}</div>
+            </Panel>
 
-        <div className="mb-6 rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_180px_220px_auto]">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-              <input
-                value={busca}
-                onChange={(event) => setBusca(event.target.value)}
-                placeholder="Buscar movimentacao..."
-                className="w-full rounded-lg border border-gray-200 bg-white py-2 pl-9 pr-3 text-sm text-gray-900 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100 dark:border-gray-800 dark:bg-gray-950 dark:text-white"
-              />
-            </div>
-            <select value={tipoFiltro} onChange={(event) => setTipoFiltro(event.target.value as TipoFiltro)} className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 dark:border-gray-800 dark:bg-gray-950 dark:text-white">
-              <option value="todos">Todos os tipos</option>
-              <option value="receita">Receitas</option>
-              <option value="despesa">Despesas</option>
-            </select>
-            <select value={categoriaFiltro} onChange={(event) => setCategoriaFiltro(event.target.value)} className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 dark:border-gray-800 dark:bg-gray-950 dark:text-white">
-              <option value="">Todas as categorias</option>
-              {categorias.map((categoria) => (
-                <option key={categoria.id} value={categoria.id}>{categoria.nome}</option>
-              ))}
-            </select>
-            <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap">
-              <button onClick={() => setModalTransacaoAberto(true)} className="inline-flex items-center justify-center gap-2 rounded-lg bg-gray-950 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 dark:bg-white dark:text-gray-950">
-                <Plus className="h-4 w-4" />
-                Lancar
-              </button>
-              <button onClick={() => setModalCategoriaAberto(true)} className="inline-flex items-center justify-center gap-2 rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-800 dark:text-gray-200 dark:hover:bg-gray-800">
-                <Tags className="h-4 w-4" />
-                Categorias
-              </button>
-              <button onClick={() => setModalImportarCSVAberto(true)} className="inline-flex items-center justify-center gap-2 rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-800 dark:text-gray-200 dark:hover:bg-gray-800">
-                <Upload className="h-4 w-4" />
-                CSV
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div className="mb-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
-          <div className="rounded-lg border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900">
-            <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4 dark:border-gray-800">
-              <div>
-                <h2 className="text-lg font-semibold text-gray-950 dark:text-white">Contas a receber</h2>
-                <p className="text-sm text-gray-500 dark:text-gray-400">{formatCurrency(totalReceberPendente)} em aberto</p>
-              </div>
-              <Receipt className="h-5 w-5 text-amber-500" />
-            </div>
-            <div className="divide-y divide-gray-100 dark:divide-gray-800">
-              {proximosRecebimentos.length === 0 ? (
-                <p className="px-5 py-6 text-sm text-gray-500">Nenhum recebivel em aberto.</p>
-              ) : proximosRecebimentos.map((conta) => {
-                const saldo = Math.max(0, Number(conta.valor || 0) - Number(conta.valor_recebido || 0));
-                return (
-                  <div key={conta.id} className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                      <p className="text-sm font-medium text-gray-950 dark:text-white">{conta.descricao}</p>
-                      <p className="text-xs text-gray-500">
-                        {formatDateBR(conta.data_vencimento)} - {conta.status}
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-3">
-                      <p className="text-sm font-semibold text-amber-600">{formatCurrency(saldo)}</p>
-                      <button onClick={() => receberConta(conta)} className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-medium text-white hover:bg-emerald-700">
-                        <CheckCircle className="h-4 w-4" />
-                        Receber
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-              {contasReceber.length > 6 && (
-                <button
-                  type="button"
-                  onClick={() => setShowAllReceivables((current) => !current)}
-                  className="w-full px-5 py-4 text-sm font-semibold text-sky-700 hover:bg-sky-50 dark:text-sky-400 dark:hover:bg-sky-950/30"
-                >
-                  {showAllReceivables ? 'Mostrar menos' : `Mostrar todos (${contasReceber.length})`}
-                </button>
-              )}
-            </div>
-          </div>
-
-          <div className="rounded-lg border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900">
-            <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4 dark:border-gray-800">
-              <div>
-                <h2 className="text-lg font-semibold text-gray-950 dark:text-white">Contas a pagar</h2>
-                <p className="text-sm text-gray-500 dark:text-gray-400">{formatCurrency(totalContasPendentes)} no mes - {contasPendentes.length} conta(s)</p>
-              </div>
-              <ArrowDownRight className="h-5 w-5 text-rose-500" />
-            </div>
-            <div className="divide-y divide-gray-100 dark:divide-gray-800">
-              {proximasContas.length === 0 ? (
-                <p className="px-5 py-6 text-sm text-gray-500">Nenhuma conta pendente.</p>
-              ) : proximasContas.map((conta) => (
-                <div key={conta.id} className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-gray-950 dark:text-white">{conta.descricao}</p>
-                    <p className="text-xs text-gray-500">{formatDateBR(conta.data_vencimento)} - {conta.categoria?.nome || 'Sem categoria'}</p>
-                  </div>
-                    <div className="flex flex-wrap items-center gap-3">
-                    <p className="text-sm font-semibold text-rose-600">{formatCurrency(conta.valor)}</p>
-                    <button onClick={() => pagarConta(conta)} className="inline-flex items-center gap-1 rounded-lg bg-gray-950 px-3 py-2 text-xs font-medium text-white hover:bg-gray-800 dark:bg-white dark:text-gray-950">
-                      <CheckCircle className="h-4 w-4" />
-                      Pagar
-                    </button>
-                  </div>
+            <Panel title="Produção do mês" subtitle="O que a bancada gerou de valor" icon={CheckCircle2}>
+              <div className="space-y-3">
+                <IndicatorRow label="OS concluídas" value={String(resumo.indicadores.os_concluidas)} />
+                <IndicatorRow label="Valor produzido" value={formatCurrency(resumo.indicadores.valor_produzido)} />
+                <IndicatorRow label="Ticket médio" value={formatCurrency(resumo.indicadores.ticket_medio)} />
+                <IndicatorRow
+                  label="Prazo médio de recebimento"
+                  value={resumo.indicadores.prazo_medio_recebimento ? `${resumo.indicadores.prazo_medio_recebimento} dias` : '—'}
+                  hint="Da entrada da OS até o último pagamento"
+                />
+                <div className="border-t border-hairline pt-3">
+                  <p className="text-xs text-ink-muted">
+                    Carteira em aberto:{' '}
+                    <strong className="tabular-nums text-ink">{formatCurrency(resumo.recebiveis.aberto)}</strong> em{' '}
+                    {resumo.recebiveis.quantidade} título(s)
+                  </p>
                 </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-          <div className="rounded-lg border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900 xl:col-span-2">
-            <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4 dark:border-gray-800">
-              <div>
-                <h2 className="text-lg font-semibold text-gray-950 dark:text-white">Movimentacoes recentes</h2>
-                <p className="text-sm text-gray-500 dark:text-gray-400">{loading ? 'Carregando...' : `${transacoes.length} lancamento(s) no periodo`}</p>
               </div>
-              <button onClick={() => navigate('/transacoes')} className="inline-flex items-center gap-2 text-sm font-medium text-sky-700 hover:text-sky-900">
-                Ver todas
-                <ArrowRight className="h-4 w-4" />
-              </button>
+            </Panel>
+          </section>
+
+          <section className="grid gap-4 xl:grid-cols-2">
+            <Panel title="Entradas por categoria" subtitle="Composição do que foi recebido no mês" icon={ArrowUpRight} tone="success">
+              {resumo.categorias.receitas.length ? (
+                <div className="h-64">
+                  <Doughnut
+                    data={{
+                      labels: resumo.categorias.receitas.map((item) => item.nome),
+                      datasets: [{ data: resumo.categorias.receitas.map((item) => item.valor), backgroundColor: resumo.categorias.receitas.map((item) => item.cor), borderWidth: 0 }],
+                    }}
+                    options={donutOptions}
+                  />
+                </div>
+              ) : (
+                <EmptyState icon={ArrowUpRight} title="Nenhuma entrada no período" />
+              )}
+            </Panel>
+
+            <Panel title="Saídas por categoria" subtitle="Onde o dinheiro foi gasto no mês" icon={ArrowDownRight} tone="danger">
+              {resumo.categorias.despesas.length ? (
+                <CategoryBars items={resumo.categorias.despesas} />
+              ) : (
+                <EmptyState icon={ArrowDownRight} title="Nenhuma saída no período" />
+              )}
+            </Panel>
+          </section>
+        </div>
+      )}
+
+      {/* --------------------------------------------------------- Resultado */}
+      {tab === 'resultado' && (
+        <div className="space-y-4">
+          <Panel
+            title={`Resultado por competência · ${monthLabel(month)}`}
+            subtitle="O que o mês gerou, tenha sido pago ou não. Não confundir com o caixa."
+            icon={FileText}
+            flush
+          >
+            <DreTable competencia={resumo.competencia} />
+          </Panel>
+
+          <section className="grid gap-4 md:grid-cols-3">
+            <Kpi label="Receita do período" value={formatCurrency(resumo.competencia.receita)} context="Recebíveis gerados com vencimento no mês" icon={ArrowUpRight} tone="success" />
+            <Kpi label="Resultado do período" value={formatCurrency(resumo.competencia.resultado)} context="Receita menos custos e despesas" icon={Wallet} tone={resumo.competencia.resultado >= 0 ? 'success' : 'danger'} emphasis />
+            <Kpi label="Margem" value={`${resumo.competencia.margem}%`} context="Resultado sobre a receita do período" icon={TrendingUp} tone={resumo.competencia.margem >= 20 ? 'success' : resumo.competencia.margem >= 0 ? 'warning' : 'danger'} />
+          </section>
+
+          <Panel title="Caixa × competência" subtitle="Por que os dois números diferem" icon={CalendarRange}>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="rounded-md border border-hairline bg-surface-muted p-4">
+                <p className="text-2xs font-semibold uppercase tracking-[0.12em] text-ink-subtle">Caixa</p>
+                <p className={`mt-1 text-xl font-semibold tabular-nums ${resumo.caixa.resultado >= 0 ? toneText.success : toneText.danger}`}>
+                  {formatCurrency(resumo.caixa.resultado)}
+                </p>
+                <p className="mt-2 text-xs text-ink-muted">
+                  Dinheiro que efetivamente entrou e saiu no mês. É o que responde “dá para pagar as contas”.
+                </p>
+              </div>
+              <div className="rounded-md border border-hairline bg-surface-muted p-4">
+                <p className="text-2xs font-semibold uppercase tracking-[0.12em] text-ink-subtle">Competência</p>
+                <p className={`mt-1 text-xl font-semibold tabular-nums ${resumo.competencia.resultado >= 0 ? toneText.success : toneText.danger}`}>
+                  {formatCurrency(resumo.competencia.resultado)}
+                </p>
+                <p className="mt-2 text-xs text-ink-muted">
+                  Resultado do trabalho do período, independentemente de já ter sido pago. É o que responde “o mês foi lucrativo”.
+                </p>
+              </div>
             </div>
-            <div className="responsive-table-wrap">
-              <table className="w-full min-w-[720px]">
-                <thead className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:bg-gray-950 dark:text-gray-400">
+          </Panel>
+        </div>
+      )}
+
+      {/* --------------------------------------------------------- Recebíveis */}
+      {tab === 'receber' && (
+        <div className="space-y-4">
+          <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <Kpi label="Carteira em aberto" value={formatCurrency(resumo.recebiveis.aberto)} context={`${resumo.recebiveis.quantidade} título(s)`} icon={Receipt} tone="brand" />
+            <Kpi label="Vencido" value={formatCurrency(resumo.recebiveis.vencido)} context={`${resumo.recebiveis.quantidade_vencida} título(s) em atraso`} icon={AlertTriangle} tone="danger" emphasis={resumo.recebiveis.vencido > 0} />
+            <Kpi label="A vencer" value={formatCurrency(resumo.recebiveis.a_vencer)} context="Ainda dentro do prazo" icon={Clock} tone="info" />
+            <Kpi label="Índice de inadimplência" value={`${resumo.recebiveis.inadimplencia}%`} context="Vencido sobre a carteira total" icon={TrendingUp} tone={resumo.recebiveis.inadimplencia > 20 ? 'danger' : 'warning'} />
+          </section>
+
+          <Panel title="Idade da carteira" subtitle="Há quanto tempo cada valor está parado" icon={Clock}>
+            <AgingBars aging={resumo.recebiveis.aging} />
+          </Panel>
+
+          <Panel title="Títulos em aberto" subtitle="Os mais antigos primeiro — é por onde a cobrança começa" icon={Receipt} flush>
+            {walletLoading ? (
+              <div className="p-4"><Skeleton className="h-40" /></div>
+            ) : receivables.length === 0 ? (
+              <EmptyState icon={CheckCircle2} title="Nada a receber" description="Toda a carteira está quitada." />
+            ) : (
+              <Table>
+                <thead>
                   <tr>
-                    <th className="px-5 py-3">Data</th>
-                    <th className="px-5 py-3">Descricao</th>
-                    <th className="px-5 py-3">Categoria</th>
-                    <th className="px-5 py-3 text-right">Valor</th>
+                    <th>Cliente</th>
+                    <th className="w-24">OS</th>
+                    <th className="w-28">Vencimento</th>
+                    <th className="w-28">Atraso</th>
+                    <th className="w-32 text-right">Saldo</th>
+                    <th className="w-28" />
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-                  {ultimasTransacoes.length === 0 ? (
-                    <tr>
-                      <td colSpan={4} className="px-5 py-10 text-center text-sm text-gray-500">Nenhuma movimentacao encontrada para os filtros atuais.</td>
-                    </tr>
-                  ) : ultimasTransacoes.map((transacao) => (
-                    <tr key={transacao.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/60">
-                      <td className="px-5 py-4 text-sm text-gray-600 dark:text-gray-300">{formatDateBR(transacao.data)}</td>
-                      <td className="px-5 py-4">
-                        <button
-                          onClick={() => {
-                            setTransacaoParaEditar(transacao);
-                            setModalTransacaoAberto(true);
-                          }}
-                          className="text-left text-sm font-medium text-gray-950 hover:text-sky-700 dark:text-white"
+                <tbody>
+                  {receivables.map((conta) => (
+                    <tr key={conta.id}>
+                      <Td>
+                        <p className="truncate font-medium text-ink">{conta.cliente_nome || conta.descricao}</p>
+                        <p className="truncate text-xs text-ink-subtle">{conta.cliente_telefone || conta.descricao}</p>
+                      </Td>
+                      <Td>
+                        {conta.ordem_numero ? (
+                          <button type="button" onClick={() => navigate(`/ordens/${conta.ordem_servico_id}/historico`)} className="tabular-nums text-brand-soft hover:underline">
+                            #{conta.ordem_numero}
+                          </button>
+                        ) : (
+                          <span className="text-ink-subtle">—</span>
+                        )}
+                      </Td>
+                      <Td>
+                        <span className="tabular-nums text-ink-muted">{formatDateOnly(conta.data_vencimento)}</span>
+                      </Td>
+                      <Td>
+                        {conta.dias_atraso > 0 ? (
+                          <Badge tone={conta.dias_atraso > 30 ? 'danger' : 'warning'}>{conta.dias_atraso} dias</Badge>
+                        ) : (
+                          <Badge tone="neutral">Em dia</Badge>
+                        )}
+                      </Td>
+                      <Td numeric>
+                        <strong className="text-ink">{formatCurrency(conta.saldo)}</strong>
+                      </Td>
+                      <Td>
+                        <UIButton
+                          size="sm"
+                          variant="success"
+                          icon={CheckCircle2}
+                          loading={busy === conta.id}
+                          disabled={!conta.ordem_servico_id}
+                          onClick={() => void receberConta(conta)}
                         >
-                          {transacao.descricao}
-                        </button>
-                      </td>
-                      <td className="px-5 py-4">
-                        <span className="theme-category-color inline-flex rounded-full px-2.5 py-1 text-xs font-medium" style={{ backgroundColor: `${transacao.categoria?.cor || '#64748B'}1A`, color: transacao.categoria?.cor || '#64748B' }}>
-                          {transacao.categoria?.nome || 'Sem categoria'}
-                        </span>
-                      </td>
-                      <td className={`px-5 py-4 text-right text-sm font-semibold ${transacao.tipo === 'receita' ? 'text-emerald-600' : 'text-rose-600'}`}>
-                        {transacao.tipo === 'despesa' ? '-' : '+'}{formatCurrency(transacao.valor)}
-                      </td>
+                          Receber
+                        </UIButton>
+                      </Td>
                     </tr>
                   ))}
                 </tbody>
-              </table>
-            </div>
-          </div>
+              </Table>
+            )}
+          </Panel>
+        </div>
+      )}
 
-          <div className="space-y-6">
-            <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-              <div className="mb-4 flex items-center justify-between">
-                <h2 className="text-lg font-semibold text-gray-950 dark:text-white">Receitas por categoria</h2>
-                <Filter className="h-5 w-5 text-gray-400" />
-              </div>
-              <div className="h-64">
-                {receitasPorCategoria.length ? <Doughnut data={doughnutData} options={chartOptions} /> : <div className="flex h-full items-center justify-center text-sm text-gray-500">Sem receitas no periodo.</div>}
-              </div>
-            </div>
+      {/* ------------------------------------------------------------ Pagáveis */}
+      {tab === 'pagar' && (
+        <div className="space-y-4">
+          <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <Kpi label="Em aberto" value={formatCurrency(resumo.pagaveis.aberto)} context="Total ainda não pago" icon={Receipt} tone="brand" />
+            <Kpi label="Vencido" value={formatCurrency(resumo.pagaveis.vencido)} context={`${resumo.pagaveis.quantidade_vencida} conta(s) atrasada(s)`} icon={AlertTriangle} tone="danger" emphasis={resumo.pagaveis.vencido > 0} />
+            <Kpi label="A vencer" value={formatCurrency(resumo.pagaveis.a_vencer)} context="Dentro do prazo" icon={Clock} tone="info" />
+            <Kpi label="Pago no mês" value={formatCurrency(resumo.pagaveis.pago_mes)} context="Contas quitadas com vencimento no mês" icon={CheckCircle2} tone="success" />
+          </section>
 
-            <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-              <h2 className="mb-4 text-lg font-semibold text-gray-950 dark:text-white">Despesas por categoria</h2>
-              <div className="h-64">
-                {despesasPorCategoria.length ? <Bar data={barData} options={{ ...chartOptions, indexAxis: 'y' as const, plugins: { legend: { display: false } } }} /> : <div className="flex h-full items-center justify-center text-sm text-gray-500">Sem despesas no periodo.</div>}
-              </div>
-            </div>
+          <Panel
+            title="Contas a pagar em aberto"
+            subtitle="Ordenadas por vencimento"
+            icon={Receipt}
+            action={<UIButton size="sm" onClick={() => navigate('/contas')}>Gerenciar contas</UIButton>}
+            flush
+          >
+            {walletLoading ? (
+              <div className="p-4"><Skeleton className="h-40" /></div>
+            ) : payables.length === 0 ? (
+              <EmptyState icon={CheckCircle2} title="Nenhuma conta em aberto" description="Nada pendente de pagamento." />
+            ) : (
+              <Table>
+                <thead>
+                  <tr>
+                    <th>Descrição</th>
+                    <th className="w-40">Categoria</th>
+                    <th className="w-28">Vencimento</th>
+                    <th className="w-28">Situação</th>
+                    <th className="w-32 text-right">Valor</th>
+                    <th className="w-24" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {payables.map((conta) => (
+                    <tr key={conta.id}>
+                      <Td>
+                        <p className="truncate font-medium text-ink">{conta.descricao}</p>
+                        {Number(conta.recorrente) === 1 && <p className="text-xs text-ink-subtle">Recorrente</p>}
+                      </Td>
+                      <Td>
+                        <span className="truncate text-ink-muted">{conta.categoria_nome || 'Sem categoria'}</span>
+                      </Td>
+                      <Td>
+                        <span className="tabular-nums text-ink-muted">{formatDateOnly(conta.data_vencimento)}</span>
+                      </Td>
+                      <Td>
+                        {conta.dias_atraso > 0 ? <Badge tone="danger">{conta.dias_atraso} dias</Badge> : <Badge tone="neutral">A vencer</Badge>}
+                      </Td>
+                      <Td numeric>
+                        <strong className="text-ink">{formatCurrency(conta.valor)}</strong>
+                      </Td>
+                      <Td>
+                        <UIButton size="sm" icon={CheckCircle2} loading={busy === conta.id} onClick={() => void pagarConta(conta)}>
+                          Pagar
+                        </UIButton>
+                      </Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+            )}
+          </Panel>
+        </div>
+      )}
 
-            <div className="rounded-lg border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900">
-              <div className="border-b border-gray-200 px-5 py-4 dark:border-gray-800">
-                <h2 className="text-lg font-semibold text-gray-950 dark:text-white">Proximos vencimentos</h2>
-              </div>
-              <div className="divide-y divide-gray-100 dark:divide-gray-800">
-                {proximasContas.length === 0 ? (
-                  <p className="px-5 py-6 text-sm text-gray-500">Nenhuma conta pendente.</p>
-                ) : proximasContas.map((conta) => (
-                  <div key={conta.id} className="flex items-center justify-between gap-3 px-5 py-4">
-                    <div>
-                      <p className="text-sm font-medium text-gray-950 dark:text-white">{conta.descricao}</p>
-                      <p className="text-xs text-gray-500">{formatDateBR(conta.data_vencimento)} - {conta.categoria?.nome || 'Sem categoria'}</p>
-                    </div>
-                    <p className={`text-sm font-semibold ${conta.status === 'atrasado' ? 'text-rose-600' : 'text-gray-900 dark:text-white'}`}>{formatCurrency(conta.valor)}</p>
-                  </div>
+      {/* ------------------------------------------------------------ Projeção */}
+      {tab === 'projecao' && (
+        <div className="space-y-4">
+          <Panel
+            title="Fluxo de caixa projetado"
+            subtitle="Entradas e saídas já comprometidas, pela data de vencimento"
+            icon={CalendarRange}
+            flush
+          >
+            <Table>
+              <thead>
+                <tr>
+                  <th>Janela</th>
+                  <th className="w-40 text-right">Entradas previstas</th>
+                  <th className="w-40 text-right">Saídas previstas</th>
+                  <th className="w-40 text-right">Saldo da janela</th>
+                  <th className="w-40 text-right">Saldo acumulado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {resumo.projecao.reduce<Array<{ item: Resumo['projecao'][number]; acumulado: number }>>((acc, item) => {
+                  const previous = acc.length ? acc[acc.length - 1].acumulado : 0;
+                  acc.push({ item, acumulado: Number((previous + item.saldo).toFixed(2)) });
+                  return acc;
+                }, []).map(({ item, acumulado }) => (
+                  <tr key={item.chave}>
+                    <Td>
+                      <span className="font-medium text-ink">{item.label}</span>
+                      {item.chave === 'vencido' && <p className="text-xs text-ink-subtle">Já deveria ter entrado ou saído</p>}
+                    </Td>
+                    <Td numeric><span className={toneText.success}>{formatCurrency(item.entradas)}</span></Td>
+                    <Td numeric><span className={toneText.danger}>{formatCurrency(item.saidas)}</span></Td>
+                    <Td numeric><strong className={item.saldo >= 0 ? toneText.success : toneText.danger}>{formatCurrency(item.saldo)}</strong></Td>
+                    <Td numeric><strong className={acumulado >= 0 ? 'text-ink' : toneText.danger}>{formatCurrency(acumulado)}</strong></Td>
+                  </tr>
                 ))}
-              </div>
-            </div>
+              </tbody>
+            </Table>
+          </Panel>
 
-            <button onClick={() => navigate('/notas-fiscais')} className="flex w-full items-center justify-between rounded-lg border border-gray-200 bg-white px-5 py-4 text-left text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800">
-              <span className="inline-flex items-center gap-3">
-                <FileText className="h-5 w-5 text-gray-400" />
-                Notas fiscais
-              </span>
-              <ArrowRight className="h-4 w-4" />
-            </button>
+          <Panel title="Como ler esta projeção" icon={AlertTriangle} tone="info">
+            <ul className="space-y-2 text-sm text-ink-muted">
+              <li>
+                <strong className="text-ink">Vencido</strong> soma o que já passou do prazo nos dois sentidos. Um saldo negativo
+                aqui costuma significar que a cobrança está mais atrasada que os pagamentos.
+              </li>
+              <li>
+                <strong className="text-ink">Saldo acumulado</strong> assume que tudo será recebido e pago na data prevista.
+                Compare com o índice de inadimplência antes de contar com esse dinheiro.
+              </li>
+              <li>
+                A projeção considera apenas o que já está registrado. Contas recorrentes ainda não materializadas e OS ainda
+                não faturadas não aparecem aqui.
+              </li>
+            </ul>
+          </Panel>
+        </div>
+      )}
+
+      <TransacaoModal
+        isOpen={transacaoOpen}
+        onClose={() => setTransacaoOpen(false)}
+        categorias={categorias}
+        onSuccess={() => void refreshAll()}
+      />
+      <CategoriaFinanceiraModal
+        isOpen={categoriaOpen}
+        onClose={() => setCategoriaOpen(false)}
+        onSuccess={() => {
+          void loadCategorias();
+          void refreshAll();
+        }}
+      />
+      <ImportarCSVModal
+        isOpen={importOpen}
+        onClose={() => setImportOpen(false)}
+        categorias={categorias}
+        onSuccess={() => void refreshAll()}
+      />
+    </main>
+  );
+}
+
+/* ------------------------------------------------------------------ Apoio */
+
+function IndicatorRow({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3 rounded-md bg-surface-muted px-3 py-2.5">
+      <span className="min-w-0">
+        <span className="block text-xs font-medium text-ink-muted">{label}</span>
+        {hint && <span className="block text-2xs text-ink-subtle">{hint}</span>}
+      </span>
+      <strong className="shrink-0 text-base font-semibold tabular-nums text-ink">{value}</strong>
+    </div>
+  );
+}
+
+function CategoryBars({ items }: { items: Array<{ nome: string; cor: string; valor: number }> }) {
+  const max = Math.max(...items.map((item) => item.valor), 1);
+  return (
+    <div className="space-y-3">
+      {items.map((item) => (
+        <div key={item.nome}>
+          <div className="mb-1 flex items-center justify-between gap-3 text-xs">
+            <span className="truncate text-ink-muted">{item.nome}</span>
+            <strong className="shrink-0 tabular-nums text-ink">{formatCurrency(item.valor)}</strong>
+          </div>
+          <div className="ui-meter">
+            <span style={{ width: `${Math.max(4, (item.valor / max) * 100)}%`, backgroundColor: item.cor }} />
           </div>
         </div>
-
-        <TransacaoModal
-          isOpen={modalTransacaoAberto}
-          onClose={() => {
-            setModalTransacaoAberto(false);
-            setTransacaoParaEditar(undefined);
-          }}
-          transacaoParaEditar={transacaoParaEditar}
-          categorias={categorias}
-          onSuccess={buscarDados}
-        />
-
-        <CategoriaFinanceiraModal
-          isOpen={modalCategoriaAberto}
-          onClose={() => setModalCategoriaAberto(false)}
-          onSuccess={buscarDados}
-        />
-
-        <ImportarCSVModal
-          isOpen={modalImportarCSVAberto}
-          onClose={() => setModalImportarCSVAberto(false)}
-          categorias={categorias}
-          onSuccess={buscarDados}
-        />
-      </div>
+      ))}
     </div>
+  );
+}
+
+function AgingBars({ aging }: { aging: Resumo['recebiveis']['aging'] }) {
+  const max = Math.max(...aging.map((item) => item.valor), 1);
+  const tones: Record<string, Tone> = {
+    a_vencer: 'info',
+    d1_15: 'warning',
+    d16_30: 'warning',
+    d31_60: 'danger',
+    d60_mais: 'danger',
+  };
+
+  return (
+    <div className="space-y-3">
+      {aging.map((item) => (
+        <div key={item.chave}>
+          <div className="mb-1 flex items-center justify-between gap-3 text-xs">
+            <span className="text-ink-muted">
+              {item.label}
+              {item.quantidade > 0 && <span className="ml-2 text-ink-subtle">· {item.quantidade} título(s)</span>}
+            </span>
+            <strong className="tabular-nums text-ink">{formatCurrency(item.valor)}</strong>
+          </div>
+          <Meter value={item.valor} max={max} tone={tones[item.chave] ?? 'neutral'} />
+        </div>
+      ))}
+      <p className="border-t border-hairline pt-3 text-xs text-ink-muted">
+        Valores acima de 60 dias raramente são recebidos sem contato direto. Priorize a cobrança da faixa mais antiga.
+      </p>
+    </div>
+  );
+}
+
+function DreTable({ competencia }: { competencia: Resumo['competencia'] }) {
+  const find = (key: string) => competencia.grupos.find((group) => group.chave === key)?.valor ?? 0;
+
+  const receitaServico = find('receita_servico');
+  const receitaOutras = find('receita_outras');
+  const custo = find('custo_direto');
+  const margemBruta = Number((competencia.receita - custo).toFixed(2));
+  const operacional = find('despesa_operacional');
+  const administrativa = find('despesa_administrativa');
+  const financeira = find('despesa_financeira');
+  const investimento = find('investimento');
+
+  const rows: Array<{ label: string; value: number; kind: 'entrada' | 'saida' | 'subtotal' | 'total'; hint?: string }> = [
+    { label: 'Receita de serviços', value: receitaServico, kind: 'entrada' },
+    { label: 'Outras receitas', value: receitaOutras, kind: 'entrada' },
+    { label: 'Receita bruta', value: competencia.receita, kind: 'subtotal' },
+    { label: 'Custos diretos', value: -custo, kind: 'saida', hint: 'Peças, materiais e insumos aplicados no serviço' },
+    { label: 'Margem bruta', value: margemBruta, kind: 'subtotal' },
+    { label: 'Despesas operacionais', value: -operacional, kind: 'saida', hint: 'Aluguel, energia, ferramentas de trabalho' },
+    { label: 'Despesas administrativas', value: -administrativa, kind: 'saida', hint: 'Impostos, contabilidade, pró-labore' },
+    { label: 'Despesas financeiras', value: -financeira, kind: 'saida', hint: 'Tarifas, juros e taxas de cartão' },
+    { label: 'Resultado operacional', value: competencia.resultado, kind: 'total' },
+  ];
+
+  if (investimento > 0) {
+    rows.push({ label: 'Investimentos', value: -investimento, kind: 'saida', hint: 'Não entram no resultado operacional' });
+  }
+
+  return (
+    <Table>
+      <thead>
+        <tr>
+          <th>Conta</th>
+          <th className="w-44 text-right">Valor</th>
+          <th className="w-28 text-right">% receita</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => {
+          const share = competencia.receita > 0 ? (Math.abs(row.value) / competencia.receita) * 100 : 0;
+          const isSummary = row.kind === 'subtotal' || row.kind === 'total';
+          return (
+            <tr key={row.label} className={isSummary ? 'bg-surface-muted/60' : undefined}>
+              <Td>
+                <span className={isSummary ? 'font-semibold text-ink' : 'text-ink-muted'}>{row.label}</span>
+                {row.hint && <p className="text-xs text-ink-subtle">{row.hint}</p>}
+              </Td>
+              <Td numeric>
+                <span
+                  className={
+                    row.kind === 'total'
+                      ? `text-base font-bold ${row.value >= 0 ? toneText.success : toneText.danger}`
+                      : row.kind === 'subtotal'
+                        ? 'font-semibold text-ink'
+                        : row.value < 0
+                          ? toneText.danger
+                          : toneText.success
+                  }
+                >
+                  {formatCurrency(row.value)}
+                </span>
+              </Td>
+              <Td numeric>
+                <span className="text-xs text-ink-subtle">{competencia.receita > 0 ? `${share.toFixed(1)}%` : '—'}</span>
+              </Td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </Table>
   );
 }
