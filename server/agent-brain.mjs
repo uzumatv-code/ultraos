@@ -7,7 +7,7 @@
  * parcelas?") e quando executar; cada ferramenta valida e grava no banco.
  */
 
-const WRITE_TOOLS = new Set(['criar_conta_pagar', 'pagar_conta', 'cancelar_conta', 'registrar_despesa', 'registrar_receita', 'desfazer_ultimo_lancamento', 'anexar_comprovante']);
+const WRITE_TOOLS = new Set(['criar_conta_pagar', 'pagar_conta', 'cancelar_conta', 'registrar_despesa', 'registrar_receita', 'desfazer_ultimo_lancamento', 'anexar_comprovante', 'corrigir_categoria', 'lembrar_categoria']);
 
 const PERIODS = ['mensal', 'semanal', 'quinzenal', 'bimestral', 'trimestral', 'semestral', 'anual', 'diaria'];
 const PAYMENT_METHODS = ['pix', 'dinheiro', 'credito', 'debito', 'boleto'];
@@ -117,6 +117,26 @@ const TOOLS = [
   },
   {
     type: 'function',
+    name: 'corrigir_categoria',
+    description: 'Muda a categoria de um gasto já lançado. Sem transacao_id usa o último gasto lançado por WhatsApp.',
+    parameters: {
+      type: 'object',
+      properties: { categoria: { type: 'string' }, transacao_id: { type: 'string' } },
+      required: ['categoria'],
+    },
+  },
+  {
+    type: 'function',
+    name: 'lembrar_categoria',
+    description: 'Memoriza que um estabelecimento/termo sempre pertence a uma categoria (ex.: "americanas" → Alimentação). Chame quando a pessoa confirmar ou corrigir a categoria de um lugar.',
+    parameters: {
+      type: 'object',
+      properties: { termo: { type: 'string', description: 'Nome do estabelecimento ou palavra-chave' }, categoria: { type: 'string' } },
+      required: ['termo', 'categoria'],
+    },
+  },
+  {
+    type: 'function',
     name: 'anexar_comprovante',
     description:
       'Vincula o comprovante enviado (foto/PDF) a uma conta a pagar e/ou a um gasto. Sem comprovante_id usa o comprovante recebido agora ou o último pendente. ' +
@@ -173,7 +193,7 @@ ${note}`.trim() }];
   return parts;
 }
 
-export function buildSystemPrompt({ nome, hojeIso, diaSemana, timezone, canWrite, categorias = [] }) {
+export function buildSystemPrompt({ nome, hojeIso, diaSemana, timezone, canWrite, categorias = [], regras = [] }) {
   return [
     `Você é a assistente financeira da oficina (luthieria) do ${nome || 'proprietário'}, conversando pelo WhatsApp. Aja como uma funcionária de confiança do financeiro: proativa, objetiva e cordial, sem formalidade excessiva.`,
     `Hoje é ${diaSemana}, ${hojeIso} (${timezone}).`,
@@ -193,7 +213,9 @@ export function buildSystemPrompt({ nome, hojeIso, diaSemana, timezone, canWrite
       : '',
     '- Nunca invente valores, datas ou contas: consulte as ferramentas. Se uma ferramenta falhar, explique de forma simples o que faltou.',
     '- COMPROVANTES: quando chegar um comprovante (imagem/PDF) leia valor, data e favorecido. Se a pessoa disse que pagou algo ("paguei o empréstimo da Caixa, segue o comprovante"): ache a conta com listar_contas_pagar, dê baixa com pagar_conta e então use anexar_comprovante com o conta_id. Se for um gasto avulso, registre com registrar_despesa e anexe com transacao_id. Se chegar só o comprovante, sem texto, tente identificar a conta pelo valor/favorecido lido e pelas últimas mensagens; se houver dúvida, pergunte "esse comprovante é de qual conta?" (ele fica guardado como pendente e você anexa na resposta). Se o valor lido diferir do valor da conta, avise antes de dar baixa. Para consultar comprovantes use listar_comprovantes; para mandar o arquivo de volta use enviar_comprovante.',
-    '- NÃO pergunte a forma de pagamento: ela é opcional. Use só se a pessoa disser ou se o comprovante mostrar (ex.: Pix). Evite perguntas desnecessárias; só pergunte o que realmente impede a ação.',
+    regras.length ? `- REGRAS APRENDIDAS (estabelecimento → categoria), aplique sempre: ${regras.map((r) => `${r.termo} → ${r.categoria_nome}`).join('; ')}.` : '',
+    '- ESTABELECIMENTO AMBÍGUO (loja que vende de tudo, ex.: Americanas, Magalu, Mercado Livre, Shopee) sem pista do que foi comprado: lance o gasto na melhor categoria provisória (use "Outros" se existir) e na MESMA mensagem pergunte de uma vez: "Foi o quê? (alimentação, material, outros…)". Quando a pessoa responder, use corrigir_categoria e lembrar_categoria para nunca mais perguntar. Se ela corrigir uma categoria ("muda para material"), faça o mesmo. Estabelecimento claro (supermercado, posto, farmácia, restaurante) classifique direto, sem perguntar, e não precisa memorizar.',
+    '- NÃO pergunte a forma de pagamento: ela é opcional. Preencha forma_pagamento SOMENTE se a pessoa disser ou o comprovante mostrar (ex.: Pix); nunca presuma nem invente. Evite perguntas desnecessárias; só pergunte o que realmente impede a ação.',
     '- Mensagem com vários itens (ex.: "paguei 37 de dízimo e comprei 95 de encordoamento") = um lançamento separado por item, cada um com seu valor e descrição. Nunca some. Confirme listando cada lançamento e o total só no final.',
     '- Depois de executar, diga o que foi feito; não peça confirmação extra para ações simples e reversíveis.',
     canWrite ? '' : '- ATENÇÃO: este número tem permissão só de CONSULTA. Não tente lançar, pagar ou cancelar; explique que precisa de permissão.',
@@ -295,6 +317,10 @@ export function createAgentBrain({ pool, now, todayDate, timezone, apiKey, model
         return { resumo: await actions.summary(ctx.userId) };
       case 'desfazer_ultimo_lancamento':
         return { resultado: await actions.undoLast(ctx.userId, ctx.phone) };
+      case 'corrigir_categoria':
+        return actions.recategorize(ctx.userId, { categoria: args.categoria, transacaoId: args.transacao_id || null });
+      case 'lembrar_categoria':
+        return { ok: true, ...(await actions.saveRule(ctx.userId, args.termo, args.categoria)) };
       case 'anexar_comprovante': {
         const linked = await actions.attachReceipt(ctx.userId, {
           comprovanteId: args.comprovante_id || ctx.attachment?.id || null,
@@ -362,7 +388,13 @@ export function createAgentBrain({ pool, now, todayDate, timezone, apiKey, model
     } catch {
       /* categorias são só uma dica para o modelo */
     }
-    const system = buildSystemPrompt({ nome: firstName, hojeIso: todayDate(), diaSemana: dayName(), timezone, canWrite, categorias });
+    let regras = [];
+    try {
+      regras = await actions.listRules(userId);
+    } catch {
+      /* regras são só uma dica; a ferramenta continua funcionando */
+    }
+    const system = buildSystemPrompt({ nome: firstName, hojeIso: todayDate(), diaSemana: dayName(), timezone, canWrite, categorias, regras });
 
     let body = {
       model,

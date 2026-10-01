@@ -155,6 +155,15 @@ export function createFinanceAgent({ pool, uuid, now, todayDate, money, timezone
         await pool.query(`ALTER TABLE financeiro_ia_autorizados ADD COLUMN \`${column}\` ${definition}`);
       }
     }
+    await pool.query(`CREATE TABLE IF NOT EXISTS financeiro_ia_regras (
+      id varchar(36) NOT NULL PRIMARY KEY,
+      user_id varchar(36) NOT NULL,
+      termo varchar(120) NOT NULL,
+      categoria_nome varchar(120) NOT NULL,
+      created_at varchar(50) DEFAULT NULL,
+      updated_at varchar(50) DEFAULT NULL,
+      UNIQUE KEY unique_financeiro_ia_regra (user_id, termo)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
     await pool.query(`CREATE TABLE IF NOT EXISTS financeiro_ia_avisos (
       id varchar(36) NOT NULL PRIMARY KEY,
       user_id varchar(36) NOT NULL,
@@ -163,6 +172,39 @@ export function createFinanceAgent({ pool, uuid, now, todayDate, money, timezone
       enviado_em varchar(50) DEFAULT NULL,
       UNIQUE KEY unique_financeiro_ia_aviso (user_id, telefone, chave)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+  }
+
+  /* ------------------------------------------- memória de estabelecimentos */
+
+  const ruleKey = (value) => normalizeText(value).replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+
+  async function listRules(userId, limit = 60) {
+    const [rows] = await pool.query(
+      'SELECT termo, categoria_nome FROM financeiro_ia_regras WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?',
+      [userId, limit],
+    );
+    return rows;
+  }
+
+  async function matchRule(userId, text) {
+    const haystack = ` ${ruleKey(text)} `;
+    if (haystack.trim() === '') return null;
+    const rules = await listRules(userId, 200);
+    return rules
+      .filter((rule) => rule.termo && haystack.includes(` ${rule.termo} `))
+      .sort((a, b) => b.termo.length - a.termo.length)[0] || null;
+  }
+
+  async function saveRule(userId, termo, categoriaNome) {
+    const key = ruleKey(termo);
+    if (key.length < 3) throw new Error('Termo muito curto para virar regra');
+    await pool.query(
+      `INSERT INTO financeiro_ia_regras (id, user_id, termo, categoria_nome, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE categoria_nome = VALUES(categoria_nome), updated_at = VALUES(updated_at)`,
+      [uuid(), userId, key, categoriaNome, now(), now()],
+    );
+    return { termo: key, categoria: categoriaNome };
   }
 
   /* ----------------------------------------------------------- consultas */
@@ -377,7 +419,11 @@ export function createFinanceAgent({ pool, uuid, now, todayDate, money, timezone
 
     const expense = parseQuickExpense(message);
     if (expense) {
+      const rule = await matchRule(userId, message);
+      // Sem regra aprendida e sem categoria reconhecida: quem decide é a IA (ela pergunta se ficar ambíguo).
+      if (!rule && expense.category.nome === DEFAULT_EXPENSE_CATEGORY.nome) return null;
       if (!canWrite) return { reply: 'Seu número só tem permissão de consulta, então não posso lançar gastos.', status: 'negado', intent: 'registrar_despesa' };
+      if (rule) expense.category = { nome: rule.categoria_nome, cor: '#64748B' };
       return quickExpenseResult(userId, expense);
     }
     return null;
@@ -480,5 +526,5 @@ export function createFinanceAgent({ pool, uuid, now, todayDate, money, timezone
     log.log?.('[agente-financeiro] avisos proativos ativos (a cada 5 min).');
   }
 
-  return { ensureSchema, handleMessage, quickExpenseResult, chatFallback, buildDigest, summary, startProactiveJob, runProactive, registerExpense, registerIncome, undoLast, AJUDA };
+  return { ensureSchema, handleMessage, quickExpenseResult, chatFallback, buildDigest, summary, startProactiveJob, runProactive, registerExpense, registerIncome, undoLast, listRules, matchRule, saveRule, AJUDA };
 }

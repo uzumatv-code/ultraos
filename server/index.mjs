@@ -5796,11 +5796,38 @@ const agentBrain = createAgentBrain({
     registerExpense: async (userId, args) => {
       const description = titleCaseDescription(args.descricao);
       const inferred = inferExpenseCategory(`${args.categoria || ''} ${args.descricao}`);
-      const category = inferred.nome === 'Operacional' && args.categoria
-        ? { nome: titleCaseDescription(args.categoria), cor: inferred.cor }
-        : inferred;
+      const rule = await financeAgent.matchRule(userId, `${args.descricao} ${args.categoria || ''}`);
+      const category = rule
+        ? { nome: rule.categoria_nome, cor: inferred.cor }
+        : inferred.nome === 'Operacional' && args.categoria
+          ? { nome: titleCaseDescription(args.categoria), cor: inferred.cor }
+          : inferred;
       const saved = await financeAgent.registerExpense(userId, { description, value: args.valor, formaPagamento: args.forma_pagamento, category });
       return { id: saved.id, description, value: money(args.valor), category: category.nome };
+    },
+    listRules: (userId) => financeAgent.listRules(userId),
+    saveRule: async (userId, termo, categoria) => {
+      const nome = titleCaseDescription(categoria);
+      await ensureDefaultFinancialCategory(userId, 'despesa', nome, inferExpenseCategory(nome).cor);
+      return financeAgent.saveRule(userId, termo, nome);
+    },
+    recategorize: async (userId, { categoria, transacaoId }) => {
+      let id = transacaoId;
+      if (!id) {
+        const [rows] = await pool.query(
+          `SELECT id FROM transacoes_financeiras WHERE user_id = ? AND tipo = 'despesa' AND origem = 'whatsapp_ia'
+            ORDER BY created_at DESC LIMIT 1`,
+          [userId],
+        );
+        id = rows[0]?.id;
+      }
+      if (!id) throw new Error('Não encontrei um gasto recente para corrigir');
+      const nome = titleCaseDescription(categoria);
+      const categoriaId = await ensureDefaultFinancialCategory(userId, 'despesa', nome, inferExpenseCategory(nome).cor);
+      const [result] = await pool.query('UPDATE transacoes_financeiras SET categoria_id = ?, updated_at = ? WHERE user_id = ? AND id = ?', [categoriaId, now(), userId, id]);
+      if (!result.affectedRows) throw new Error('Lançamento não encontrado');
+      const [[row]] = await pool.query('SELECT descricao, valor FROM transacoes_financeiras WHERE id = ?', [id]);
+      return { ok: true, descricao: row.descricao, valor: Number(row.valor), categoria: nome };
     },
     registerIncome: (userId, args) => financeAgent.registerIncome(userId, { description: titleCaseDescription(args.descricao), value: args.valor, formaPagamento: args.forma_pagamento }),
     summary: (userId) => financeAgent.summary(userId),
