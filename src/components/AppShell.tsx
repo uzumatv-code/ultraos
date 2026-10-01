@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
-  AlertTriangle, Banknote, Bell, Bookmark, ChevronDown, ChevronsLeft, CreditCard,
+  AlertTriangle, Banknote, Bell, Bookmark, ChevronDown, ChevronsLeft, CreditCard, Landmark,
   FileText, Gauge, LayoutGrid, LogOut, Menu, MessageCircle, Music2, PanelsTopLeft,
   PenTool, Receipt, Search, Settings, Sparkles, Star, User, Users, Wallet, Wrench, X,
   type LucideIcon,
@@ -49,6 +49,7 @@ const navigation: NavGroup[] = [
       { path: '/contas', icon: Receipt, label: 'Contas a pagar', permission: 'financeiro.read' },
       { path: '/transacoes', icon: Banknote, label: 'Lançamentos', permission: 'financeiro.read' },
       { path: '/notas-fiscais', icon: FileText, label: 'Notas fiscais', permission: 'nfse.manage' },
+      { path: '/configuracoes/fiscal', icon: Landmark, label: 'Dados fiscais', permission: 'nfse.manage', hint: 'Empresa, certificado e emissão' },
       { path: '/financeiro/ia', icon: Sparkles, label: 'Assistente financeiro', permission: 'financeiro.read' },
     ],
   },
@@ -106,6 +107,7 @@ const emptyAlerts: AlertSummary = {
 function isItemActive(pathname: string, path: string) {
   if (path === '/dashboard') return pathname === path;
   if (path === '/financeiro') return pathname === path;
+  if (path === '/configuracoes') return pathname === path || (pathname.startsWith(`${path}/`) && !pathname.startsWith('/configuracoes/fiscal'));
   return pathname === path || pathname.startsWith(`${path}/`);
 }
 

@@ -20,6 +20,7 @@ const ContasPagar = lazy(() => import('./pages/ContasPagar').then((module) => ({
 const Transacoes = lazy(() => import('./pages/Transacoes').then((module) => ({ default: module.Transacoes })));
 const Perfil = lazy(() => import('./pages/Perfil').then((module) => ({ default: module.Perfil })));
 const Financeiro = lazy(() => import('./pages/Financeiro').then((module) => ({ default: module.Financeiro })));
+const DadosFiscais = lazy(() => import('./pages/DadosFiscais').then((module) => ({ default: module.DadosFiscais })));
 const FinanceiroIA = lazy(() => import('./pages/FinanceiroIA').then((module) => ({ default: module.FinanceiroIA })));
 const ConfiguracoesWhatsApp = lazy(() => import('./pages/ConfiguracoesWhatsApp').then((module) => ({ default: module.ConfiguracoesWhatsApp })));
 const ConfiguracoesCompletas = lazy(() => import('./pages/ConfiguracoesCompletas').then((module) => ({ default: module.ConfiguracoesCompletas })));
@@ -273,6 +274,16 @@ function App() {
             <ProtectedRoute>
               <RequirePermission permission="settings.manage">
                 <Layout><DocumentoOSDesigner /></Layout>
+              </RequirePermission>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/configuracoes/fiscal"
+          element={
+            <ProtectedRoute>
+              <RequirePermission permission="nfse.manage">
+                <Layout><DadosFiscais /></Layout>
               </RequirePermission>
             </ProtectedRoute>
           }

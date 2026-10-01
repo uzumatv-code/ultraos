@@ -1,13 +1,13 @@
 /**
  * Serviço para geração de NFS-e (Nota Fiscal de Serviço Eletrônica)
- * Padrão ABRASF 2.04 - Brasília/DF
+ * A emissão/cancelamento oficial é feita pelo servidor (Padrão Nacional, /api/nfse/*).
+ * Aqui ficam o rascunho da nota e as consultas.
  */
 
 import { supabase } from '../lib/supabase';
 import { OrdemServico, Cliente, EmpresaFiscal, NotaFiscal } from '../types/database';
 import { formatCurrency } from './formatters';
 import { NFSeSOAPClient } from './nfse-soap-client';
-import { AssinaturaDigitalService } from './assinatura-digital';
 import { apiRequest } from '../lib/api-client';
 import type { OsAditivo } from '../types/database';
 
@@ -18,9 +18,6 @@ export interface NFSeData {
 }
 
 export class NFSeService {
-  private static readonly CODIGO_MUNICIPIO_BRASILIA = '5300108';
-  private static readonly AMBIENTE_HOMOLOGACAO = 'https://hom.nfse.df.gov.br/ws/nfse.wsdl';
-  private static readonly AMBIENTE_PRODUCAO = 'https://nfse.df.gov.br/ws/nfse.wsdl';
 
   /**
    * Gera o XML da NFS-e baseado nos dados da ordem de serviço
@@ -129,9 +126,9 @@ export class NFSeService {
         item_lista_servico: empresaFiscal.item_lista_servico,
         codigo_cnae: empresaFiscal.codigo_cnae,
         codigo_tributacao_municipio: empresaFiscal.codigo_tributacao_municipio,
-        codigo_municipio_prestacao: this.CODIGO_MUNICIPIO_BRASILIA,
+        codigo_municipio_prestacao: empresaFiscal.codigo_municipio,
         exigibilidade_iss: 1,
-        municipio_incidencia: this.CODIGO_MUNICIPIO_BRASILIA,
+        municipio_incidencia: empresaFiscal.codigo_municipio,
         status: 'rascunho',
       };
 
@@ -164,120 +161,14 @@ export class NFSeService {
   }
 
   /**
-   * Envia NFS-e para a prefeitura (assina e transmite via SOAP)
+   * Emite a NFS-e pelo Padrão Nacional: o servidor monta a DPS, assina com o certificado A1
+   * da empresa e transmite à Sefin Nacional (mTLS). Retorna a nota já atualizada.
    */
   static async enviarNFSe(notaFiscalId: string): Promise<NotaFiscal> {
-    try {
-      // 1. Buscar nota fiscal
-      const { data: nfse, error: nfseError } = await supabase
-        .from('notas_fiscais')
-        .select('*')
-        .eq('id', notaFiscalId)
-        .single();
-
-      if (nfseError) throw nfseError;
-      if (!nfse || !nfse.xml_envio) throw new Error('NFS-e não encontrada ou XML inválido');
-
-      // 2. Buscar dados fiscais da empresa
-      const { data: empresaFiscal, error: efError } = await supabase
-        .from('empresa_fiscal')
-        .select('*')
-        .eq('user_id', nfse.user_id)
-        .single();
-
-      if (efError) throw efError;
-      if (!empresaFiscal) throw new Error('Dados fiscais não configurados');
-
-      // 3. Assinar XML digitalmente (em desenvolvimento, pula assinatura)
-      let xmlAssinado = nfse.xml_envio;
-      
-      if (process.env.NODE_ENV !== 'development') {
-        // Em produção, assinar com certificado digital
-        xmlAssinado = await AssinaturaDigitalService.assinarXML(nfse.xml_envio, {
-          tipo: 'A1',
-          // certificado e senha viriam de configuração segura
-        });
-      }
-
-      // 4. Atualizar status para "enviado"
-      await supabase
-        .from('notas_fiscais')
-        .update({ status: 'enviado' })
-        .eq('id', notaFiscalId);
-
-      // 5. Enviar via SOAP para a prefeitura
-      const response = await NFSeSOAPClient.gerarNFSe(xmlAssinado, empresaFiscal);
-
-      if (!response.success) {
-        // Erro no envio
-        await supabase
-          .from('notas_fiscais')
-          .update({ 
-            status: 'rejeitado',
-            mensagem_retorno: response.error 
-          })
-          .eq('id', notaFiscalId);
-
-        await this.registrarLog(
-          notaFiscalId,
-          nfse.user_id,
-          'gerar',
-          'erro',
-          xmlAssinado,
-          undefined,
-          response.error
-        );
-
-        throw new Error(response.error || 'Erro ao enviar NFS-e');
-      }
-
-      // 6. Sucesso! Atualizar dados da nota
-      const { data: nfseAtualizada, error: updateError } = await supabase
-        .from('notas_fiscais')
-        .update({
-          status: 'autorizado',
-          numero_nfse: response.numeroNfse,
-          codigo_verificacao: response.codigoVerificacao,
-          protocolo: response.protocolo,
-          mensagem_retorno: response.mensagem,
-        })
-        .eq('id', notaFiscalId)
-        .select()
-        .single();
-
-      if (updateError) throw updateError;
-
-      // 7. Buscar URL da nota
-      if (response.numeroNfse) {
-        const urlResponse = await NFSeSOAPClient.consultarURLNFSe(
-          response.numeroNfse,
-          empresaFiscal
-        );
-
-        if (urlResponse.success && urlResponse.urlNota) {
-          await supabase
-            .from('notas_fiscais')
-            .update({ url_nota: urlResponse.urlNota })
-            .eq('id', notaFiscalId);
-        }
-      }
-
-      // 8. Registrar log de sucesso
-      await this.registrarLog(
-        notaFiscalId,
-        nfse.user_id,
-        'gerar',
-        'sucesso',
-        xmlAssinado,
-        undefined,
-        `NFS-e autorizada: ${response.numeroNfse}`
-      );
-
-      return nfseAtualizada;
-    } catch (error: any) {
-      console.error('Erro ao enviar NFS-e:', error);
-      throw error;
-    }
+    await apiRequest(`/api/nfse/notas/${notaFiscalId}/enviar`, { method: 'POST' });
+    const { data, error } = await supabase.from('notas_fiscais').select('*').eq('id', notaFiscalId).single();
+    if (error) throw error;
+    return data as NotaFiscal;
   }
 
   /**
@@ -463,107 +354,10 @@ export class NFSeService {
   }
 
   /**
-   * Cancela uma NFS-e na prefeitura
+   * Cancela uma NFS-e autorizada (evento de cancelamento do Padrão Nacional).
    */
   static async cancelarNFSe(notaFiscalId: string, motivo: string): Promise<void> {
-    try {
-      const { data: nfse, error: fetchError } = await supabase
-        .from('notas_fiscais')
-        .select('*')
-        .eq('id', notaFiscalId)
-        .single();
-
-      if (fetchError) throw fetchError;
-
-      if (nfse.status !== 'autorizado') {
-        throw new Error('Apenas notas autorizadas podem ser canceladas');
-      }
-
-      if (!nfse.numero_nfse) {
-        throw new Error('Número da NFS-e não encontrado');
-      }
-
-      // Buscar dados fiscais
-      const { data: empresaFiscal, error: efError } = await supabase
-        .from('empresa_fiscal')
-        .select('*')
-        .eq('user_id', nfse.user_id)
-        .single();
-
-      if (efError) throw efError;
-
-      // Gerar XML de cancelamento
-      const xmlCancelamento = this.gerarXMLCancelamento(nfse, motivo);
-
-      // Enviar cancelamento via SOAP
-      const response = await NFSeSOAPClient.cancelarNFSe(
-        nfse.numero_nfse,
-        motivo,
-        empresaFiscal
-      );
-
-      if (!response.success) {
-        await this.registrarLog(
-          notaFiscalId,
-          nfse.user_id,
-          'cancelar',
-          'erro',
-          xmlCancelamento,
-          undefined,
-          response.error
-        );
-        throw new Error(response.error || 'Erro ao cancelar NFS-e');
-      }
-
-      // Atualizar status no banco
-      const { error: updateError } = await supabase
-        .from('notas_fiscais')
-        .update({
-          status: 'cancelado',
-          data_cancelamento: new Date().toISOString(),
-          motivo_cancelamento: motivo,
-        })
-        .eq('id', notaFiscalId);
-
-      if (updateError) throw updateError;
-
-      // Registrar log de sucesso
-      await this.registrarLog(
-        notaFiscalId,
-        nfse.user_id,
-        'cancelar',
-        'sucesso',
-        xmlCancelamento,
-        undefined,
-        'NFS-e cancelada com sucesso'
-      );
-    } catch (error) {
-      console.error('Erro ao cancelar NFS-e:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Gera XML de cancelamento
-   */
-  private static gerarXMLCancelamento(nfse: NotaFiscal, motivo: string): string {
-    return `<?xml version="1.0" encoding="UTF-8"?>
-<CancelarNfseEnvio xmlns="http://www.abrasf.org.br/nfse.xsd">
-  <Pedido>
-    <InfPedidoCancelamento>
-      <IdentificacaoNfse>
-        <Numero>${nfse.numero_nfse}</Numero>
-        <CpfCnpj>
-          <Cnpj><!-- CNPJ da empresa --></Cnpj>
-        </CpfCnpj>
-        <InscricaoMunicipal><!-- IM da empresa --></InscricaoMunicipal>
-        <CodigoMunicipio>${this.CODIGO_MUNICIPIO_BRASILIA}</CodigoMunicipio>
-      </IdentificacaoNfse>
-      <CodigoCancelamento>1</CodigoCancelamento>
-      <MotivoCancelamento>${this.escapeXML(motivo)}</MotivoCancelamento>
-    </InfPedidoCancelamento>
-  </Pedido>
-</CancelarNfseEnvio>`;
+    await apiRequest(`/api/nfse/notas/${notaFiscalId}/cancelar`, { method: 'POST', body: JSON.stringify({ motivo }) });
   }
 
   /**

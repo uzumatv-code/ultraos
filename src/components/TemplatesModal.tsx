@@ -141,7 +141,7 @@ export function TemplatesModal({ isOpen, onClose }: TemplatesModalProps) {
           .eq('template_type', templateType)
           .eq('is_active', true)
           .single();
-        if (!error && data) template = data as MessageTemplate;
+        if (!error && data && typeof data.template_content === 'string') template = data as MessageTemplate;
       }
     } catch (error) {
       console.error('Erro ao carregar template:', error);

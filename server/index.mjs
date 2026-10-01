@@ -14,6 +14,7 @@ import { addMonthsClamped, formatDateOnly, installmentNumber, occurrenceDate, oc
 import { createFinanceAgent, inferExpenseCategory, formatBRL } from './finance-agent.mjs';
 import { createAgentBrain } from './agent-brain.mjs';
 import { createReceiptStore } from './receipts.mjs';
+import { buildDps, cancelNfse, emitDps, parsePfx } from './nfse-nacional.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -4877,6 +4878,202 @@ app.post('/api/ordens/salvar', requireAuth, async (req, res) => {
   }
 });
 
+async function ensureNfseSchema() {
+  await pool.query(`CREATE TABLE IF NOT EXISTS nfse_certificados (
+    user_id varchar(36) NOT NULL PRIMARY KEY,
+    pfx_enc longtext NOT NULL,
+    senha_enc varchar(1000) NOT NULL,
+    titular varchar(255) DEFAULT NULL,
+    cnpj varchar(20) DEFAULT NULL,
+    valido_ate varchar(50) DEFAULT NULL,
+    created_at varchar(50) DEFAULT NULL
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+  const columns = [
+    ['empresa_fiscal', 'enquadramento', "varchar(10) NOT NULL DEFAULT 'simples'"],
+    ['empresa_fiscal', 'reg_ap_trib_sn', 'int NOT NULL DEFAULT 1'],
+    ['empresa_fiscal', 'codigo_tributacao_nacional', "varchar(10) NOT NULL DEFAULT '140101'"],
+    ['empresa_fiscal', 'municipio_nome', 'varchar(120) DEFAULT NULL'],
+    ['notas_fiscais', 'chave_acesso', 'varchar(60) DEFAULT NULL'],
+  ];
+  for (const [table, column, definition] of columns) {
+    const [rows] = await pool.query(
+      'SELECT COUNT(*) AS total FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?',
+      [table, column],
+    );
+    if (Number(rows[0]?.total || 0) === 0) await pool.query(`ALTER TABLE \`${table}\` ADD COLUMN \`${column}\` ${definition}`);
+    columnCache.delete(table);
+  }
+}
+
+async function loadNfseCertificate(userId) {
+  const [[row]] = await pool.query('SELECT * FROM nfse_certificados WHERE user_id = ? LIMIT 1', [userId]);
+  if (!row) return null;
+  const parsed = parsePfx(Buffer.from(decryptSecret(row.pfx_enc), 'base64'), decryptSecret(row.senha_enc));
+  if (parsed.expirado) throw new Error('O certificado digital está vencido. Envie um certificado A1 válido nos Dados fiscais.');
+  return parsed;
+}
+
+const NFSE_REQUIRED_FIELDS = [
+  ['cnpj', 'CNPJ'], ['codigo_municipio', 'Município'], ['uf', 'UF'], ['codigo_tributacao_nacional', 'Código do serviço'],
+  ['razao_social', 'Razão social'], ['cep', 'CEP'], ['endereco', 'Endereço'],
+];
+
+async function nfseCompanyStatus(userId) {
+  const [[empresa]] = await pool.query('SELECT * FROM empresa_fiscal WHERE user_id = ? LIMIT 1', [userId]);
+  const faltando = empresa
+    ? NFSE_REQUIRED_FIELDS.filter(([field]) => !String(empresa[field] ?? '').trim()).map(([, label]) => label)
+    : NFSE_REQUIRED_FIELDS.map(([, label]) => label);
+  const [[cert]] = await pool.query('SELECT titular, cnpj, valido_ate FROM nfse_certificados WHERE user_id = ? LIMIT 1', [userId]);
+  const empresaCnpj = String(empresa?.cnpj || '').replace(/\D/g, '');
+  return {
+    empresa_configurada: Boolean(empresa) && faltando.length === 0,
+    campos_faltando: faltando,
+    ambiente: empresa?.ambiente || 'homologacao',
+    certificado: cert
+      ? {
+        titular: cert.titular,
+        cnpj: cert.cnpj,
+        valido_ate: cert.valido_ate,
+        expirado: new Date(cert.valido_ate).getTime() < Date.now(),
+        cnpj_confere: !cert.cnpj || !empresaCnpj || cert.cnpj === empresaCnpj,
+      }
+      : null,
+  };
+}
+
+async function nfseLog(userId, notaId, tipo, status, mensagem, xmlEnviado, xmlRecebido) {
+  await pool.query(
+    `INSERT INTO nfse_logs (id,user_id,nota_fiscal_id,tipo_operacao,status,mensagem,xml_enviado,xml_recebido,created_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+    [uuid(), userId, notaId, tipo, status, String(mensagem || '').slice(0, 4000), xmlEnviado || null, xmlRecebido || null, now()],
+  ).catch((error) => console.error('[nfse] falha ao gravar log:', error.message));
+}
+
+app.get('/api/nfse/status', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    res.json({ data: await nfseCompanyStatus(req.user.id), error: null });
+  } catch (error) {
+    res.status(400).json({ data: null, error: { message: error.message } });
+  }
+});
+
+app.post('/api/nfse/certificado', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const raw = String(req.body?.base64 || '').replace(/^data:[^;]+;base64,/, '');
+    const buffer = Buffer.from(raw, 'base64');
+    if (!buffer.length || buffer.length > 200 * 1024) throw new Error('Arquivo de certificado inválido ou grande demais');
+    const parsed = parsePfx(buffer, String(req.body?.senha ?? ''));
+    if (parsed.expirado) throw new Error('Este certificado está vencido. Envie um certificado A1 dentro da validade.');
+    const [[empresa]] = await pool.query('SELECT cnpj FROM empresa_fiscal WHERE user_id = ? LIMIT 1', [req.user.id]);
+    const empresaCnpj = String(empresa?.cnpj || '').replace(/\D/g, '');
+    if (parsed.cnpj && empresaCnpj && parsed.cnpj !== empresaCnpj) {
+      throw new Error(`O certificado pertence ao CNPJ ${parsed.cnpj}, diferente do CNPJ cadastrado nos dados fiscais (${empresaCnpj}).`);
+    }
+    await pool.query(
+      `INSERT INTO nfse_certificados (user_id,pfx_enc,senha_enc,titular,cnpj,valido_ate,created_at) VALUES (?,?,?,?,?,?,?)
+       ON DUPLICATE KEY UPDATE pfx_enc=VALUES(pfx_enc), senha_enc=VALUES(senha_enc), titular=VALUES(titular), cnpj=VALUES(cnpj), valido_ate=VALUES(valido_ate), created_at=VALUES(created_at)`,
+      [req.user.id, encryptSecret(buffer.toString('base64')), encryptSecret(String(req.body?.senha ?? '')), parsed.titular, parsed.cnpj, parsed.validoAte, now()],
+    );
+    await writeAudit(req, { action: 'nfse.certificado.salvar', resource: 'nfse_certificados', details: { titular: parsed.titular, valido_ate: parsed.validoAte } });
+    res.json({ data: await nfseCompanyStatus(req.user.id), error: null });
+  } catch (error) {
+    res.status(400).json({ data: null, error: { message: error.message } });
+  }
+});
+
+app.delete('/api/nfse/certificado', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM nfse_certificados WHERE user_id = ?', [req.user.id]);
+    await writeAudit(req, { action: 'nfse.certificado.remover', resource: 'nfse_certificados' });
+    res.json({ data: await nfseCompanyStatus(req.user.id), error: null });
+  } catch (error) {
+    res.status(400).json({ data: null, error: { message: error.message } });
+  }
+});
+
+app.post('/api/nfse/notas/:id/enviar', requireAuth, requireAdmin, async (req, res) => {
+  const userId = req.user.id;
+  const notaId = req.params.id;
+  try {
+    const [[nota]] = await pool.query('SELECT * FROM notas_fiscais WHERE user_id = ? AND id = ? LIMIT 1', [userId, notaId]);
+    if (!nota) throw Object.assign(new Error('Nota não encontrada'), { status: 404 });
+    if (!['rascunho', 'rejeitado'].includes(nota.status)) throw new Error('Só notas em rascunho ou rejeitadas podem ser enviadas.');
+    const [[empresa]] = await pool.query('SELECT * FROM empresa_fiscal WHERE user_id = ? LIMIT 1', [userId]);
+    if (!empresa) throw new Error('Cadastre os dados fiscais da empresa antes de emitir (menu Dados fiscais).');
+    const certificate = await loadNfseCertificate(userId);
+    if (!certificate) throw new Error('Envie o certificado digital A1 nos Dados fiscais para emitir notas.');
+    const [[tomador]] = await pool.query(
+      `SELECT c.nome, c.cpf_cnpj, c.email, c.telefone FROM ordens_servico o JOIN clientes c ON c.id = o.cliente_id AND c.user_id = o.user_id
+        WHERE o.user_id = ? AND o.id = ? LIMIT 1`,
+      [userId, nota.ordem_servico_id],
+    );
+
+    const ambiente = empresa.ambiente === 'producao' ? 'producao' : 'homologacao';
+    const { xml } = buildDps({ empresa, tomador: tomador || {}, nota, ambiente });
+    await pool.query("UPDATE notas_fiscais SET status='enviado', updated_at=? WHERE id=?", [now(), notaId]);
+    const result = await emitDps({ dpsXml: xml, ambiente, certificate });
+
+    if (!result.ok) {
+      const mensagem = result.erros.join('\n');
+      await pool.query("UPDATE notas_fiscais SET status='rejeitado', mensagem_retorno=?, xml_envio=?, updated_at=? WHERE id=?", [mensagem, result.xmlEnviado, now(), notaId]);
+      await nfseLog(userId, notaId, 'emissao', 'erro', mensagem, result.xmlEnviado, null);
+      return res.status(422).json({ data: null, error: { message: mensagem, erros: result.erros } });
+    }
+
+    await pool.query(
+      `UPDATE notas_fiscais SET status='autorizado', numero_nfse=?, chave_acesso=?, codigo_verificacao=?, protocolo=?, mensagem_retorno=?,
+              xml_envio=?, xml_retorno=?, updated_at=? WHERE id=?`,
+      [result.numeroNfse, result.chaveAcesso, null, result.idDps, [`NFS-e autorizada (${ambiente === 'producao' ? 'produção' : 'homologação'})`, ...result.alertas].join(' | '),
+        result.xmlEnviado, result.xmlNfse, now(), notaId],
+    );
+    await nfseLog(userId, notaId, 'emissao', 'sucesso', `NFS-e ${result.numeroNfse} autorizada. Chave ${result.chaveAcesso}`, result.xmlEnviado, result.xmlNfse);
+    await writeAudit(req, { action: 'nfse.emitir', resource: 'notas_fiscais', resourceId: notaId, details: { numero: result.numeroNfse, ambiente } });
+    res.json({ data: { numero_nfse: result.numeroNfse, chave_acesso: result.chaveAcesso, ambiente, alertas: result.alertas }, error: null });
+  } catch (error) {
+    await pool.query("UPDATE notas_fiscais SET status=IF(status='enviado','rascunho',status) WHERE user_id=? AND id=?", [userId, notaId]).catch(() => {});
+    res.status(error.status || 400).json({ data: null, error: { message: error.message } });
+  }
+});
+
+app.post('/api/nfse/notas/:id/cancelar', requireAuth, requireAdmin, async (req, res) => {
+  const userId = req.user.id;
+  const notaId = req.params.id;
+  try {
+    const [[nota]] = await pool.query('SELECT * FROM notas_fiscais WHERE user_id = ? AND id = ? LIMIT 1', [userId, notaId]);
+    if (!nota) throw Object.assign(new Error('Nota não encontrada'), { status: 404 });
+    if (nota.status !== 'autorizado' || !nota.chave_acesso) throw new Error('Só é possível cancelar notas autorizadas pelo padrão nacional (com chave de acesso).');
+    const [[empresa]] = await pool.query('SELECT * FROM empresa_fiscal WHERE user_id = ? LIMIT 1', [userId]);
+    const certificate = await loadNfseCertificate(userId);
+    if (!certificate) throw new Error('Certificado digital não encontrado.');
+    const ambiente = empresa?.ambiente === 'producao' ? 'producao' : 'homologacao';
+    const motivo = String(req.body?.motivo || '').trim();
+    const result = await cancelNfse({ chaveAcesso: nota.chave_acesso, cnpj: empresa.cnpj, motivo, motivoCodigo: Number(req.body?.codigo_motivo) || 1, ambiente, certificate });
+    if (!result.ok) {
+      const mensagem = result.erros.join('\n');
+      await nfseLog(userId, notaId, 'cancelamento', 'erro', mensagem, result.xmlEnviado, null);
+      return res.status(422).json({ data: null, error: { message: mensagem, erros: result.erros } });
+    }
+    await pool.query("UPDATE notas_fiscais SET status='cancelado', data_cancelamento=?, motivo_cancelamento=?, updated_at=? WHERE id=?", [now(), motivo, now(), notaId]);
+    await nfseLog(userId, notaId, 'cancelamento', 'sucesso', motivo, result.xmlEnviado, JSON.stringify(result.resposta));
+    await writeAudit(req, { action: 'nfse.cancelar', resource: 'notas_fiscais', resourceId: notaId, details: { motivo } });
+    res.json({ data: { cancelada: true }, error: null });
+  } catch (error) {
+    res.status(error.status || 400).json({ data: null, error: { message: error.message } });
+  }
+});
+
+app.get('/api/nfse/notas/:id/xml', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const [[nota]] = await pool.query('SELECT numero_nfse, chave_acesso, xml_retorno, xml_envio FROM notas_fiscais WHERE user_id = ? AND id = ? LIMIT 1', [req.user.id, req.params.id]);
+    const xml = nota?.xml_retorno || nota?.xml_envio;
+    if (!xml) return res.status(404).json({ error: { message: 'XML não disponível' } });
+    res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="nfse-${nota.numero_nfse || nota.chave_acesso || req.params.id}.xml"`);
+    res.send(xml);
+  } catch (error) {
+    res.status(400).json({ error: { message: error.message } });
+  }
+});
+
 async function ensureInstallmentSchema() {
   const columns = [
     ['contas_pagar_recorrencias', 'total_parcelas', 'int DEFAULT NULL'],
@@ -6809,6 +7006,7 @@ async function startServer() {
   try {
     await financeAgent.ensureSchema();
     await ensureInstallmentSchema();
+    await ensureNfseSchema();
     await receipts.ensureSchema();
   } catch (error) {
     console.error('[startup] Agente financeiro sem esquema atualizado:', error.message);

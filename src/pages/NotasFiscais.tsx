@@ -10,7 +10,7 @@ import { DANFEService, type DANFEModelo } from '../utils/danfe-service';
 import type { NotaFiscal } from '../types/database';
 import { motion, AnimatePresence } from 'framer-motion';
 import { NFSeModal } from '../components/NFSeModal';
-import ConfiguracaoFiscalModal from '../components/ConfiguracaoFiscalModal';
+import Swal from 'sweetalert2';
 
 export function NotasFiscais() {
   const navigate = useNavigate();
@@ -21,7 +21,6 @@ export function NotasFiscais() {
   const [showXMLModal, setShowXMLModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [notaParaEditar, setNotaParaEditar] = useState<NotaFiscal | null>(null);
-  const [showConfigFiscalModal, setShowConfigFiscalModal] = useState(false);
   const [showModeloModal, setShowModeloModal] = useState(false);
   const [notaParaDANFE, setNotaParaDANFE] = useState<NotaFiscal | null>(null);
   const [tipoAcaoDANFE, setTipoAcaoDANFE] = useState<'visualizar' | 'baixar'>('visualizar');
@@ -96,18 +95,22 @@ export function NotasFiscais() {
       return;
     }
 
-    const result = await alerts.confirm({
+    const result = await Swal.fire({
       title: 'Cancelar NFS-e',
-      text: 'Tem certeza que deseja cancelar esta NFS-e? Esta ação não pode ser desfeita.',
+      text: 'Informe o motivo do cancelamento (mín. 15 caracteres). Esta ação não pode ser desfeita.',
       icon: 'warning',
-      confirmButtonText: 'Sim, cancelar',
-      cancelButtonText: 'Não',
+      input: 'textarea',
+      inputPlaceholder: 'Ex.: valor do serviço emitido incorretamente',
+      showCancelButton: true,
+      confirmButtonText: 'Cancelar nota',
+      cancelButtonText: 'Voltar',
+      inputValidator: (value) => (String(value || '').trim().length < 15 ? 'Descreva o motivo com pelo menos 15 caracteres.' : undefined),
     });
 
     if (!result.isConfirmed) return;
 
     try {
-      const motivo = 'Cancelamento solicitado pelo usuário';
+      const motivo = String(result.value).trim();
       await NFSeService.cancelarNFSe(nota.id, motivo);
       alerts.success('NFS-e cancelada com sucesso!');
       buscarNotas();
@@ -319,7 +322,7 @@ export function NotasFiscais() {
             <motion.button
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
-              onClick={() => setShowConfigFiscalModal(true)}
+              onClick={() => navigate('/configuracoes/fiscal')}
               className="flex w-full items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 dark:from-blue-500 dark:to-purple-500 text-white rounded-xl transition-all shadow-lg shadow-blue-500/30 dark:shadow-blue-500/20 font-medium sm:w-auto"
               title="Configurar Dados Fiscais"
             >
@@ -703,16 +706,6 @@ export function NotasFiscais() {
           }}
         />
       )}
-
-      {/* Modal de Configuração Fiscal */}
-      <ConfiguracaoFiscalModal
-        isOpen={showConfigFiscalModal}
-        onClose={() => setShowConfigFiscalModal(false)}
-        onSave={() => {
-          setShowConfigFiscalModal(false);
-          toast.success('Dados fiscais configurados com sucesso!');
-        }}
-      />
 
       {/* Modal de Seleção de Modelo DANFE */}
       <AnimatePresence>

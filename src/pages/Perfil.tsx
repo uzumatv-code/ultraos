@@ -7,7 +7,6 @@ import { toast } from '../components/ToastCustom';
 import { AlterarSenhaModal } from '../components/AlterarSenhaModal';
 import { NovoUsuarioModal } from '../components/NovoUsuarioModal';
 import { EditarPerfilModal } from '../components/EditarPerfilModal';
-import ConfiguracaoFiscalModal from '../components/ConfiguracaoFiscalModal';
 import { useAuth } from '../contexts/AuthContext';
 
 export function Perfil() {
@@ -17,7 +16,6 @@ export function Perfil() {
   const [showAlterarSenhaModal, setShowAlterarSenhaModal] = useState(false);
   const [showNovoUsuarioModal, setShowNovoUsuarioModal] = useState(false);
   const [showEditarPerfilModal, setShowEditarPerfilModal] = useState(false);
-  const [showConfigFiscalModal, setShowConfigFiscalModal] = useState(false);
   const [nome, setNome] = useState('');
   const [email, setEmail] = useState('');
   const [notificacoesEmail, setNotificacoesEmail] = useState(true);
@@ -128,7 +126,7 @@ export function Perfil() {
                 </button>}
 
                 {can('nfse.manage') && <button
-                  onClick={() => setShowConfigFiscalModal(true)}
+                  onClick={() => navigate('/configuracoes/fiscal')}
                   className="w-full px-4 py-2 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-lg hover:from-blue-700 hover:to-purple-700 transition-colors flex items-center justify-center space-x-2"
                 >
                   <Building2 className="w-4 h-4" />
@@ -212,15 +210,6 @@ export function Perfil() {
         isOpen={showEditarPerfilModal}
         onClose={() => setShowEditarPerfilModal(false)}
         onSuccess={loadUserData}
-      />
-
-      <ConfiguracaoFiscalModal
-        isOpen={showConfigFiscalModal}
-        onClose={() => setShowConfigFiscalModal(false)}
-        onSave={() => {
-          setShowConfigFiscalModal(false);
-          toast.success('Dados fiscais configurados com sucesso!');
-        }}
       />
     </div>
   );
