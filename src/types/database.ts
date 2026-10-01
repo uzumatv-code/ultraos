@@ -113,6 +113,8 @@ export interface ContaPagar {
   competencia?: string;
   origem?: 'manual' | 'recorrencia' | string;
   alterada_manualmente?: boolean;
+  parcela_numero?: number | null;
+  parcela_total?: number | null;
 }
 
 export interface TransacaoFinanceira {

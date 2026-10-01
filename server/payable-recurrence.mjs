@@ -105,3 +105,32 @@ export function validatePayableInput(input = {}) {
     status: ['pendente', 'atrasado', 'pago'].includes(input.status) ? input.status : 'pendente',
   };
 }
+
+/** Posição (0 = primeira) de uma data dentro da série que começa em `startDate`. */
+export function occurrenceIndex(startDate, period, date) {
+  const anchor = parseDateOnly(startDate);
+  const target = parseDateOnly(date);
+  if (!anchor || !target || !PAYABLE_PERIODS.has(period)) return 0;
+  const monthStep = PERIODS_IN_MONTHS[period];
+  if (monthStep) {
+    const months = (target.getUTCFullYear() - anchor.getUTCFullYear()) * 12 + target.getUTCMonth() - anchor.getUTCMonth();
+    return Math.round(months / monthStep);
+  }
+  return Math.round((target.getTime() - anchor.getTime()) / 86_400_000 / PERIODS_IN_DAYS[period]);
+}
+
+/** Data da n-ésima ocorrência (0 = primeira) da série. */
+export function occurrenceDate(startDate, period, index) {
+  const anchor = parseDateOnly(startDate);
+  if (!anchor || !PAYABLE_PERIODS.has(period)) return null;
+  const monthStep = PERIODS_IN_MONTHS[period];
+  if (monthStep) return formatDateOnly(addMonthsClamped(anchor, monthStep * index));
+  return formatDateOnly(addDays(anchor, PERIODS_IN_DAYS[period] * index));
+}
+
+/** Número da parcela de uma ocorrência, ou null quando a série não é parcelada / fora do intervalo. */
+export function installmentNumber({ startDate, period, firstNumber = 1, total = null, date }) {
+  const number = Number(firstNumber) + occurrenceIndex(startDate, period, date);
+  if (!total) return null;
+  return number >= 1 && number <= Number(total) ? number : null;
+}

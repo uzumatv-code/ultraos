@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseQuickExpense, inferExpenseCategory, detectAgentCommand, formatBRL } from './finance-agent.mjs';
+import { installmentNote, parseQuickExpense, inferExpenseCategory, detectAgentCommand, formatBRL } from './finance-agent.mjs';
 
 test('reconhece lançamentos rápidos em texto livre', () => {
   const coffee = parseQuickExpense('comprei um café 10,00');
@@ -60,4 +60,10 @@ test('empréstimo e cartão têm categoria própria', () => {
   assert.equal(inferExpenseCategory('Empréstimo do terreno').nome, 'Empréstimos');
   assert.equal(inferExpenseCategory('Cartão da Renner').nome, 'Cartões');
   assert.equal(inferExpenseCategory('Aluguel').nome, 'Moradia');
+});
+
+test('mensagem de parcela informa andamento e saldo', () => {
+  assert.match(installmentNote({ parcela_numero: 4, parcela_total: 10, valor: 2700 }), /Parcela 4\/10.*faltam 6/s);
+  assert.match(installmentNote({ parcela_numero: 10, parcela_total: 10, valor: 2700 }), /última parcela/);
+  assert.equal(installmentNote({ valor: 10 }), '');
 });

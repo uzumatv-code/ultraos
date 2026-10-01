@@ -7,7 +7,7 @@
  * parcelas?") e quando executar; cada ferramenta valida e grava no banco.
  */
 
-const WRITE_TOOLS = new Set(['criar_conta_pagar', 'pagar_conta', 'cancelar_conta', 'registrar_despesa', 'registrar_receita', 'desfazer_ultimo_lancamento', 'anexar_comprovante', 'corrigir_categoria', 'lembrar_categoria']);
+const WRITE_TOOLS = new Set(['criar_conta_pagar', 'pagar_conta', 'cancelar_conta', 'registrar_despesa', 'registrar_receita', 'desfazer_ultimo_lancamento', 'anexar_comprovante', 'corrigir_categoria', 'lembrar_categoria', 'editar_parcelas']);
 
 const PERIODS = ['mensal', 'semanal', 'quinzenal', 'bimestral', 'trimestral', 'semestral', 'anual', 'diaria'];
 const PAYMENT_METHODS = ['pix', 'dinheiro', 'credito', 'debito', 'boleto'];
@@ -28,6 +28,7 @@ const TOOLS = [
         recorrente: { type: 'boolean', description: 'Repete automaticamente todo período' },
         periodicidade: { type: 'string', enum: PERIODS, description: 'Obrigatória se recorrente' },
         parcelas: { type: 'integer', description: 'Total de parcelas mensais; 1 se não for parcelada' },
+        parcela_atual: { type: 'integer', description: 'Se a conta cadastrada já é a parcela K do parcelamento (ex.: 4 em "4/10"); padrão 1' },
         categoria: { type: 'string', description: 'Opcional: Moradia, Alimentação, Material e peças, Impostos e taxas, Transporte, Saúde, Marketing…' },
         forma_pagamento: { type: 'string', enum: PAYMENT_METHODS },
         observacoes: { type: 'string' },
@@ -114,6 +115,22 @@ const TOOLS = [
     name: 'desfazer_ultimo_lancamento',
     description: 'Remove o último gasto lançado por WhatsApp (só vale para lançamentos recentes).',
     parameters: { type: 'object', properties: {} },
+  },
+  {
+    type: 'function',
+    name: 'editar_parcelas',
+    description:
+      'Define ou corrige o parcelamento de uma conta: "esta conta é a parcela N de T". Renumera as demais, encerra a série no total e gera as que faltam. ' +
+      'Use total_parcelas=null para tornar a conta sem fim, ou ambos nulos para remover o parcelamento.',
+    parameters: {
+      type: 'object',
+      properties: {
+        conta_id: { type: 'string', description: 'Qualquer ocorrência da conta (use a que a pessoa está falando, normalmente a em aberto mais próxima)' },
+        parcela_atual: { type: ['integer', 'null'] },
+        total_parcelas: { type: ['integer', 'null'] },
+      },
+      required: ['conta_id'],
+    },
   },
   {
     type: 'function',
@@ -215,6 +232,7 @@ export function buildSystemPrompt({ nome, hojeIso, diaSemana, timezone, canWrite
     '- COMPROVANTES: quando chegar um comprovante (imagem/PDF) leia valor, data e favorecido. Se a pessoa disse que pagou algo ("paguei o empréstimo da Caixa, segue o comprovante"): ache a conta com listar_contas_pagar, dê baixa com pagar_conta e então use anexar_comprovante com o conta_id. Se for um gasto avulso, registre com registrar_despesa e anexe com transacao_id. Se chegar só o comprovante, sem texto, tente identificar a conta pelo valor/favorecido lido e pelas últimas mensagens; se houver dúvida, pergunte "esse comprovante é de qual conta?" (ele fica guardado como pendente e você anexa na resposta). Se o valor lido diferir do valor da conta, avise antes de dar baixa. Para consultar comprovantes use listar_comprovantes; para mandar o arquivo de volta use enviar_comprovante.',
     regras.length ? `- REGRAS APRENDIDAS (estabelecimento → categoria), aplique sempre: ${regras.map((r) => `${r.termo} → ${r.categoria_nome}`).join('; ')}.` : '',
     '- ESTABELECIMENTO AMBÍGUO (loja que vende de tudo, ex.: Americanas, Magalu, Mercado Livre, Shopee) sem pista do que foi comprado: lance o gasto na melhor categoria provisória (use "Outros" se existir) e na MESMA mensagem pergunte de uma vez: "Foi o quê? (alimentação, material, outros…)". Quando a pessoa responder, use corrigir_categoria e lembrar_categoria para nunca mais perguntar. Se ela corrigir uma categoria ("muda para material"), faça o mesmo. Estabelecimento claro (supermercado, posto, farmácia, restaurante) classifique direto, sem perguntar, e não precisa memorizar.',
+    '- PARCELAMENTO: contas com parcelas têm campo "parcela" (ex.: 4/10). Ao dar baixa, o resultado traz parcela, parcelas_restantes e saldo_restante_reais: SEMPRE diga na confirmação "essa foi a parcela 4/10, faltam 6 (R$ …)" e avise quando for a última. Se a pessoa disser "essa é a 4/10", "estou na parcela 3 de 35" ou "são 12 parcelas", use editar_parcelas na conta em questão (parcela_atual e total_parcelas). Se disser que uma parcela é "a última", total = número dessa parcela. Para cadastrar financiamento/compra parcelada já em andamento use criar_conta_pagar com parcelas=total e parcela_atual.',
     '- NÃO pergunte a forma de pagamento: ela é opcional. Preencha forma_pagamento SOMENTE se a pessoa disser ou o comprovante mostrar (ex.: Pix); nunca presuma nem invente. Evite perguntas desnecessárias; só pergunte o que realmente impede a ação.',
     '- Mensagem com vários itens (ex.: "paguei 37 de dízimo e comprei 95 de encordoamento") = um lançamento separado por item, cada um com seu valor e descrição. Nunca some. Confirme listando cada lançamento e o total só no final.',
     '- Depois de executar, diga o que foi feito; não peça confirmação extra para ações simples e reversíveis.',
@@ -268,7 +286,8 @@ export function createAgentBrain({ pool, now, todayDate, timezone, apiKey, model
         if (args.ate) { where.push('LEFT(data_vencimento,10) <= ?'); params.push(String(args.ate).slice(0, 10)); }
         if (args.busca) { where.push('LOWER(descricao) LIKE ?'); params.push(`%${String(args.busca).toLowerCase()}%`); }
         const [rows] = await pool.query(
-          `SELECT id, descricao, valor, LEFT(data_vencimento,10) AS vencimento, status, recorrencia_id IS NOT NULL AS recorrente
+          `SELECT id, descricao, valor, LEFT(data_vencimento,10) AS vencimento, status, recorrencia_id IS NOT NULL AS recorrente,
+                  CASE WHEN parcela_total IS NULL THEN NULL ELSE CONCAT(parcela_numero, '/', parcela_total) END AS parcela
              FROM contas_pagar WHERE ${where.join(' AND ')} ORDER BY data_vencimento ASC LIMIT ?`,
           [...params, Math.min(Number(args.limite) || 15, 30)],
         );
@@ -317,6 +336,8 @@ export function createAgentBrain({ pool, now, todayDate, timezone, apiKey, model
         return { resumo: await actions.summary(ctx.userId) };
       case 'desfazer_ultimo_lancamento':
         return { resultado: await actions.undoLast(ctx.userId, ctx.phone) };
+      case 'editar_parcelas':
+        return actions.editInstallments(ctx.userId, args.conta_id, args.parcela_atual ?? null, args.total_parcelas ?? null);
       case 'corrigir_categoria':
         return actions.recategorize(ctx.userId, { categoria: args.categoria, transacaoId: args.transacao_id || null });
       case 'lembrar_categoria':

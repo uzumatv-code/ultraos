@@ -29,6 +29,8 @@ export function ContaPagarModal({
   const [periodicidade, setPeriodicidade] = useState<Periodicidade>('mensal');
   const [observacoes, setObservacoes] = useState('');
   const [status, setStatus] = useState<'pendente' | 'atrasado' | 'pago'>('pendente');
+  const [parcelaNumero, setParcelaNumero] = useState('');
+  const [parcelaTotal, setParcelaTotal] = useState('');
   const [loading, setLoading] = useState(false);
   const [escopoEdicao, setEscopoEdicao] = useState<'ocorrencia' | 'futuras'>('ocorrencia');
   const pertenceARecorrencia = Boolean(contaParaEditar?.recorrencia_id || contaParaEditar?.recorrente);
@@ -44,6 +46,8 @@ export function ContaPagarModal({
       setObservacoes(contaParaEditar.observacoes || '');
       setStatus(contaParaEditar.status as 'pendente' | 'atrasado' | 'pago');
       setEscopoEdicao('ocorrencia');
+      setParcelaNumero(contaParaEditar.parcela_numero ? String(contaParaEditar.parcela_numero) : '');
+      setParcelaTotal(contaParaEditar.parcela_total ? String(contaParaEditar.parcela_total) : '');
     } else {
       limparFormulario();
     }
@@ -67,6 +71,8 @@ export function ContaPagarModal({
         observacoes: observacoesValor,
         status,
         escopo: pertenceARecorrencia ? escopoEdicao : 'ocorrencia',
+        parcela_total: parcelaTotal ? Number(parcelaTotal) : null,
+        parcela_numero: parcelaTotal ? Number(parcelaNumero || 1) : null,
       };
 
       if (contaParaEditar) {
@@ -103,6 +109,8 @@ export function ContaPagarModal({
     setPeriodicidade('mensal');
     setObservacoes('');
     setEscopoEdicao('ocorrencia');
+    setParcelaNumero('');
+    setParcelaTotal('');
   }
 
   return (
@@ -272,6 +280,39 @@ export function ContaPagarModal({
                         </select>
                       </div>
                     </div>
+                  )}
+                </div>
+
+                <div className="rounded-lg border border-gray-200 p-3">
+                  <p className="text-sm font-medium text-gray-700">Parcelamento <span className="font-normal text-gray-500">(opcional)</span></p>
+                  <p className="mb-2 text-xs text-gray-500">Ex.: financiamento em 35 parcelas. Esta conta é a parcela…</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <label className="block text-xs text-gray-600">
+                      Parcela atual
+                      <input
+                        type="number"
+                        min={1}
+                        value={parcelaNumero}
+                        onChange={(e) => setParcelaNumero(e.target.value)}
+                        disabled={!parcelaTotal}
+                        placeholder="1"
+                        className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm disabled:bg-gray-50"
+                      />
+                    </label>
+                    <label className="block text-xs text-gray-600">
+                      Total de parcelas
+                      <input
+                        type="number"
+                        min={1}
+                        value={parcelaTotal}
+                        onChange={(e) => setParcelaTotal(e.target.value)}
+                        placeholder="Sem parcelamento"
+                        className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                      />
+                    </label>
+                  </div>
+                  {parcelaTotal && Number(parcelaNumero || 1) > Number(parcelaTotal) && (
+                    <p className="mt-2 text-xs text-red-600">A parcela atual não pode ser maior que o total.</p>
                   )}
                 </div>
 

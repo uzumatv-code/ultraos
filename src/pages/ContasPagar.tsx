@@ -507,6 +507,7 @@ export function ContasPagar() {
                             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                               <p className="truncate font-semibold text-ink">{conta.descricao}</p>
                               {conta.recorrencia_id && <Repeat className="h-3.5 w-3.5 text-ink-subtle" aria-label="Recorrente" />}
+                              {conta.parcela_total ? <Badge tone="brand">Parcela {conta.parcela_numero}/{conta.parcela_total}</Badge> : null}
                             </div>
                             <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-muted">
                               {conta.categoria?.nome && (

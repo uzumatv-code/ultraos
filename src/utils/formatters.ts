@@ -2,7 +2,11 @@ import { formatLocalDate, parseLocalDate } from './dates';
 
 export function capitalize(text: string) {
   if (!text) return '';
-  return text.toLowerCase().replace(/(^|\s)\w/g, letter => letter.toUpperCase());
+  const minor = new Set(['da', 'do', 'das', 'dos', 'de', 'e', 'a', 'o', 'em', 'no', 'na']);
+  return text
+    .toLowerCase()
+    .replace(/(^|\s)(\p{L}+)/gu, (_match, space: string, word: string, offset: number) =>
+      `${space}${offset > 0 && minor.has(word) ? word : word.charAt(0).toUpperCase() + word.slice(1)}`);
 }
 
 export function formatCurrency(value: number): string {

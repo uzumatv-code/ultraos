@@ -33,3 +33,15 @@ test('rejeita valor e periodicidade invalidos', () => {
   assert.throws(() => normalizeMoney('abc'), /invalido/);
   assert.throws(() => validatePayableInput({ descricao: 'Conta', valor: 10, data_vencimento: '2026-07-30', recorrente: true, periodicidade: 'qualquer' }), /Periodicidade/);
 });
+
+import { installmentNumber, occurrenceDate, occurrenceIndex } from './payable-recurrence.mjs';
+
+test('numera parcelas a partir da posição na série', () => {
+  assert.equal(occurrenceIndex('2026-10-10', 'mensal', '2026-12-10'), 2);
+  assert.equal(occurrenceDate('2026-10-10', 'mensal', 5), '2027-03-10');
+  // Empréstimo: outubro é a 4/10, então dezembro é a 6/10 e abril de 2027 já passou do total
+  assert.equal(installmentNumber({ startDate: '2026-10-10', period: 'mensal', firstNumber: 4, total: 10, date: '2026-12-10' }), 6);
+  assert.equal(installmentNumber({ startDate: '2026-10-10', period: 'mensal', firstNumber: 4, total: 10, date: '2027-04-10' }), 10);
+  assert.equal(installmentNumber({ startDate: '2026-10-10', period: 'mensal', firstNumber: 4, total: 10, date: '2027-05-10' }), null);
+  assert.equal(installmentNumber({ startDate: '2026-10-10', period: 'mensal', date: '2026-12-10' }), null);
+});

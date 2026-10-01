@@ -125,6 +125,15 @@ const AJUDA = [
   'Também aviso você todo dia sobre contas vencendo e atrasadas.',
 ].join('\n');
 
+/** "📌 Parcela 4/10 — faltam 6 (R$ 16.200,00)" para contas parceladas. */
+export function installmentNote(account) {
+  if (!account?.parcela_total) return '';
+  const left = Math.max(0, Number(account.parcela_total) - Number(account.parcela_numero));
+  const tail = left === 0 ? ' — *última parcela!* 🎉' : ` — faltam ${left} (${formatBRL(left * Number(account.valor))})`;
+  return `
+📌 Parcela ${account.parcela_numero}/${account.parcela_total}${tail}`;
+}
+
 export function createFinanceAgent({ pool, uuid, now, todayDate, money, timezone, sendText, ensureCategory, openAiChat, materializeRecurrences, log = console }) {
   const ymNow = () => todayDate().slice(0, 7);
   const monthBounds = () => {
@@ -335,7 +344,7 @@ export function createFinanceAgent({ pool, uuid, now, todayDate, money, timezone
     const stop = new Set(['paguei', 'pago', 'quitei', 'quitado', 'dar', 'baixa', 'a', 'o', 'de', 'da', 'do', 'conta', 'boleto', 'fatura', 'parcela', 'mensalidade', 'hoje', 'ja', 'na', 'no', 'pix', 'dinheiro', 'em']);
     const words = text.split(/[^a-z0-9]+/).filter((word) => word.length > 2 && !stop.has(word) && !/^\d+$/.test(word));
     const [rows] = await pool.query(
-      `SELECT id, descricao, valor, LEFT(data_vencimento,10) AS venc FROM contas_pagar
+      `SELECT id, descricao, valor, LEFT(data_vencimento,10) AS venc, parcela_numero, parcela_total FROM contas_pagar
         WHERE user_id = ? AND status IN ('pendente','atrasado') ORDER BY data_vencimento ASC`,
       [userId],
     );
@@ -412,7 +421,7 @@ export function createFinanceAgent({ pool, uuid, now, todayDate, money, timezone
       const { account } = payment;
       await payAccountPayable({ userId, contaId: account.id, origem: 'whatsapp_ia' });
       return {
-        reply: `✅ Baixa feita: *${account.descricao}* — ${formatBRL(account.valor)} (venc. ${brDate(account.venc)}). A despesa já entrou no caixa.`,
+        reply: `✅ Baixa feita: *${account.descricao}* — ${formatBRL(account.valor)} (venc. ${brDate(account.venc)}). A despesa já entrou no caixa.${installmentNote(account)}`,
         status: 'executado', intent: 'pagar_conta', entities: { conta_id: account.id },
       };
     }

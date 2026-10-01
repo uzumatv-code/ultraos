@@ -10,7 +10,7 @@ import jwt from 'jsonwebtoken';
 import mysql from 'mysql2/promise';
 import nodemailer from 'nodemailer';
 import { detectImageMime, normalizeDocumentConfig } from './document-customization.mjs';
-import { addMonthsClamped, formatDateOnly, occurrencesInRange, parseDateOnly, validatePayableInput } from './payable-recurrence.mjs';
+import { addMonthsClamped, formatDateOnly, installmentNumber, occurrenceDate, occurrenceIndex, occurrencesInRange, parseDateOnly, validatePayableInput } from './payable-recurrence.mjs';
 import { createFinanceAgent, inferExpenseCategory, formatBRL } from './finance-agent.mjs';
 import { createAgentBrain } from './agent-brain.mjs';
 import { createReceiptStore } from './receipts.mjs';
@@ -4877,6 +4877,110 @@ app.post('/api/ordens/salvar', requireAuth, async (req, res) => {
   }
 });
 
+async function ensureInstallmentSchema() {
+  const columns = [
+    ['contas_pagar_recorrencias', 'total_parcelas', 'int DEFAULT NULL'],
+    ['contas_pagar_recorrencias', 'parcela_inicial', 'int NOT NULL DEFAULT 1'],
+    ['contas_pagar', 'parcela_numero', 'int DEFAULT NULL'],
+    ['contas_pagar', 'parcela_total', 'int DEFAULT NULL'],
+  ];
+  for (const [table, column, definition] of columns) {
+    const [rows] = await pool.query(
+      'SELECT COUNT(*) AS total FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?',
+      [table, column],
+    );
+    if (Number(rows[0]?.total || 0) === 0) await pool.query(`ALTER TABLE \`${table}\` ADD COLUMN \`${column}\` ${definition}`);
+  }
+  columnCache.delete('contas_pagar');
+  columnCache.delete('contas_pagar_recorrencias');
+}
+
+/**
+ * Define "esta conta é a parcela N de T". Cria a série mensal se a conta for avulsa,
+ * renumera todas as ocorrências, cancela as que passarem do total e gera as que faltam.
+ * numero/total nulos limpam o parcelamento.
+ */
+async function applyInstallments(userId, contaId, numero, total) {
+  const n = numero === null || numero === undefined || numero === '' ? null : Math.trunc(Number(numero));
+  const t = total === null || total === undefined || total === '' ? null : Math.trunc(Number(total));
+  if ((n !== null && !(n >= 1)) || (t !== null && !(t >= 1))) throw new Error('Informe números de parcela válidos (1 ou mais)');
+  if (n !== null && t !== null && n > t) throw new Error('A parcela atual não pode ser maior que o total de parcelas');
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [[conta]] = await conn.query('SELECT * FROM contas_pagar WHERE user_id=? AND id=? LIMIT 1 FOR UPDATE', [userId, contaId]);
+    if (!conta) throw new Error('Conta não encontrada');
+    const dueDate = String(conta.competencia || conta.data_vencimento).slice(0, 10);
+
+    let seriesId = conta.recorrencia_id;
+    if (!seriesId) {
+      if (n === null && t === null) {
+        await conn.commit();
+        return { numero: null, total: null };
+      }
+      seriesId = uuid();
+      await conn.query(
+        `INSERT INTO contas_pagar_recorrencias
+          (id,user_id,conta_origem_id,descricao,valor,categoria_id,forma_pagamento,parcelas,periodicidade,data_inicio,observacoes,ativa,created_at,updated_at)
+         VALUES (?,?,?,?,?,?,?,1,'mensal',?,?,1,?,?)`,
+        [seriesId, userId, conta.id, conta.descricao, conta.valor, conta.categoria_id, conta.forma_pagamento, dueDate, conta.observacoes, now(), now()],
+      );
+      await conn.query(
+        `UPDATE contas_pagar SET recorrencia_id=?, competencia=?, periodicidade='mensal', origem='recorrencia', updated_at=? WHERE user_id=? AND id=?`,
+        [seriesId, dueDate, now(), userId, conta.id],
+      );
+    }
+
+    const [[series]] = await conn.query('SELECT * FROM contas_pagar_recorrencias WHERE user_id=? AND id=? LIMIT 1 FOR UPDATE', [userId, seriesId]);
+    const position = occurrenceIndex(series.data_inicio, series.periodicidade, dueDate);
+    const currentNumber = Number(series.parcela_inicial ?? 1) + position;
+    const firstNumber = t === null && n === null ? 1 : (n ?? currentNumber) - position;
+    await conn.query(
+      'UPDATE contas_pagar_recorrencias SET parcela_inicial=?, total_parcelas=?, updated_at=? WHERE user_id=? AND id=?',
+      [firstNumber, t, now(), userId, seriesId],
+    );
+
+    const [occurrences] = await conn.query(
+      `SELECT id, status, COALESCE(competencia, LEFT(data_vencimento,10)) AS ref FROM contas_pagar WHERE user_id=? AND recorrencia_id=?`,
+      [userId, seriesId],
+    );
+    for (const row of occurrences) {
+      const number = installmentNumber({ startDate: series.data_inicio, period: series.periodicidade, firstNumber, total: t, date: String(row.ref).slice(0, 10) });
+      const beyondTotal = t !== null && firstNumber + occurrenceIndex(series.data_inicio, series.periodicidade, String(row.ref).slice(0, 10)) > t;
+      if (beyondTotal && ['pendente', 'atrasado'].includes(row.status)) {
+        await conn.query("UPDATE contas_pagar SET status='cancelado', alterada_manualmente=1, parcela_numero=NULL, parcela_total=NULL, updated_at=? WHERE id=?", [now(), row.id]);
+      } else {
+        await conn.query('UPDATE contas_pagar SET parcela_numero=?, parcela_total=?, updated_at=? WHERE id=?', [number, number ? t : null, now(), row.id]);
+      }
+    }
+
+    if (t !== null) {
+      const lastDate = occurrenceDate(series.data_inicio, series.periodicidade, Math.max(0, t - firstNumber));
+      if (lastDate) await materializePayableRecurrences(conn, userId, String(series.data_inicio).slice(0, 10), formatDateOnly(new Date(Date.parse(`${lastDate}T00:00:00Z`) + 86_400_000)));
+    }
+    await conn.commit();
+    return { numero: t === null ? null : n ?? currentNumber, total: t, serie_id: seriesId };
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
+}
+
+async function installmentInfo(userId, contaId) {
+  const [[row]] = await pool.query('SELECT valor, parcela_numero, parcela_total FROM contas_pagar WHERE user_id=? AND id=? LIMIT 1', [userId, contaId]);
+  if (!row?.parcela_total) return null;
+  const restantes = Math.max(0, Number(row.parcela_total) - Number(row.parcela_numero));
+  return {
+    parcela: `${row.parcela_numero}/${row.parcela_total}`,
+    parcelas_restantes: restantes,
+    saldo_restante_reais: Number((restantes * Number(row.valor)).toFixed(2)),
+    ultima_parcela: restantes === 0,
+  };
+}
+
 async function ensureLegacyPayableSeries(conn, userId) {
   const [legacyRows] = await conn.query(
     `SELECT * FROM contas_pagar
@@ -4923,6 +5027,12 @@ async function materializePayableRecurrences(conn, userId, rangeStart, rangeEnd)
       rangeEnd,
     });
     for (const competencia of occurrences) {
+      const endDate = series.data_fim ? String(series.data_fim).slice(0, 10) : null;
+      if (endDate && competencia > endDate) continue;
+      const firstNumber = Number(series.parcela_inicial ?? 1);
+      const totalParcelas = series.total_parcelas ? Number(series.total_parcelas) : null;
+      const numero = firstNumber + occurrenceIndex(series.data_inicio, series.periodicidade, competencia);
+      if (totalParcelas && (numero > totalParcelas || numero < 1)) continue;
       const [legacyCandidates] = await conn.query(
         `SELECT id FROM contas_pagar
           WHERE user_id=? AND recorrencia_id IS NULL AND LEFT(data_vencimento,10)=?
@@ -4945,8 +5055,9 @@ async function materializePayableRecurrences(conn, userId, rangeStart, rangeEnd)
       const [result] = await conn.query(
         `INSERT INTO contas_pagar
           (id,user_id,descricao,valor,data_vencimento,forma_pagamento,parcelas,status,categoria_id,
-           recorrente,periodicidade,observacoes,recorrencia_id,competencia,origem,alterada_manualmente,created_at,updated_at)
-         VALUES (?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,0,?,?)
+           recorrente,periodicidade,observacoes,recorrencia_id,competencia,origem,alterada_manualmente,created_at,updated_at,
+           parcela_numero,parcela_total)
+         VALUES (?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,0,?,?,?,?)
          ON DUPLICATE KEY UPDATE
            descricao=IF(status='cancelado' AND alterada_manualmente=0,VALUES(descricao),descricao),
            valor=IF(status='cancelado' AND alterada_manualmente=0,VALUES(valor),valor),
@@ -4959,7 +5070,8 @@ async function materializePayableRecurrences(conn, userId, rangeStart, rangeEnd)
            status=IF(status='cancelado' AND alterada_manualmente=0,VALUES(status),status),
            updated_at=IF(status='cancelado' AND alterada_manualmente=0,VALUES(updated_at),updated_at)`,
         [id, userId, series.descricao, series.valor, competencia, series.forma_pagamento, series.parcelas || 1,
-          status, series.categoria_id, series.periodicidade, series.observacoes, series.id, competencia, 'recorrencia', now(), now()],
+          status, series.categoria_id, series.periodicidade, series.observacoes, series.id, competencia, 'recorrencia', now(), now(),
+          totalParcelas ? numero : null, totalParcelas],
       );
       created += Number(result.affectedRows === 1);
     }
@@ -5494,6 +5606,7 @@ app.post('/api/financeiro/contas-pagar', requireAuth, requireAdmin, async (req, 
         seriesId ? input.data_vencimento : null, seriesId ? 'recorrencia' : 'manual', now(), now()],
     );
     await conn.commit();
+    if (req.body?.parcela_total || req.body?.parcela_numero) await applyInstallments(req.user.id, accountId, req.body.parcela_numero || 1, req.body.parcela_total || null);
     await writeAudit(req, { action: 'conta_pagar.criar', resource: 'contas_pagar', resourceId: accountId, details: { recorrente: input.recorrente } });
     res.json({ data: { id: accountId, recorrencia_id: seriesId }, error: null });
   } catch (error) {
@@ -5565,6 +5678,7 @@ app.patch('/api/financeiro/contas-pagar/:id', requireAuth, requireAdmin, async (
       );
     }
     await conn.commit();
+    if (req.body && ('parcela_numero' in req.body || 'parcela_total' in req.body)) await applyInstallments(req.user.id, current.id, req.body.parcela_numero ?? null, req.body.parcela_total ?? null);
     await writeAudit(req, { action: 'conta_pagar.atualizar', resource: 'contas_pagar', resourceId: current.id, details: { escopo: scope, recorrencia_id: seriesId } });
     res.json({ data: { id: current.id, recorrencia_id: keepSeries ? seriesId : null }, error: null });
   } catch (error) {
@@ -5686,12 +5800,20 @@ async function agentCreatePayable(userId, args) {
     );
 
     if (parcelas > 1) {
-      const anchor = parseDateOnly(input.data_vencimento);
-      for (let i = 0; i < parcelas; i += 1) {
-        const id = uuid();
-        ids.push(id);
-        await insert(id, `${input.descricao} (${i + 1}/${parcelas})`, formatDateOnly(addMonthsClamped(anchor, i)), null);
-      }
+      const startNumber = Math.max(1, Math.min(parcelas, Number(args.parcela_atual) || 1));
+      const id = uuid();
+      ids.push(id);
+      const seriesId = uuid();
+      await conn.query(
+        `INSERT INTO contas_pagar_recorrencias
+          (id,user_id,conta_origem_id,descricao,valor,categoria_id,forma_pagamento,parcelas,periodicidade,data_inicio,observacoes,ativa,total_parcelas,parcela_inicial,created_at,updated_at)
+         VALUES (?,?,?,?,?,?,?,1,'mensal',?,?,1,?,?,?,?)`,
+        [seriesId, userId, id, input.descricao, input.valor, categoriaId, input.forma_pagamento, input.data_vencimento, input.observacoes, parcelas, startNumber, now(), now()],
+      );
+      await insert(id, input.descricao, input.data_vencimento, seriesId);
+      await conn.query('UPDATE contas_pagar SET parcela_numero=?, parcela_total=? WHERE id=?', [startNumber, parcelas, id]);
+      const lastDate = occurrenceDate(input.data_vencimento, 'mensal', parcelas - startNumber);
+      await materializePayableRecurrences(conn, userId, input.data_vencimento, formatDateOnly(new Date(Date.parse(`${lastDate}T00:00:00Z`) + 86_400_000)));
     } else {
       const id = uuid();
       ids.push(id);
@@ -5724,6 +5846,7 @@ async function agentCreatePayable(userId, args) {
       parcelas,
       categoria: categoryName,
       total_reais: Number((input.valor * parcelas).toFixed(2)),
+      parcela_inicial: parcelas > 1 ? Math.max(1, Math.min(parcelas, Number(args.parcela_atual) || 1)) : null,
     };
   } catch (error) {
     await conn.rollback();
@@ -5791,7 +5914,13 @@ const agentBrain = createAgentBrain({
     cancelPayable: agentCancelPayable,
     payPayable: async (userId, contaId, formaPagamento) => {
       const { conta } = await payAccountPayable({ userId, contaId, formaPagamento, origem: 'whatsapp_ia' });
-      return { ok: true, descricao: conta.descricao, valor: Number(conta.valor), vencimento: String(conta.data_vencimento).slice(0, 10) };
+      const info = await installmentInfo(userId, contaId);
+      return { ok: true, descricao: conta.descricao, valor: Number(conta.valor), vencimento: String(conta.data_vencimento).slice(0, 10), ...(info || {}) };
+    },
+    editInstallments: async (userId, contaId, numero, total) => {
+      const result = await applyInstallments(userId, contaId, numero, total);
+      const info = await installmentInfo(userId, contaId);
+      return { ok: true, ...result, ...(info || {}) };
     },
     registerExpense: async (userId, args) => {
       const description = titleCaseDescription(args.descricao);
@@ -6679,6 +6808,7 @@ async function startServer() {
 
   try {
     await financeAgent.ensureSchema();
+    await ensureInstallmentSchema();
     await receipts.ensureSchema();
   } catch (error) {
     console.error('[startup] Agente financeiro sem esquema atualizado:', error.message);
