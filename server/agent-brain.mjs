@@ -132,7 +132,7 @@ const TOOLS = [
   },
 ];
 
-export function buildSystemPrompt({ nome, hojeIso, diaSemana, timezone, canWrite }) {
+export function buildSystemPrompt({ nome, hojeIso, diaSemana, timezone, canWrite, categorias = [] }) {
   return [
     `Você é a assistente financeira da oficina (luthieria) do ${nome || 'proprietário'}, conversando pelo WhatsApp. Aja como uma funcionária de confiança do financeiro: proativa, objetiva e cordial, sem formalidade excessiva.`,
     `Hoje é ${diaSemana}, ${hojeIso} (${timezone}).`,
@@ -147,6 +147,9 @@ export function buildSystemPrompt({ nome, hojeIso, diaSemana, timezone, canWrite
     '- Se ela já informou tudo (ou disse "única vez"), cadastre sem perguntar de novo e confirme com um resumo curto: descrição, valor, vencimento e se é recorrente/parcelada.',
     '- Respostas curtas como "sim", "todo mês", "3x", "só essa" continuam o assunto anterior: use o histórico.',
     '- Para pagar/cancelar, use listar_contas_pagar para achar o id. Se houver mais de uma conta possível, pergunte qual. Se for uma só e inequívoca, execute.',
+    categorias.length
+      ? `- CATEGORIAS já existentes: ${categorias.join(', ')}. Ao informar "categoria", use EXATAMENTE um desses nomes quando algum servir (ex.: doação → a categoria de dízimo/doações); só proponha uma nova se nenhuma servir.`
+      : '',
     '- Nunca invente valores, datas ou contas: consulte as ferramentas. Se uma ferramenta falhar, explique de forma simples o que faltou.',
     '- Mensagem com vários itens (ex.: "paguei 37 de dízimo e comprei 95 de encordoamento") = um lançamento separado por item, cada um com seu valor e descrição. Nunca some. Confirme listando cada lançamento e o total só no final.',
     '- Depois de executar, diga o que foi feito; não peça confirmação extra para ações simples e reversíveis.',
@@ -294,7 +297,17 @@ export function createAgentBrain({ pool, now, todayDate, timezone, apiKey, model
     const ctx = { userId, phone, canWrite, actions: [] };
     const history = await loadHistory(userId, phone);
     const firstName = String(authorized.nome || '').split(/\s+/)[0] || null;
-    const system = buildSystemPrompt({ nome: firstName, hojeIso: todayDate(), diaSemana: dayName(), timezone, canWrite });
+    let categorias = [];
+    try {
+      const [categoryRows] = await pool.query(
+        "SELECT nome FROM categorias_financeiras WHERE user_id = ? AND tipo = 'despesa' ORDER BY nome LIMIT 40",
+        [userId],
+      );
+      categorias = (categoryRows || []).map((row) => row.nome);
+    } catch {
+      /* categorias são só uma dica para o modelo */
+    }
+    const system = buildSystemPrompt({ nome: firstName, hojeIso: todayDate(), diaSemana: dayName(), timezone, canWrite, categorias });
 
     let body = {
       model,

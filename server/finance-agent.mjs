@@ -18,7 +18,7 @@ const CATEGORY_RULES = [
   { nome: 'Transporte', cor: '#3B82F6', re: /uber|99\b|taxi|t[aá]xi|[oô]nibus|metr[oô]|passagem|estacionamento|ped[aá]gio|combust[ií]vel|gasolina|etanol|diesel|posto/ },
   { nome: 'Moradia', cor: '#8B5CF6', re: /aluguel|condom[ií]nio|luz|energia|[aá]gua|internet|g[aá]s|iptu/ },
   { nome: 'Saúde', cor: '#EF4444', re: /farm[aá]cia|rem[eé]dio|m[eé]dico|consulta|exame|dentista|plano de sa[uú]de/ },
-  { nome: 'Dízimo e doações', cor: '#A855F7', re: /d[ií]zimo|oferta|doa[cç][aã]o|doei|igreja/ },
+  { nome: 'Dízimo e doações', cor: '#A855F7', re: /d[ií]zimo|oferta|doa[cç]|doei|igreja/ },
   { nome: 'Material e peças', cor: '#06B6D4', re: /pe[cç]a|corda|cola|verniz|lixa|ferramenta|parafuso|madeira|tinta|insumo|material|solda|fio\b|cabo\b/ },
   { nome: 'Marketing', cor: '#EC4899', re: /an[uú]ncio|tr[aá]fego|instagram|google ads|panfleto|impuls/ },
   { nome: 'Impostos e taxas', cor: '#64748B', re: /imposto|das\b|mei\b|taxa|tarifa|contador|contabilidade|multa/ },

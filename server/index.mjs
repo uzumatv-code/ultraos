@@ -2975,7 +2975,7 @@ function titleCaseDescription(text) {
   return String(text || '')
     .trim()
     .replace(/\s+/g, ' ')
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+    .replace(/(^|\s)(\p{L})/gu, (_match, space, letter) => `${space}${letter.toUpperCase()}`);
 }
 
 function extractAccountPayableDescription(text) {
@@ -3311,12 +3311,31 @@ async function getSystemIntent(message) {
   return heuristic;
 }
 
+function categoryKey(value) {
+  return String(value || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Encontra a categoria já existente antes de criar outra: ignora acento e caixa
+ * e aceita um nome contido no outro ("Doações" ≈ "Dízimo e doações").
+ */
 async function ensureDefaultFinancialCategory(userId, tipo, nome, cor, conn = pool) {
-  const [rows] = await conn.query(
-    'SELECT id FROM categorias_financeiras WHERE user_id = ? AND tipo = ? AND LOWER(nome) = LOWER(?) LIMIT 1',
-    [userId, tipo, nome],
+  const [existing] = await conn.query(
+    'SELECT id, nome FROM categorias_financeiras WHERE user_id = ? AND tipo = ?',
+    [userId, tipo],
   );
-  if (rows[0]?.id) return rows[0].id;
+  const wanted = categoryKey(nome);
+  const exact = existing.find((row) => categoryKey(row.nome) === wanted);
+  if (exact) return exact.id;
+  if (wanted.length >= 5) {
+    const near = existing.find((row) => {
+      const key = categoryKey(row.nome);
+      const shorter = key.length < wanted.length ? key : wanted;
+      const longer = key.length < wanted.length ? wanted : key;
+      return shorter.length >= 5 && ` ${longer} `.includes(` ${shorter} `);
+    });
+    if (near) return near.id;
+  }
   const id = uuid();
   await conn.query(
     `INSERT INTO categorias_financeiras (id, user_id, nome, tipo, cor, created_at, updated_at)
