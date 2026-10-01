@@ -37,3 +37,10 @@ test('categoria padrão e moeda', () => {
   assert.equal(inferExpenseCategory('coisa qualquer').nome, 'Operacional');
   assert.match(formatBRL(10), /R\$\s?10,00/);
 });
+
+test('vários verbos na mesma frase e almoço como alimentação', () => {
+  const r = parseQuickExpense('Almocei paguei 36,63');
+  assert.equal(r.value, 36.63);
+  assert.equal(r.description, 'Despesa via WhatsApp');
+  assert.equal(r.category.nome, 'Alimentação');
+});

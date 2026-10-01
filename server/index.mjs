@@ -4594,6 +4594,22 @@ async function getEvolutionMediaBase64(config, webhookMessage) {
   return json.base64 || json.data?.base64 || json.media?.base64 || json.message?.base64 || null;
 }
 
+async function markFinancialAiRead(userId, webhookMessage) {
+  try {
+    const key = webhookMessage.messageKey;
+    if (!key?.id || !key.remoteJid || !EVOLUTION_API_URL || !EVOLUTION_API_KEY) return;
+    const config = await loadWhatsAppConfig(userId);
+    const instanceName = webhookMessage.instance || config?.instance_name;
+    if (!instanceName) return;
+    await evolutionRequest(`/chat/markMessageAsRead/${encodeURIComponent(instanceName)}`, {
+      method: 'POST',
+      body: { readMessages: [{ remoteJid: key.remoteJid, fromMe: false, id: key.id }] },
+    });
+  } catch (error) {
+    console.warn('[financeiro-ia:lida] nao foi possivel marcar como lida:', error.message);
+  }
+}
+
 async function logFinancialAi(data) {
   const id = data.id || uuid();
   await pool.query(
@@ -5600,12 +5616,30 @@ async function handleFinancialAiWebhook(req, res) {
       return res.json({ ignored: true, reason: 'Numero nao autorizado para usar a IA do sistema' });
     }
 
-    if (!message && audioUrl) message = await transcribeAudioFromUrl(audioUrl);
-    if (!message && audioBase64) message = await transcribeAudioFromBase64(audioBase64, webhookMessage.mimetype);
+    // Marca como lida (tique azul) assim que o número é reconhecido como autorizado.
+    void markFinancialAiRead(authorized.user_id, webhookMessage);
+
+    if (!message && (audioBase64 || webhookMessage.mediaBase64)) {
+      message = await transcribeAudioFromBase64(audioBase64 || webhookMessage.mediaBase64, webhookMessage.mimetype).catch((error) => {
+        console.warn('[financeiro-ia:audio] base64 do webhook falhou:', error.message);
+        return '';
+      });
+    }
+    // A URL que o WhatsApp entrega no webhook é criptografada; o caminho confiável é pedir a mídia à Evolution.
     if (!message && webhookMessage.hasAudioMessage) {
-      const whatsappConfig = await loadWhatsAppConfig(authorized.user_id);
-      const mediaBase64 = await getEvolutionMediaBase64(whatsappConfig, webhookMessage);
-      if (mediaBase64) message = await transcribeAudioFromBase64(mediaBase64, webhookMessage.mimetype);
+      try {
+        const whatsappConfig = await loadWhatsAppConfig(authorized.user_id);
+        const mediaBase64 = await getEvolutionMediaBase64(whatsappConfig, webhookMessage);
+        if (mediaBase64) message = await transcribeAudioFromBase64(mediaBase64, webhookMessage.mimetype);
+      } catch (error) {
+        console.warn('[financeiro-ia:audio] download via Evolution falhou:', error.message);
+      }
+    }
+    if (!message && audioUrl && !/whatsapp\.net|\.enc(\?|$)/i.test(audioUrl)) {
+      message = await transcribeAudioFromUrl(audioUrl).catch((error) => {
+        console.warn('[financeiro-ia:audio] url falhou:', error.message);
+        return '';
+      });
     }
     if (!message) {
       const reply = 'Nao consegui ler a mensagem. Envie texto ou audio com arquivo acessivel.';
@@ -5708,6 +5742,24 @@ async function handleFinancialAiWebhook(req, res) {
     await sendFinancialAiReply(authorized.user_id, phone, reply);
     res.json({ reply, whatsapp_sent: true });
   } catch (error) {
+    console.error('[financeiro-ia:erro]', error.message);
+    try {
+      const [rows] = await pool.query(
+        `SELECT * FROM financeiro_ia_autorizados WHERE ativo = 1
+          AND REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(telefone,'+',''),' ',''),'-',''),'(',''),')',''),'.','') IN (${whatsappPhoneCandidates(phone).map(() => '?').join(',') || "''"}) LIMIT 1`,
+        whatsappPhoneCandidates(phone),
+      );
+      const person = rows[0];
+      if (person) {
+        const friendly = tipoMensagem === 'audio'
+          ? 'Não consegui entender esse áudio agora. Tente de novo ou mande por texto, ex.: "comprei um café 10,00".'
+          : 'Tive um problema para processar essa mensagem. Tente novamente em instantes.';
+        await logFinancialAi({ user_id: person.user_id, autorizado_id: person.id, telefone: phone, mensagem: message || null, tipo_mensagem: tipoMensagem, status: 'erro', resposta: friendly, erro: String(error.message).slice(0, 500) });
+        await sendFinancialAiReply(person.user_id, phone, friendly);
+      }
+    } catch (innerError) {
+      console.error('[financeiro-ia:erro-resposta]', innerError.message);
+    }
     res.status(400).json({ reply: `Erro: ${error.message}`, error: { message: error.message } });
   }
 }

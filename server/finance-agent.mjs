@@ -13,7 +13,7 @@
  */
 
 const CATEGORY_RULES = [
-  { nome: 'Alimentação', cor: '#F59E0B', re: /caf[eé]|almo[cç]o|jantar|lanche|padaria|pizza|restaurante|ifood|marmita|comida|refei[cç][aã]o|sorvete|hamb[uú]rguer|pastel|salgado|bar\b|cerveja|a[cç]a[ií]/ },
+  { nome: 'Alimentação', cor: '#F59E0B', re: /caf[eé]|almo[cç]|jant|lanch|padaria|pizza|restaurante|ifood|marmita|comida|refei[cç][aã]o|sorvete|hamb[uú]rguer|pastel|salgado|bar\b|cerveja|a[cç]a[ií]/ },
   { nome: 'Mercado', cor: '#10B981', re: /mercado|supermercado|atacad[aã]o|feira|hortifruti|a[cç]ougue/ },
   { nome: 'Transporte', cor: '#3B82F6', re: /uber|99\b|taxi|t[aá]xi|[oô]nibus|metr[oô]|passagem|estacionamento|ped[aá]gio|combust[ií]vel|gasolina|etanol|diesel|posto/ },
   { nome: 'Moradia', cor: '#8B5CF6', re: /aluguel|condom[ií]nio|luz|energia|[aá]gua|internet|g[aá]s|iptu/ },
@@ -78,7 +78,7 @@ export function parseQuickExpense(message) {
   let description = raw
     .replace(/(?:r\$\s*)?\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|(?:r\$\s*)?\d+(?:[.,]\d{1,2})?/gi, ' ')
     .replace(/\b(reais|real|conto|contos|pila|pix|dinheiro|cr[eé]dito|d[eé]bito|cart[aã]o|no|na|em|de|do|da|por|um|uma|uns|umas|o|a|com|via|hoje|agora)\b/gi, ' ')
-    .replace(EXPENSE_VERB, ' ')
+    .replace(new RegExp(EXPENSE_VERB.source, 'gi'), ' ')
     .replace(/[^\p{L}\p{N}\s-]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
