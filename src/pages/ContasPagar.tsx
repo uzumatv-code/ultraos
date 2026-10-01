@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   AlertTriangle, CalendarClock, CalendarDays, Check, CheckCheck, ChevronLeft, ChevronRight, CircleDollarSign,
-  Layers, ListChecks, Pencil, Plus, Receipt, Repeat, Search, Trash2, Wallet, X,
+  Layers, ListChecks, Paperclip, Pencil, Plus, Receipt, Repeat, Search, Trash2, Wallet, X,
 } from 'lucide-react';
 import { apiRequest as apiClient } from '../lib/api-client';
 import { apiRequest, supabase } from '../lib/supabase';
@@ -84,6 +84,9 @@ export function ContasPagar() {
   const [view, setView] = useState<ViewMode>('lista');
   const [selecionadas, setSelecionadas] = useState<string[]>([]);
   const [processando, setProcessando] = useState<string | null>(null);
+  const [anexos, setAnexos] = useState<Record<string, number>>({});
+  const fileInput = useRef<HTMLInputElement>(null);
+  const anexarPara = useRef<string | null>(null);
 
   const carregar = useCallback(async () => {
     try {
@@ -110,6 +113,7 @@ export function ContasPagar() {
       if (contasResult.error) throw contasResult.error;
       setContas((contasResult.data as ContaPagar[]) || []);
       setCategorias((categoriasResult.data as CategoriaFinanceira[]) || []);
+      apiClient<Record<string, number>>('/api/financeiro/comprovantes/resumo').then(setAnexos).catch(() => undefined);
     } catch (error) {
       console.error('Erro ao carregar contas a pagar:', error);
       toast.error('Não foi possível carregar as contas.');
@@ -221,6 +225,56 @@ export function ContasPagar() {
       toast.error(error instanceof Error ? error.message : 'Erro ao pagar conta');
     } finally {
       setProcessando(null);
+    }
+  }
+
+  function authToken() {
+    try {
+      return JSON.parse(localStorage.getItem('mysql-auth-session') || 'null')?.access_token || '';
+    } catch {
+      return '';
+    }
+  }
+
+  async function abrirComprovante(conta: ContaPagar) {
+    try {
+      const lista = await apiClient<Array<{ id: string }>>(`/api/financeiro/comprovantes?conta_pagar_id=${conta.id}`);
+      if (!lista.length) return toast.error('Nenhum comprovante nesta conta.');
+      const response = await fetch(`/api/financeiro/comprovantes/${lista[0].id}/arquivo`, { headers: { Authorization: `Bearer ${authToken()}` } });
+      if (!response.ok) throw new Error('Não foi possível abrir o comprovante');
+      const blob = await response.blob();
+      window.open(URL.createObjectURL(blob), '_blank', 'noopener');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Erro ao abrir comprovante');
+    }
+  }
+
+  function escolherComprovante(conta: ContaPagar) {
+    anexarPara.current = conta.id;
+    fileInput.current?.click();
+  }
+
+  async function enviarComprovante(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    const contaId = anexarPara.current;
+    event.target.value = '';
+    if (!file || !contaId) return;
+    if (file.size > 6 * 1024 * 1024) return toast.error('Arquivo maior que 6 MB.');
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error('Falha ao ler o arquivo'));
+        reader.readAsDataURL(file);
+      });
+      await apiClient(`/api/financeiro/contas-pagar/${contaId}/comprovantes`, {
+        method: 'POST',
+        body: JSON.stringify({ nome: file.name, tipo: file.type, base64 }),
+      });
+      toast.success('Comprovante anexado.');
+      await carregar();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Erro ao anexar comprovante');
     }
   }
 
@@ -472,6 +526,11 @@ export function ContasPagar() {
                                 <span className="hidden sm:inline">Pagar</span>
                               </UIButton>
                             )}
+                            {anexos[conta.id] ? (
+                              <UIButton size="sm" variant="ghost" icon={Paperclip} aria-label="Ver comprovante" title="Ver comprovante" className="!text-brand-soft" onClick={() => abrirComprovante(conta)} />
+                            ) : (
+                              <UIButton size="sm" variant="ghost" icon={Paperclip} aria-label="Anexar comprovante" title="Anexar comprovante" onClick={() => escolherComprovante(conta)} />
+                            )}
                             <UIButton size="sm" variant="ghost" icon={Pencil} aria-label="Editar" onClick={() => { setContaParaEditar(conta); setModalAberto(true); }} />
                             <UIButton size="sm" variant="ghost" icon={Trash2} aria-label="Excluir" className="hover:!text-signal-danger" onClick={() => handleDeletar(conta)} />
                           </div>
@@ -570,6 +629,8 @@ export function ContasPagar() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      <input ref={fileInput} type="file" accept="image/*,application/pdf" className="hidden" onChange={enviarComprovante} />
 
       <ContaPagarModal
         isOpen={modalAberto}

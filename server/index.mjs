@@ -13,6 +13,7 @@ import { detectImageMime, normalizeDocumentConfig } from './document-customizati
 import { addMonthsClamped, formatDateOnly, occurrencesInRange, parseDateOnly, validatePayableInput } from './payable-recurrence.mjs';
 import { createFinanceAgent, inferExpenseCategory, formatBRL } from './finance-agent.mjs';
 import { createAgentBrain } from './agent-brain.mjs';
+import { createReceiptStore } from './receipts.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -5330,6 +5331,60 @@ app.get('/api/financeiro/resumo', requireAuth, requireAdmin, async (req, res) =>
 });
 
 /** Recebíveis e contas a pagar em aberto, paginados, para as abas de cobrança. */
+app.get('/api/financeiro/comprovantes/resumo', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    res.json({ data: await receipts.countsByPayable(req.user.id), error: null });
+  } catch (error) {
+    res.status(400).json({ data: null, error: { message: error.message } });
+  }
+});
+
+app.get('/api/financeiro/comprovantes', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    res.json({ data: await receipts.list(req.user.id, { contaPagarId: req.query.conta_pagar_id || null, busca: req.query.busca || null, limite: 25 }), error: null });
+  } catch (error) {
+    res.status(400).json({ data: null, error: { message: error.message } });
+  }
+});
+
+app.get('/api/financeiro/comprovantes/:id/arquivo', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const row = await receipts.get(req.user.id, req.params.id);
+    if (!row) return res.status(404).json({ error: { message: 'Comprovante não encontrado' } });
+    res.setHeader('Content-Type', row.tipo_mime);
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(row.nome_arquivo)}"`);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.send(Buffer.from(row.conteudo));
+  } catch (error) {
+    res.status(400).json({ error: { message: error.message } });
+  }
+});
+
+app.post('/api/financeiro/contas-pagar/:id/comprovantes', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const [[conta]] = await pool.query('SELECT id FROM contas_pagar WHERE user_id = ? AND id = ? LIMIT 1', [req.user.id, req.params.id]);
+    if (!conta) throw new Error('Conta não encontrada');
+    const buffer = Buffer.from(String(req.body?.base64 || '').replace(/^data:[^;]+;base64,/, ''), 'base64');
+    const saved = await receipts.save(req.user.id, { buffer, mime: req.body?.tipo, name: req.body?.nome, origem: 'manual', contaPagarId: conta.id });
+    await receipts.attach(req.user.id, { comprovanteId: saved.id, contaPagarId: conta.id });
+    await writeAudit(req, { action: 'comprovante.anexar', resource: 'contas_pagar', resourceId: conta.id, details: { arquivo: saved.nome_arquivo } });
+    res.json({ data: saved, error: null });
+  } catch (error) {
+    res.status(400).json({ data: null, error: { message: error.message } });
+  }
+});
+
+app.delete('/api/financeiro/comprovantes/:id', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const removed = await receipts.remove(req.user.id, req.params.id);
+    if (!removed) return res.status(404).json({ data: null, error: { message: 'Comprovante não encontrado' } });
+    await writeAudit(req, { action: 'comprovante.excluir', resource: 'comprovantes_financeiros', resourceId: req.params.id });
+    res.json({ data: { removed: true }, error: null });
+  } catch (error) {
+    res.status(400).json({ data: null, error: { message: error.message } });
+  }
+});
+
 app.get('/api/financeiro/carteira', requireAuth, requireAdmin, async (req, res) => {
   try {
     const userId = req.auth.accountId;
@@ -5701,6 +5756,28 @@ async function agentCancelPayable(userId, contaId, escopo) {
   return { ok: true, descricao: conta.descricao, canceladas, serie_encerrada: escopo === 'serie' && Boolean(conta.recorrencia_id) };
 }
 
+const receipts = createReceiptStore({ pool, uuid, now });
+
+async function sendReceiptToWhatsApp(userId, phone, receiptId) {
+  const row = await receipts.get(userId, receiptId);
+  if (!row) throw new Error('Comprovante não encontrado');
+  const config = await loadWhatsAppConfig(userId);
+  const instanceName = config?.instance_name;
+  if (!instanceName) throw new Error('WhatsApp não configurado');
+  await evolutionRequest(`/message/sendMedia/${encodeURIComponent(instanceName)}`, {
+    method: 'POST',
+    body: {
+      number: normalizePhone(phone),
+      mediatype: /pdf/i.test(row.tipo_mime) ? 'document' : 'image',
+      mimetype: row.tipo_mime,
+      caption: `Comprovante: ${row.nome_arquivo}`,
+      media: Buffer.from(row.conteudo).toString('base64'),
+      fileName: row.nome_arquivo,
+    },
+  });
+  return { ok: true, enviado: row.nome_arquivo };
+}
+
 const agentBrain = createAgentBrain({
   pool,
   now,
@@ -5729,6 +5806,9 @@ const agentBrain = createAgentBrain({
     summary: (userId) => financeAgent.summary(userId),
     undoLast: (userId, phone) => financeAgent.undoLast(userId, phone),
     answerSystem: (userId, intent) => answerSystemQuery(userId, intent),
+    attachReceipt: (userId, args) => receipts.attach(userId, args),
+    listReceipts: (userId, args) => receipts.list(userId, args),
+    sendReceipt: sendReceiptToWhatsApp,
   },
 });
 
@@ -5795,14 +5875,41 @@ async function handleFinancialAiWebhook(req, res) {
     // Marca como lida (tique azul) assim que o número é reconhecido como autorizado.
     void markFinancialAiRead(authorized.user_id, webhookMessage);
 
-    if (!message && (audioBase64 || webhookMessage.mediaBase64)) {
+    let attachment = null;
+    if (['imagem', 'documento'].includes(webhookMessage.messageType)) {
+      if (!canWriteSystem(authorized.permissao)) {
+        const denied = 'Seu número tem permissão só de consulta, então não posso guardar comprovantes.';
+        await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message || null, tipo_mensagem: tipoMensagem, status: 'negado', resposta: denied });
+        await sendFinancialAiReply(authorized.user_id, phone, denied);
+        return res.json({ reply: denied, whatsapp_sent: true });
+      }
+      try {
+        const mediaConfig = await loadWhatsAppConfig(authorized.user_id);
+        const mediaBase64 = webhookMessage.mediaBase64 || await getEvolutionMediaBase64(mediaConfig, webhookMessage);
+        if (!mediaBase64) throw new Error('não consegui baixar o arquivo do WhatsApp');
+        const buffer = Buffer.from(String(mediaBase64).replace(/^data:[^;]+;base64,/, ''), 'base64');
+        const mime = String(webhookMessage.mimetype || (webhookMessage.messageType === 'documento' ? 'application/pdf' : 'image/jpeg')).split(';')[0].trim().toLowerCase();
+        const saved = await receipts.save(authorized.user_id, { buffer, mime, name: webhookMessage.fileName, origem: 'whatsapp' });
+        const readable = !/heic|heif/.test(mime) && buffer.length <= 6 * 1024 * 1024;
+        attachment = { id: saved.id, name: saved.nome_arquivo, dataUrl: readable ? `data:${mime};base64,${buffer.toString('base64')}` : null };
+        message = message || '(enviou um comprovante em anexo)';
+      } catch (error) {
+        const failed = `Recebi o arquivo, mas não consegui guardar: ${error.message}. Envie de novo como foto ou PDF (até 8 MB).`;
+        console.error('[financeiro-ia:comprovante]', error.message);
+        await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message || null, tipo_mensagem: tipoMensagem, status: 'erro', resposta: failed, erro: String(error.message).slice(0, 500) });
+        await sendFinancialAiReply(authorized.user_id, phone, failed);
+        return res.json({ reply: failed, whatsapp_sent: true });
+      }
+    }
+
+    if (!message && !attachment && (audioBase64 || webhookMessage.mediaBase64)) {
       message = await transcribeAudioFromBase64(audioBase64 || webhookMessage.mediaBase64, webhookMessage.mimetype).catch((error) => {
         console.warn('[financeiro-ia:audio] base64 do webhook falhou:', error.message);
         return '';
       });
     }
     // A URL que o WhatsApp entrega no webhook é criptografada; o caminho confiável é pedir a mídia à Evolution.
-    if (!message && webhookMessage.hasAudioMessage) {
+    if (!message && !attachment && webhookMessage.hasAudioMessage) {
       try {
         const whatsappConfig = await loadWhatsAppConfig(authorized.user_id);
         const mediaBase64 = await getEvolutionMediaBase64(whatsappConfig, webhookMessage);
@@ -5824,7 +5931,7 @@ async function handleFinancialAiWebhook(req, res) {
       return res.json({ reply, whatsapp_sent: true });
     }
 
-    const agentResult = await financeAgent.handleMessage({
+    const agentResult = attachment ? null : await financeAgent.handleMessage({
       authorized,
       phone,
       message,
@@ -5839,9 +5946,9 @@ async function handleFinancialAiWebhook(req, res) {
 
     // Conversa natural com ferramentas; ordens/clientes e confirmações seguem o fluxo clássico abaixo.
     const classicTopic = /\b(os|ordem|ordens|cliente|clientes)\b/i.test(message) || /^\s*confirmar\b/i.test(message);
-    if (!classicTopic && process.env.OPENAI_API_KEY) {
+    if ((!classicTopic || attachment) && process.env.OPENAI_API_KEY) {
       try {
-        const brain = await agentBrain.converse({ authorized, phone, message, canWrite: canWriteSystem(authorized.permissao) });
+        const brain = await agentBrain.converse({ authorized, phone, message, canWrite: canWriteSystem(authorized.permissao), attachment });
         const expenses = brain.actions.filter((item) => item.type === 'despesa');
         const expense = expenses[expenses.length - 1];
         await logFinancialAi({
@@ -5853,7 +5960,18 @@ async function handleFinancialAiWebhook(req, res) {
         return res.json({ reply: brain.reply, whatsapp_sent: true });
       } catch (brainError) {
         console.error('[financeiro-ia:agente] caindo no fluxo classico:', brainError.message);
+        if (attachment) {
+          const kept = 'Guardei o comprovante como pendente, mas não consegui processar agora. Me diga de qual conta ele é e tento de novo.';
+          await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, status: 'agente', resposta: kept, erro: String(brainError.message).slice(0, 500) });
+          await sendFinancialAiReply(authorized.user_id, phone, kept);
+          return res.json({ reply: kept, whatsapp_sent: true });
+        }
       }
+    }
+    if (attachment) {
+      const noAi = 'Guardei o comprovante como pendente. A IA está indisponível agora para vinculá-lo.';
+      await sendFinancialAiReply(authorized.user_id, phone, noAi);
+      return res.json({ reply: noAi, whatsapp_sent: true });
     }
 
     const intent = await getSystemIntent(message);
@@ -6534,6 +6652,7 @@ async function startServer() {
 
   try {
     await financeAgent.ensureSchema();
+    await receipts.ensureSchema();
   } catch (error) {
     console.error('[startup] Agente financeiro sem esquema atualizado:', error.message);
   }

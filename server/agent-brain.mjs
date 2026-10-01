@@ -7,7 +7,7 @@
  * parcelas?") e quando executar; cada ferramenta valida e grava no banco.
  */
 
-const WRITE_TOOLS = new Set(['criar_conta_pagar', 'pagar_conta', 'cancelar_conta', 'registrar_despesa', 'registrar_receita', 'desfazer_ultimo_lancamento']);
+const WRITE_TOOLS = new Set(['criar_conta_pagar', 'pagar_conta', 'cancelar_conta', 'registrar_despesa', 'registrar_receita', 'desfazer_ultimo_lancamento', 'anexar_comprovante']);
 
 const PERIODS = ['mensal', 'semanal', 'quinzenal', 'bimestral', 'trimestral', 'semestral', 'anual', 'diaria'];
 const PAYMENT_METHODS = ['pix', 'dinheiro', 'credito', 'debito', 'boleto'];
@@ -117,6 +117,33 @@ const TOOLS = [
   },
   {
     type: 'function',
+    name: 'anexar_comprovante',
+    description:
+      'Vincula o comprovante enviado (foto/PDF) a uma conta a pagar e/ou a um gasto. Sem comprovante_id usa o comprovante recebido agora ou o último pendente. ' +
+      'Use depois de pagar_conta ou registrar_despesa, passando o id retornado.',
+    parameters: {
+      type: 'object',
+      properties: {
+        comprovante_id: { type: 'string' },
+        conta_id: { type: 'string', description: 'Id da conta a pagar' },
+        transacao_id: { type: 'string', description: 'Id do lançamento (gasto) quando não houver conta' },
+      },
+    },
+  },
+  {
+    type: 'function',
+    name: 'listar_comprovantes',
+    description: 'Consulta comprovantes guardados (inclui os pendentes, ainda sem vínculo). Filtre por trecho do nome da conta/gasto.',
+    parameters: { type: 'object', properties: { busca: { type: 'string' }, conta_id: { type: 'string' }, limite: { type: 'integer' } } },
+  },
+  {
+    type: 'function',
+    name: 'enviar_comprovante',
+    description: 'Envia o arquivo de um comprovante guardado para o WhatsApp de quem está conversando.',
+    parameters: { type: 'object', properties: { comprovante_id: { type: 'string' } }, required: ['comprovante_id'] },
+  },
+  {
+    type: 'function',
     name: 'consultar_sistema',
     description: 'Consultas de ordens de serviço e recebíveis: OS do dia, buscar uma OS, OS pendentes de pagamento, quanto receber no mês, faturamento do mês, dívida de um cliente.',
     parameters: {
@@ -131,6 +158,20 @@ const TOOLS = [
     },
   },
 ];
+
+/** Monta a mensagem do usuário; comprovantes vão como imagem/PDF para o modelo ler valor, data e favorecido. */
+export function userContent(message, attachment) {
+  if (!attachment) return String(message);
+  const note = `[Comprovante recebido e salvo: id=${attachment.id}, arquivo ${attachment.name}. Ainda não está vinculado a nenhuma conta.]`;
+  const parts = [{ type: 'input_text', text: `${String(message || '').trim()}
+
+${note}`.trim() }];
+  if (attachment.dataUrl) {
+    if (/^data:application\/pdf/i.test(attachment.dataUrl)) parts.push({ type: 'input_file', filename: attachment.name, file_data: attachment.dataUrl });
+    else parts.push({ type: 'input_image', image_url: attachment.dataUrl });
+  }
+  return parts;
+}
 
 export function buildSystemPrompt({ nome, hojeIso, diaSemana, timezone, canWrite, categorias = [] }) {
   return [
@@ -151,6 +192,8 @@ export function buildSystemPrompt({ nome, hojeIso, diaSemana, timezone, canWrite
       ? `- CATEGORIAS já existentes: ${categorias.join(', ')}. SEMPRE informe "categoria" ao criar conta ou gasto, pensando como um contador: empréstimo/financiamento → Empréstimos; cartão/fatura → Cartões; aluguel, luz, água, internet → Moradia; dízimo/doação → Dízimo e doações; peças, cordas, insumos → Material e peças; combustível/uber → Transporte; comida → Alimentação. Use EXATAMENTE o nome de uma categoria existente quando servir; se nenhuma servir, crie um nome novo, curto, no plural e com acento correto (ex.: "Seguros"), nunca variações do que já existe. Nunca coloque uma conta numa categoria que não faça sentido só porque ela já existe.`
       : '',
     '- Nunca invente valores, datas ou contas: consulte as ferramentas. Se uma ferramenta falhar, explique de forma simples o que faltou.',
+    '- COMPROVANTES: quando chegar um comprovante (imagem/PDF) leia valor, data e favorecido. Se a pessoa disse que pagou algo ("paguei o empréstimo da Caixa, segue o comprovante"): ache a conta com listar_contas_pagar, dê baixa com pagar_conta e então use anexar_comprovante com o conta_id. Se for um gasto avulso, registre com registrar_despesa e anexe com transacao_id. Se chegar só o comprovante, sem texto, tente identificar a conta pelo valor/favorecido lido e pelas últimas mensagens; se houver dúvida, pergunte "esse comprovante é de qual conta?" (ele fica guardado como pendente e você anexa na resposta). Se o valor lido diferir do valor da conta, avise antes de dar baixa. Para consultar comprovantes use listar_comprovantes; para mandar o arquivo de volta use enviar_comprovante.',
+    '- NÃO pergunte a forma de pagamento: ela é opcional. Use só se a pessoa disser ou se o comprovante mostrar (ex.: Pix). Evite perguntas desnecessárias; só pergunte o que realmente impede a ação.',
     '- Mensagem com vários itens (ex.: "paguei 37 de dízimo e comprei 95 de encordoamento") = um lançamento separado por item, cada um com seu valor e descrição. Nunca some. Confirme listando cada lançamento e o total só no final.',
     '- Depois de executar, diga o que foi feito; não peça confirmação extra para ações simples e reversíveis.',
     canWrite ? '' : '- ATENÇÃO: este número tem permissão só de CONSULTA. Não tente lançar, pagar ou cancelar; explique que precisa de permissão.',
@@ -252,6 +295,18 @@ export function createAgentBrain({ pool, now, todayDate, timezone, apiKey, model
         return { resumo: await actions.summary(ctx.userId) };
       case 'desfazer_ultimo_lancamento':
         return { resultado: await actions.undoLast(ctx.userId, ctx.phone) };
+      case 'anexar_comprovante': {
+        const linked = await actions.attachReceipt(ctx.userId, {
+          comprovanteId: args.comprovante_id || ctx.attachment?.id || null,
+          contaPagarId: args.conta_id || null,
+          transacaoId: args.transacao_id || null,
+        });
+        return { ok: true, ...linked };
+      }
+      case 'listar_comprovantes':
+        return { comprovantes: await actions.listReceipts(ctx.userId, { busca: args.busca, contaPagarId: args.conta_id, limite: args.limite }) };
+      case 'enviar_comprovante':
+        return actions.sendReceipt(ctx.userId, ctx.phone, args.comprovante_id);
       case 'consultar_sistema':
         return { resposta: await actions.answerSystem(ctx.userId, {
           intent: args.consulta,
@@ -291,10 +346,10 @@ export function createAgentBrain({ pool, now, todayDate, timezone, apiKey, model
    * Conversa com o modelo e executa as ferramentas pedidas.
    * Retorna { reply, actions } ou lança erro (o chamador cai no fluxo antigo).
    */
-  async function converse({ authorized, phone, message, canWrite }) {
+  async function converse({ authorized, phone, message, canWrite, attachment = null }) {
     if (!apiKey) throw new Error('OPENAI_API_KEY ausente');
     const userId = authorized.user_id;
-    const ctx = { userId, phone, canWrite, actions: [] };
+    const ctx = { userId, phone, canWrite, attachment, actions: [] };
     const history = await loadHistory(userId, phone);
     const firstName = String(authorized.nome || '').split(/\s+/)[0] || null;
     let categorias = [];
@@ -311,7 +366,7 @@ export function createAgentBrain({ pool, now, todayDate, timezone, apiKey, model
 
     let body = {
       model,
-      input: [{ role: 'system', content: system }, ...history, { role: 'user', content: String(message) }],
+      input: [{ role: 'system', content: system }, ...history, { role: 'user', content: userContent(message, attachment) }],
       tools: TOOLS,
       max_output_tokens: 1800,
       ...(reasoning ? { reasoning } : {}),
