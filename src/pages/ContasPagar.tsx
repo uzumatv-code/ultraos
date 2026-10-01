@@ -1,954 +1,582 @@
-import { useState, useEffect, useMemo } from 'react';
-import { motion } from 'framer-motion';
-import { DollarSign, Search, Plus, Pencil, Trash2, ChevronLeft, ChevronRight, Check, AlertTriangle, TrendingDown, Calendar, CheckCircle2, Square, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
+import {
+  AlertTriangle, CalendarClock, CalendarDays, Check, CheckCheck, ChevronLeft, ChevronRight, CircleDollarSign,
+  Layers, ListChecks, Pencil, Plus, Receipt, Repeat, Search, Trash2, Wallet, X,
+} from 'lucide-react';
+import { apiRequest as apiClient } from '../lib/api-client';
 import { apiRequest, supabase } from '../lib/supabase';
 import { toast } from '../components/ToastCustom';
+import { alerts } from '../utils/alerts';
 import { ContaPagarModal } from '../components/ContaPagarModal';
 import { CustomCalendarBills } from '../components/CustomCalendarBills';
-import { ModernCalendarBills } from '../components/ModernCalendarBills';
 import { formatCurrency } from '../utils/formatters';
-import type { ContaPagar, CategoriaFinanceira } from '../types/database';
-import {
-  useReactTable,
-  getCoreRowModel,
-  getPaginationRowModel,
-  flexRender,
-  ColumnDef,
-} from '@tanstack/react-table';
-import { Button } from '../components/Button';
-import { Card, CardHeader, CardTitle, CardContent } from '../components/Card';
+import { todayLocalDate } from '../utils/dates';
+import { Badge, EmptyState, Kpi, Meter, PageHeader, Panel, Segmented, Skeleton, UIButton } from '../components/ui';
+import type { Tone } from '../components/ui';
+import type { CategoriaFinanceira, ContaPagar } from '../types/database';
 
-function toDateInput(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+type StatusFilter = 'abertas' | 'atrasadas' | 'pagas' | 'todas';
+type ViewMode = 'lista' | 'calendario';
+
+const PAGE_SIZE = 12;
+
+function dateOnly(value?: string) {
+  return String(value || '').slice(0, 10);
 }
 
-function formatDateBR(value?: string) {
-  if (!value) return '-';
-  const [datePart] = value.split('T');
-  const [year, month, day] = datePart.split('-');
-  if (!year || !month || !day) return new Date(value).toLocaleDateString('pt-BR');
-  return `${day}/${month}/${year}`;
+function formatShort(value?: string) {
+  const iso = dateOnly(value);
+  if (!iso) return '—';
+  return `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`;
 }
 
-function getMonthRange(date: Date) {
-  const firstDay = new Date(date.getFullYear(), date.getMonth(), 1);
-  const nextMonthFirstDay = new Date(date.getFullYear(), date.getMonth() + 1, 1);
+function monthKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function daysBetween(fromIso: string, toIso: string) {
+  const from = new Date(`${fromIso}T12:00:00`);
+  const to = new Date(`${toIso}T12:00:00`);
+  return Math.round((to.getTime() - from.getTime()) / 86_400_000);
+}
+
+function isOpen(conta: ContaPagar) {
+  return conta.status === 'pendente' || conta.status === 'atrasado';
+}
+
+function dueInfo(conta: ContaPagar, today: string): { label: string; tone: Tone } {
+  if (conta.status === 'pago') {
+    return { label: conta.data_pagamento ? `Pago em ${formatShort(conta.data_pagamento)}` : 'Pago', tone: 'success' };
+  }
+  const diff = daysBetween(today, dateOnly(conta.data_vencimento));
+  if (diff < 0) return { label: `Atrasada há ${Math.abs(diff)} ${Math.abs(diff) === 1 ? 'dia' : 'dias'}`, tone: 'danger' };
+  if (diff === 0) return { label: 'Vence hoje', tone: 'warning' };
+  if (diff === 1) return { label: 'Vence amanhã', tone: 'warning' };
+  if (diff <= 7) return { label: `Vence em ${diff} dias`, tone: 'info' };
+  return { label: `Vence em ${diff} dias`, tone: 'neutral' };
+}
+
+function stripeClass(tone: Tone) {
   return {
-    monthStart: toDateInput(firstDay),
-    nextMonthStart: toDateInput(nextMonthFirstDay),
-  };
+    danger: 'bg-signal-danger',
+    warning: 'bg-signal-warning',
+    success: 'bg-signal-success',
+    info: 'bg-signal-info',
+    brand: 'bg-brand',
+    accent: 'bg-signal-accent',
+    neutral: 'bg-hairline-strong',
+  }[tone];
 }
 
 export function ContasPagar() {
+  const today = todayLocalDate();
   const [contas, setContas] = useState<ContaPagar[]>([]);
   const [categorias, setCategorias] = useState<CategoriaFinanceira[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalAberto, setModalAberto] = useState(false);
   const [contaParaEditar, setContaParaEditar] = useState<ContaPagar>();
-  const [buscaCategoria, setBuscaCategoria] = useState('');
+  const [mes, setMes] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+  const [statusFiltro, setStatusFiltro] = useState<StatusFilter>('abertas');
+  const [categoriaFiltro, setCategoriaFiltro] = useState('');
+  const [busca, setBusca] = useState('');
   const [pagina, setPagina] = useState(0);
-  const [statusFiltro, setStatusFiltro] = useState<'todos' | 'pendente' | 'atrasado' | 'pago'>('todos');
-  const itensPorPagina = 10;
-  const [currentDate, setCurrentDate] = useState(new Date());
-  const [totalMes, setTotalMes] = useState(0);
-  const [quantidadeAPagarMes, setQuantidadeAPagarMes] = useState(0);
-  const [totalPagoMes, setTotalPagoMes] = useState(0);
-  const [contasAtrasadas, setContasAtrasadas] = useState<ContaPagar[]>([]);
-  const [globalFilter, setGlobalFilter] = useState('');
-  const [showCalendar, setShowCalendar] = useState(true);
-  const [calendarType, setCalendarType] = useState<'custom' | 'modern'>('custom');
-  const [contasCalendario, setContasCalendario] = useState<ContaPagar[]>([]);
-  const [contasSelecionadas, setContasSelecionadas] = useState<string[]>([]);
-  const [acaoEmMassaLoading, setAcaoEmMassaLoading] = useState(false);
+  const [view, setView] = useState<ViewMode>('lista');
+  const [selecionadas, setSelecionadas] = useState<string[]>([]);
+  const [processando, setProcessando] = useState<string | null>(null);
 
-  // Função para obter o primeiro e último dia do mês
-  useEffect(() => {
-    buscarDados().then(() => buscarContasCalendario());
-  }, [currentDate]);
-
-  useEffect(() => {
-    setPagina(0);
-  }, [globalFilter, buscaCategoria, statusFiltro, currentDate]);
-
-  async function buscarContasCalendario() {
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      const { data, error } = await supabase
-        .from('contas_pagar')
-        .select(`
-          *,
-          categoria:categorias_financeiras(*)
-        `)
-        .eq('user_id', user.id)
-        .neq('status', 'cancelado')
-        .order('data_vencimento', { ascending: true });
-
-      if (error) throw error;
-
-      setContasCalendario(data || []);
-    } catch (error) {
-      console.error('Erro ao buscar contas para o calendário:', error);
-    }
-  }
-
-  async function buscarDados() {
+  const carregar = useCallback(async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Usuário não autenticado');
-      const { monthStart, nextMonthStart } = getMonthRange(currentDate);
+
+      const inicio = `${monthKey(mes)}-01`;
+      const proximo = new Date(mes.getFullYear(), mes.getMonth() + 1, 1);
+      const fim = `${monthKey(proximo)}-01`;
       await apiRequest('/api/financeiro/contas-pagar/materializar', {
         method: 'POST',
-        body: JSON.stringify({ inicio: monthStart, fim: nextMonthStart }),
-      });
+        body: JSON.stringify({ inicio, fim }),
+      }).catch(() => undefined);
 
-      // Buscar contas atrasadas
-      const { data: contasAtrasadasData } = await supabase
-        .from('contas_pagar')
-        .select(`
-          *,
-          categoria:categorias_financeiras(*)
-        `)
-        .eq('user_id', user.id)
-        .eq('status', 'atrasado')
-        .order('data_vencimento', { ascending: true });
-
-      setContasAtrasadas(contasAtrasadasData || []);
-
-      // Buscar total do mês
-      const [{ data: contasPendentes }, { data: contasPagas }] = await Promise.all([
+      const [contasResult, categoriasResult] = await Promise.all([
         supabase
-        .from('contas_pagar')
-        .select('valor, status')
-        .eq('user_id', user.id)
-        .in('status', ['pendente', 'atrasado'])
-        .gte('data_vencimento', monthStart)
-        .lt('data_vencimento', nextMonthStart),
-        
-        supabase
-        .from('contas_pagar')
-        .select('valor, status')
-        .eq('user_id', user.id)
-        .eq('status', 'pago')
-        .gte('data_vencimento', monthStart)
-        .lt('data_vencimento', nextMonthStart)
+          .from('contas_pagar')
+          .select('*, categoria:categorias_financeiras(*)')
+          .eq('user_id', user.id)
+          .neq('status', 'cancelado')
+          .order('data_vencimento', { ascending: true }),
+        supabase.from('categorias_financeiras').select('*').eq('user_id', user.id).order('nome'),
       ]);
-
-      const totalPendente = contasPendentes?.reduce((acc, conta) => 
-        acc + Number(conta.valor), 0) || 0;
-      const totalPago = contasPagas?.reduce((acc, conta) => 
-        acc + Number(conta.valor), 0) || 0;
-
-      setTotalMes(totalPendente);
-      setQuantidadeAPagarMes(contasPendentes?.length || 0);
-      setTotalPagoMes(totalPago);
-
-      // Buscar categorias
-      const { data: categoriasData } = await supabase
-        .from('categorias_financeiras')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('nome');
-
-      setCategorias(categoriasData || []);
-
-      // Buscar contas
-      const query = supabase
-        .from('contas_pagar')
-        .select(`
-          *,
-          categoria:categorias_financeiras(*)
-        `)
-        .eq('user_id', user.id)
-        .neq('status', 'cancelado')
-        .order('data_vencimento', { ascending: true })
-        .gte('data_vencimento', monthStart)
-        .lt('data_vencimento', nextMonthStart);
-
-      const { data, error } = await query;
-
-      if (error) throw error;
-
-      setContas(data || []);
+      if (contasResult.error) throw contasResult.error;
+      setContas((contasResult.data as ContaPagar[]) || []);
+      setCategorias((categoriasResult.data as CategoriaFinanceira[]) || []);
     } catch (error) {
-      console.error('Erro ao buscar dados:', error);
-      toast.error('Erro ao carregar contas');
+      console.error('Erro ao carregar contas a pagar:', error);
+      toast.error('Não foi possível carregar as contas.');
     } finally {
       setLoading(false);
+    }
+  }, [mes]);
+
+  useEffect(() => {
+    void carregar();
+  }, [carregar]);
+
+  useEffect(() => {
+    setPagina(0);
+  }, [statusFiltro, categoriaFiltro, busca, mes]);
+
+  /* ----------------------------------------------------------- derivados */
+
+  const chave = monthKey(mes);
+  const mesTexto = mes.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+  const mesLabel = mesTexto.charAt(0).toUpperCase() + mesTexto.slice(1);
+
+  const stats = useMemo(() => {
+    const abertas = contas.filter(isOpen);
+    const atrasadas = abertas.filter((c) => dateOnly(c.data_vencimento) < today);
+    const proximos = abertas.filter((c) => {
+      const d = dateOnly(c.data_vencimento);
+      return d >= today && daysBetween(today, d) <= 7;
+    });
+    const doMes = contas.filter((c) => dateOnly(c.data_vencimento).startsWith(chave));
+    const sum = (list: ContaPagar[]) => list.reduce((acc, c) => acc + Number(c.valor || 0), 0);
+    const abertasMes = doMes.filter(isOpen);
+    const pagasMes = doMes.filter((c) => c.status === 'pago');
+    return {
+      atrasadas, proximos, abertasMes, pagasMes,
+      totalAtrasado: sum(atrasadas),
+      totalProximos: sum(proximos),
+      totalAbertoMes: sum(abertasMes),
+      totalPagoMes: sum(pagasMes),
+      totalMes: sum(doMes),
+    };
+  }, [contas, chave, today]);
+
+  const porCategoria = useMemo(() => {
+    const map = new Map<string, { nome: string; cor: string; total: number }>();
+    contas
+      .filter((c) => dateOnly(c.data_vencimento).startsWith(chave))
+      .forEach((c) => {
+        const key = c.categoria?.nome || 'Sem categoria';
+        const item = map.get(key) ?? { nome: key, cor: c.categoria?.cor || '#64748b', total: 0 };
+        item.total += Number(c.valor || 0);
+        map.set(key, item);
+      });
+    return [...map.values()].sort((a, b) => b.total - a.total).slice(0, 6);
+  }, [contas, chave]);
+
+  const filtradas = useMemo(() => {
+    const term = busca.trim().toLowerCase();
+    return contas.filter((conta) => {
+      const venc = dateOnly(conta.data_vencimento);
+      if (statusFiltro === 'atrasadas') {
+        if (!(isOpen(conta) && venc < today)) return false;
+      } else if (statusFiltro === 'abertas') {
+        if (!isOpen(conta)) return false;
+        // Em aberto: tudo que já venceu, mais o mês em foco.
+        if (!(venc < today || venc.startsWith(chave))) return false;
+      } else {
+        if (!venc.startsWith(chave)) return false;
+        if (statusFiltro === 'pagas' && conta.status !== 'pago') return false;
+      }
+      if (categoriaFiltro && conta.categoria_id !== categoriaFiltro) return false;
+      if (term && !`${conta.descricao} ${conta.categoria?.nome || ''}`.toLowerCase().includes(term)) return false;
+      return true;
+    });
+  }, [contas, statusFiltro, categoriaFiltro, busca, chave, today]);
+
+  const totalPaginas = Math.max(1, Math.ceil(filtradas.length / PAGE_SIZE));
+  const visiveis = filtradas.slice(pagina * PAGE_SIZE, (pagina + 1) * PAGE_SIZE);
+  const selecionadasSet = useMemo(() => new Set(selecionadas), [selecionadas]);
+  const contasSelecionadas = useMemo(() => filtradas.filter((c) => selecionadasSet.has(c.id)), [filtradas, selecionadasSet]);
+  const pagaveisSelecionadas = contasSelecionadas.filter(isOpen);
+  const totalSelecionado = contasSelecionadas.reduce((acc, c) => acc + Number(c.valor || 0), 0);
+
+  useEffect(() => {
+    setSelecionadas((current) => current.filter((id) => filtradas.some((c) => c.id === id)));
+  }, [filtradas]);
+
+  const agenda = useMemo(
+    () => contas.filter(isOpen).sort((a, b) => dateOnly(a.data_vencimento).localeCompare(dateOnly(b.data_vencimento))).slice(0, 6),
+    [contas],
+  );
+
+  /* -------------------------------------------------------------- ações */
+
+  async function pagarConta(conta: ContaPagar) {
+    await apiClient(`/api/financeiro/contas-pagar/${conta.id}/pagar`, {
+      method: 'POST',
+      body: JSON.stringify({ forma_pagamento: conta.forma_pagamento }),
+    });
+  }
+
+  async function handlePagar(conta: ContaPagar) {
+    setProcessando(conta.id);
+    try {
+      await pagarConta(conta);
+      toast.success(`${conta.descricao} paga — despesa lançada no caixa.`);
+      await carregar();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Erro ao pagar conta');
+    } finally {
+      setProcessando(null);
     }
   }
 
   async function handleDeletar(conta: ContaPagar) {
-    if (!confirm(`Deseja realmente excluir a conta ${conta.descricao}?`)) return;
-
+    const result = await alerts.confirm({
+      title: 'Excluir conta?',
+      text: conta.recorrencia_id
+        ? `"${conta.descricao}" é recorrente. Apenas esta ocorrência será removida.`
+        : `"${conta.descricao}" será removida.`,
+      icon: 'warning',
+    });
+    if (!result.isConfirmed) return;
     try {
-      const { count, error } = await supabase
+      const { error } = await supabase
         .from('contas_pagar')
         .update({ status: 'cancelado', alterada_manualmente: Boolean(conta.recorrencia_id) })
         .eq('id', conta.id);
-
       if (error) throw error;
-      if (count === 0) throw new Error('Nenhuma conta foi excluida');
-
-      toast.success('Conta excluída com sucesso!');
-      // Se a página atual ficar vazia após exclusão, volte para a anterior
-      if (paginatedContas.length === 1 && pagina > 0) {
-        setPagina(pagina - 1);
-      }
-      setContasSelecionadas((selecionadas) => selecionadas.filter((id) => id !== conta.id));
-      await buscarDados();
-      await buscarContasCalendario();
-    } catch (error) {
-      console.error('Erro ao excluir conta:', error);
+      toast.success('Conta excluída.');
+      await carregar();
+    } catch {
       toast.error('Erro ao excluir conta');
     }
   }
 
-  function authHeaders() {
-    const sessionRaw = localStorage.getItem('mysql-auth-session');
-    const token = sessionRaw ? JSON.parse(sessionRaw)?.access_token : null;
-    return {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {})
-    };
-  }
-
-  async function pagarConta(conta: ContaPagar) {
-    const response = await fetch(`/api/financeiro/contas-pagar/${conta.id}/pagar`, {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({
-        forma_pagamento: conta.forma_pagamento
-      })
+  async function pagarSelecionadas() {
+    if (!pagaveisSelecionadas.length) return;
+    const result = await alerts.confirm({
+      title: `Pagar ${pagaveisSelecionadas.length} conta(s)?`,
+      text: `Total de ${formatCurrency(pagaveisSelecionadas.reduce((acc, c) => acc + Number(c.valor || 0), 0))} será lançado como despesa.`,
+      icon: 'question',
     });
-    const json = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(json.error?.message || 'Erro ao pagar conta');
-  }
-
-  async function handlePagar(conta: ContaPagar) {
-    try {
-      await pagarConta(conta);
-      toast.success('Conta paga e despesa lancada!');
-      setContasSelecionadas((selecionadas) => selecionadas.filter((id) => id !== conta.id));
-      await buscarDados();
-      await buscarContasCalendario();
-    } catch (error) {
-      console.error('Erro ao pagar conta:', error);
-      toast.error('Erro ao pagar conta');
-    }
-  }
-
-  // Filtro global client-side
-  const filteredContas = useMemo(() => {
-    let result = contas;
-    if (globalFilter) {
-      result = result.filter(conta => {
-        const values = [
-          conta.descricao,
-          conta.categoria?.nome,
-          conta.status,
-          formatCurrency(conta.valor),
-          formatDateBR(conta.data_vencimento)
-        ].join(' ').toLowerCase();
-        return values.includes(globalFilter.toLowerCase());
-      });
-    }
-    if (statusFiltro !== 'todos') {
-      result = result.filter(conta => conta.status === statusFiltro);
-    }
-    if (buscaCategoria) {
-      result = result.filter(conta => conta.categoria_id === buscaCategoria);
-    }
-    return result;
-  }, [contas, globalFilter, statusFiltro, buscaCategoria]);
-
-  // Paginação client-side
-  useEffect(() => {
-    setContasSelecionadas((selecionadas) =>
-      selecionadas.filter((id) => filteredContas.some((conta) => conta.id === id))
-    );
-  }, [filteredContas]);
-
-  const paginatedContas = useMemo(() => {
-    const start = pagina * itensPorPagina;
-    return filteredContas.slice(start, start + itensPorPagina);
-  }, [filteredContas, pagina, itensPorPagina]);
-
-  const totalPaginas = Math.ceil(filteredContas.length / itensPorPagina);
-
-  const selectedSet = useMemo(() => new Set(contasSelecionadas), [contasSelecionadas]);
-  const selectedContas = useMemo(
-    () => filteredContas.filter((conta) => selectedSet.has(conta.id)),
-    [filteredContas, selectedSet]
-  );
-  const selectedPayableContas = useMemo(
-    () => selectedContas.filter((conta) => conta.status === 'pendente' || conta.status === 'atrasado'),
-    [selectedContas]
-  );
-  const totalSelecionado = useMemo(
-    () => selectedContas.reduce((acc, conta) => acc + Number(conta.valor || 0), 0),
-    [selectedContas]
-  );
-  const pageSelectionState = useMemo(() => {
-    if (!paginatedContas.length) return 'none';
-    const selectedOnPage = paginatedContas.filter((conta) => selectedSet.has(conta.id)).length;
-    if (selectedOnPage === 0) return 'none';
-    if (selectedOnPage === paginatedContas.length) return 'all';
-    return 'partial';
-  }, [paginatedContas, selectedSet]);
-
-  function toggleSelecionarConta(contaId: string) {
-    setContasSelecionadas((selecionadas) =>
-      selecionadas.includes(contaId)
-        ? selecionadas.filter((id) => id !== contaId)
-        : [...selecionadas, contaId]
-    );
-  }
-
-  function toggleSelecionarPagina() {
-    const idsPagina = paginatedContas.map((conta) => conta.id);
-    setContasSelecionadas((selecionadas) => {
-      const todosDaPaginaSelecionados = idsPagina.length > 0 && idsPagina.every((id) => selecionadas.includes(id));
-      if (todosDaPaginaSelecionados) {
-        return selecionadas.filter((id) => !idsPagina.includes(id));
-      }
-      return [...new Set([...selecionadas, ...idsPagina])];
-    });
-  }
-
-  function selecionarTodasFiltradas() {
-    setContasSelecionadas(filteredContas.map((conta) => conta.id));
-  }
-
-  async function handlePagarSelecionadas() {
-    if (!selectedPayableContas.length) {
-      toast.error('Selecione contas pendentes ou atrasadas para pagar');
-      return;
-    }
-
-    if (!confirm(`Deseja marcar ${selectedPayableContas.length} conta(s) como paga(s)?`)) return;
-
-    setAcaoEmMassaLoading(true);
-    const idsPagas = new Set<string>();
+    if (!result.isConfirmed) return;
+    setProcessando('lote');
     let falhas = 0;
-
-    try {
-      for (const conta of selectedPayableContas) {
-        try {
-          await pagarConta(conta);
-          idsPagas.add(conta.id);
-        } catch (error) {
-          console.error('Erro ao pagar conta em massa:', error);
-          falhas += 1;
-        }
+    for (const conta of pagaveisSelecionadas) {
+      try {
+        await pagarConta(conta);
+      } catch {
+        falhas += 1;
       }
-
-      setContasSelecionadas((selecionadas) => selecionadas.filter((id) => !idsPagas.has(id)));
-
-      if (falhas) {
-        toast.error(`${falhas} conta(s) nao puderam ser pagas`);
-      } else {
-        toast.success(`${idsPagas.size} conta(s) paga(s) e despesas lancadas!`);
-      }
-      await buscarDados();
-      await buscarContasCalendario();
-    } finally {
-      setAcaoEmMassaLoading(false);
     }
+    setProcessando(null);
+    setSelecionadas([]);
+    if (falhas) toast.error(`${falhas} conta(s) não puderam ser pagas.`);
+    else toast.success('Contas pagas e despesas lançadas.');
+    await carregar();
   }
 
-  async function handleDeletarSelecionadas() {
-    if (!selectedContas.length) {
-      toast.error('Selecione contas para excluir');
-      return;
-    }
-
-    if (!confirm(`Deseja realmente excluir ${selectedContas.length} conta(s) selecionada(s)?`)) return;
-
-    setAcaoEmMassaLoading(true);
+  async function excluirSelecionadas() {
+    if (!contasSelecionadas.length) return;
+    const result = await alerts.confirm({
+      title: `Excluir ${contasSelecionadas.length} conta(s)?`,
+      text: 'Essa ação remove as contas selecionadas da lista.',
+      icon: 'warning',
+    });
+    if (!result.isConfirmed) return;
+    setProcessando('lote');
     try {
-      const { count, error } = await supabase
+      const { error } = await supabase
         .from('contas_pagar')
         .update({ status: 'cancelado', alterada_manualmente: true })
-        .in('id', contasSelecionadas);
-
+        .in('id', selecionadas);
       if (error) throw error;
-      if (count === 0) throw new Error('Nenhuma conta foi excluida');
-
-      toast.success(`${selectedContas.length} conta(s) excluida(s) com sucesso!`);
-      setContasSelecionadas([]);
-      setPagina(0);
-      await buscarDados();
-      await buscarContasCalendario();
-    } catch (error) {
-      console.error('Erro ao excluir contas:', error);
+      toast.success('Contas excluídas.');
+      setSelecionadas([]);
+      await carregar();
+    } catch {
       toast.error('Erro ao excluir contas selecionadas');
     } finally {
-      setAcaoEmMassaLoading(false);
+      setProcessando(null);
     }
   }
 
-  const statusColors = {
-    pendente: 'bg-yellow-100 text-yellow-800',
-    atrasado: 'bg-red-100 text-red-800',
-    pago: 'bg-green-100 text-green-800',
-    cancelado: 'bg-gray-100 text-gray-800'
+  function toggle(id: string) {
+    setSelecionadas((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
+  }
+
+  function togglePagina() {
+    const ids = visiveis.map((c) => c.id);
+    const todas = ids.length > 0 && ids.every((id) => selecionadasSet.has(id));
+    setSelecionadas((current) => (todas ? current.filter((id) => !ids.includes(id)) : [...new Set([...current, ...ids])]));
+  }
+
+  const novaConta = () => {
+    setContaParaEditar(undefined);
+    setModalAberto(true);
   };
 
-  // Colunas para TanStack Table
-  const columns = useMemo<ColumnDef<ContaPagar, any>[]>(() => [
-    {
-      header: () => (
-        <button
-          type="button"
-          onClick={toggleSelecionarPagina}
-          className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
-          title={pageSelectionState === 'all' ? 'Desmarcar pagina' : 'Selecionar pagina'}
-        >
-          {pageSelectionState === 'none' ? (
-            <Square className="h-5 w-5" />
-          ) : (
-            <CheckCircle2 className={`h-5 w-5 ${pageSelectionState === 'partial' ? 'text-amber-500' : 'text-primary-600'}`} />
-          )}
-        </button>
-      ),
-      id: 'selecao',
-      cell: info => {
-        const selecionada = selectedSet.has(info.row.original.id);
-        return (
-          <button
-            type="button"
-            onClick={() => toggleSelecionarConta(info.row.original.id)}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-primary-50 hover:text-primary-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
-            title={selecionada ? 'Desmarcar conta' : 'Selecionar conta'}
-          >
-            {selecionada ? <CheckCircle2 className="h-5 w-5 text-primary-600" /> : <Square className="h-5 w-5" />}
-          </button>
-        );
-      },
-      size: 48,
-    },
-    {
-      header: 'Descrição',
-      accessorKey: 'descricao',
-    },
-    {
-      header: 'Categoria',
-      accessorFn: row => row.categoria?.nome || '',
-      id: 'categoria',
-      cell: info => (
-        <span className="theme-category-color inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium" style={{ backgroundColor: `${info.row.original.categoria?.cor}20`, color: info.row.original.categoria?.cor }}>{info.getValue()}</span>
-      ),
-    },
-    {
-      header: 'Vencimento',
-      accessorKey: 'data_vencimento',
-      cell: info => formatDateBR(info.getValue() as string),
-    },
-    {
-      header: 'Valor',
-      accessorKey: 'valor',
-      cell: info => formatCurrency(info.getValue()),
-    },
-    {
-      header: 'Status',
-      accessorKey: 'status',
-      cell: info => {
-        const status = info.getValue() as 'pendente' | 'atrasado' | 'pago' | 'cancelado';
-        return (
-          <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${statusColors[status]}`}>
-            {status === 'pago' ? 'Pago' : status === 'atrasado' ? 'Atrasado' : 'Pendente'}
-          </span>
-        );
-      },
-    },
-    {
-      header: 'Ações',
-      id: 'acoes',
-      cell: info => (
-        <div className="flex items-center justify-end space-x-2">
-          {(info.row.original.status === 'pendente' || info.row.original.status === 'atrasado') && (
-            <button onClick={() => handlePagar(info.row.original)} className="p-2 text-green-600 hover:text-green-900 hover:bg-green-50 rounded-lg transition-all duration-200"><Check className="w-5 h-5" /></button>
-          )}
-          <button onClick={() => { setContaParaEditar(info.row.original); setModalAberto(true); }} className="p-2 text-blue-600 hover:text-blue-900 hover:bg-blue-50 rounded-lg transition-all duration-200"><Pencil className="w-5 h-5" /></button>
-          <button onClick={() => handleDeletar(info.row.original)} className="p-2 text-red-600 hover:text-red-900 hover:bg-red-50 rounded-lg transition-all duration-200"><Trash2 className="w-5 h-5" /></button>
-        </div>
-      ),
-    },
-  ], [setContaParaEditar, setModalAberto, handlePagar, handleDeletar, pageSelectionState, selectedSet]);
+  const mudarMes = (delta: number) => setMes((atual) => new Date(atual.getFullYear(), atual.getMonth() + delta, 1));
+  const todosDaPagina = visiveis.length > 0 && visiveis.every((c) => selecionadasSet.has(c.id));
 
-  const table = useReactTable({
-    data: paginatedContas,
-    columns,
-    state: {
-      globalFilter,
-      pagination: { pageIndex: pagina, pageSize: itensPorPagina },
-    },
-    getCoreRowModel: getCoreRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-    manualPagination: true,
-    pageCount: totalPaginas,
-  });
+  /* -------------------------------------------------------------- render */
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
-      <div className="responsive-page">
-        {/* Header */}
-        <motion.div 
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"
-        >
-          <div className="flex min-w-0 items-center gap-3 sm:gap-4">
-            <motion.div 
-              whileHover={{ scale: 1.05, rotate: 5 }}
-              className="h-12 w-12 sm:h-14 sm:w-14 shrink-0 bg-gradient-to-br from-red-500 to-pink-600 rounded-xl sm:rounded-2xl flex items-center justify-center shadow-lg shadow-red-200 dark:shadow-red-900/30"
-            >
-              <DollarSign className="w-7 h-7 text-white" />
-            </motion.div>
-            <div className="min-w-0">
-              <h1 className="responsive-heading text-slate-950 dark:text-white">
-                Contas a Pagar
-              </h1>
-              <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                Gerencie suas despesas e vencimentos
-              </p>
+    <div className="ui-page">
+      <PageHeader
+        eyebrow="Financeiro"
+        title="Contas a pagar"
+        description="Vencimentos, atrasos e baixas em um só lugar. Cada pagamento vira despesa no caixa automaticamente."
+        actions={
+          <>
+            <div className="ui-month-nav" role="group" aria-label="Mês de referência">
+              <button type="button" onClick={() => mudarMes(-1)} aria-label="Mês anterior"><ChevronLeft className="h-4 w-4" /></button>
+              <span>{mesLabel}</span>
+              <button type="button" onClick={() => mudarMes(1)} aria-label="Próximo mês"><ChevronRight className="h-4 w-4" /></button>
             </div>
-          </div>
-          <Button
-            onClick={() => {
-              setContaParaEditar(undefined);
-              setModalAberto(true);
-            }}
-            variant="primary"
-            size="md"
-            icon={Plus}
-            className="h-11 w-full shrink-0 whitespace-nowrap shadow-md shadow-primary-200/70 dark:shadow-primary-900/30 sm:w-auto"
-          >
-            Nova Conta
-          </Button>
-        </motion.div>
-        
-        {/* Cards de Estatísticas */}
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-3 lg:gap-6 mb-8">
-          <Card variant="glass" hover className="border-l-4 border-red-500">
-            <CardContent className="p-6">
-              <motion.div
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ delay: 0.1 }}
-                className="flex items-center justify-between"
-              >
-                <div className="flex-1">
-                  <p className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-1">
-                    Total a Pagar
-                  </p>
-                  <p className="text-sm text-gray-500 dark:text-gray-500 mb-2">
-                    {currentDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}
-                  </p>
-                  <motion.p 
-                    initial={{ opacity: 0, x: -20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: 0.2 }}
-                    className="text-3xl font-bold text-red-600 dark:text-red-500"
-                  >
-                    {formatCurrency(totalMes)}
-                  </motion.p>
-                  <p className="mt-2 text-xs font-medium text-red-600 dark:text-red-400">
-                    {quantidadeAPagarMes} conta(s) pendente(s) ou atrasada(s)
-                  </p>
-                </div>
-                <motion.div 
-                  whileHover={{ scale: 1.1, rotate: 10 }}
-                  className="w-14 h-14 bg-gradient-to-br from-red-500 to-red-600 rounded-2xl flex items-center justify-center shadow-lg shadow-red-200 dark:shadow-red-900/30"
-                >
-                  <TrendingDown className="w-7 h-7 text-white" />
-                </motion.div>
-              </motion.div>
-            </CardContent>
-          </Card>
+            <UIButton variant="primary" icon={Plus} onClick={novaConta}>Nova conta</UIButton>
+          </>
+        }
+      />
 
-          <Card variant="glass" hover className="border-l-4 border-green-500">
-            <CardContent className="p-6">
-              <motion.div
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ delay: 0.2 }}
-                className="flex items-center justify-between"
-              >
-                <div className="flex-1">
-                  <p className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-1">
-                    Total Pago
-                  </p>
-                  <p className="text-sm text-gray-500 dark:text-gray-500 mb-2">
-                    {currentDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}
-                  </p>
-                  <motion.p 
-                    initial={{ opacity: 0, x: -20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: 0.3 }}
-                    className="text-3xl font-bold text-green-600 dark:text-green-500"
-                  >
-                    {formatCurrency(totalPagoMes)}
-                  </motion.p>
-                </div>
-                <motion.div 
-                  whileHover={{ scale: 1.1, rotate: -10 }}
-                  className="w-14 h-14 bg-gradient-to-br from-green-500 to-green-600 rounded-2xl flex items-center justify-center shadow-lg shadow-green-200 dark:shadow-green-900/30"
-                >
-                  <Check className="w-7 h-7 text-white" />
-                </motion.div>
-              </motion.div>
-            </CardContent>
-          </Card>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
+        <Kpi
+          label="Em atraso"
+          value={loading ? '…' : formatCurrency(stats.totalAtrasado)}
+          context={`${stats.atrasadas.length} conta${stats.atrasadas.length === 1 ? '' : 's'}`}
+          icon={AlertTriangle}
+          tone="danger"
+          emphasis={stats.atrasadas.length > 0}
+          linkLabel={stats.atrasadas.length ? 'Ver atrasadas' : undefined}
+          onClick={stats.atrasadas.length ? () => { setStatusFiltro('atrasadas'); setView('lista'); } : undefined}
+        />
+        <Kpi
+          label="Próximos 7 dias"
+          value={loading ? '…' : formatCurrency(stats.totalProximos)}
+          context={`${stats.proximos.length} vencimento${stats.proximos.length === 1 ? '' : 's'}`}
+          icon={CalendarClock}
+          tone="warning"
+        />
+        <Kpi
+          label="A pagar no mês"
+          value={loading ? '…' : formatCurrency(stats.totalAbertoMes)}
+          context={`de ${formatCurrency(stats.totalMes)} previstos`}
+          icon={Wallet}
+          tone="brand"
+        />
+        <Kpi
+          label="Pago no mês"
+          value={loading ? '…' : formatCurrency(stats.totalPagoMes)}
+          context={`${stats.pagasMes.length} conta${stats.pagasMes.length === 1 ? '' : 's'} quitada${stats.pagasMes.length === 1 ? '' : 's'}`}
+          icon={CheckCheck}
+          tone="success"
+        />
+      </div>
 
-          <Card variant="glass" hover className="border-l-4 border-amber-500">
-            <CardContent className="p-6">
-              <motion.div
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ delay: 0.3 }}
-                className="flex items-center justify-between"
-              >
-                <div className="flex-1">
-                  <p className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-1">
-                    Contas Atrasadas
-                  </p>
-                  <p className="text-sm text-gray-500 dark:text-gray-500 mb-2">
-                    Requer atenção
-                  </p>
-                  <motion.p 
-                    initial={{ opacity: 0, x: -20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: 0.4 }}
-                    className="text-3xl font-bold text-amber-600 dark:text-amber-500"
-                  >
-                    {contasAtrasadas.length}
-                  </motion.p>
+      <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1fr)_21rem]">
+        <div className="min-w-0 space-y-3">
+          <div className="ui-toolbar">
+            <Segmented<ViewMode>
+              value={view}
+              onChange={setView}
+              options={[{ value: 'lista', label: 'Lista' }, { value: 'calendario', label: 'Calendário' }]}
+            />
+            {view === 'lista' && (
+              <>
+                <Segmented<StatusFilter>
+                  value={statusFiltro}
+                  onChange={setStatusFiltro}
+                  options={[
+                    { value: 'abertas', label: 'Em aberto' },
+                    { value: 'atrasadas', label: 'Atrasadas' },
+                    { value: 'pagas', label: 'Pagas' },
+                    { value: 'todas', label: 'Todas' },
+                  ]}
+                />
+                <div className="ui-search min-w-44 flex-1">
+                  <Search aria-hidden />
+                  <input className="ui-field" value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar conta ou categoria" />
                 </div>
-                <motion.div 
-                  whileHover={{ scale: 1.1 }}
-                  animate={{ rotate: [0, -10, 10, -10, 0] }}
-                  transition={{ duration: 2, repeat: Infinity, repeatDelay: 3 }}
-                  className="w-14 h-14 bg-gradient-to-br from-amber-500 to-amber-600 rounded-2xl flex items-center justify-center shadow-lg shadow-amber-200 dark:shadow-amber-900/30"
-                >
-                  <AlertTriangle className="w-7 h-7 text-white" />
-                </motion.div>
-              </motion.div>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Calendário de Contas */}
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.5 }}
-          className="mb-8"
-        >
-          <div className="glass dark:glass-dark rounded-xl sm:rounded-3xl p-4 sm:p-6 shadow-glass">
-            <div className="flex flex-col items-stretch justify-between gap-4 mb-6 sm:flex-row sm:items-center">
-              <div className="flex min-w-0 items-center gap-3">
-                <div className="w-12 h-12 rounded-xl gradient-primary flex items-center justify-center shadow-md">
-                  <Calendar className="w-6 h-6 text-white" />
-                </div>
-                <div>
-                  <h2 className="text-2xl font-bold text-gray-800 dark:text-white">Calendário de Vencimentos</h2>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">
-                    {contasCalendario.length} conta(s) cadastrada(s)
-                  </p>
-                </div>
-              </div>
-              
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                {/* Toggle de tipo de calendário */}
-                <div className="grid grid-cols-2 gap-2 p-1 bg-gray-100 dark:bg-gray-800 rounded-lg">
-                  <button
-                    onClick={() => setCalendarType('custom')}
-                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
-                      calendarType === 'custom'
-                        ? 'gradient-primary text-white shadow-md'
-                        : 'text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'
-                    }`}
-                  >
-                    Grade
-                  </button>
-                  <button
-                    onClick={() => setCalendarType('modern')}
-                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
-                      calendarType === 'modern'
-                        ? 'gradient-primary text-white shadow-md'
-                        : 'text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'
-                    }`}
-                  >
-                    Lista
-                  </button>
-                </div>
-
-                <motion.button
-                  onClick={() => setShowCalendar(!showCalendar)}
-                  className="w-full sm:w-auto text-sm gradient-primary text-white px-5 py-2.5 rounded-xl font-semibold shadow-md hover:shadow-lg transition-all"
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                >
-                  {showCalendar ? 'Ocultar' : 'Mostrar'}
-                </motion.button>
-              </div>
-            </div>
-            
-            {showCalendar && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                exit={{ opacity: 0, height: 0 }}
-                transition={{ duration: 0.4, ease: 'easeOut' }}
-              >
-                {calendarType === 'custom' ? (
-                  <CustomCalendarBills
-                    bills={contasCalendario}
-                    onEventClick={(conta) => {
-                      setContaParaEditar(conta);
-                      setModalAberto(true);
-                    }}
-                    onUpdate={() => {
-                      buscarContasCalendario();
-                      buscarDados();
-                    }}
-                    onMonthChange={(date) => {
-                      setCurrentDate(date);
-                    }}
-                    loading={loading}
-                  />
-                ) : (
-                  <ModernCalendarBills
-                    bills={contasCalendario}
-                    onEventClick={(conta) => {
-                      setContaParaEditar(conta);
-                      setModalAberto(true);
-                    }}
-                    onUpdate={() => {
-                      buscarContasCalendario();
-                      buscarDados();
-                    }}
-                    onMonthChange={(date) => {
-                      setCurrentDate(date);
-                    }}
-                    loading={loading}
-                  />
-                )}
-              </motion.div>
+                <select className="ui-field w-auto min-w-40" value={categoriaFiltro} onChange={(e) => setCategoriaFiltro(e.target.value)} aria-label="Categoria">
+                  <option value="">Todas as categorias</option>
+                  {categorias.filter((c) => c.tipo === 'despesa').map((c) => (
+                    <option key={c.id} value={c.id}>{c.nome}</option>
+                  ))}
+                </select>
+              </>
             )}
           </div>
-        </motion.div>
 
-        {/* Lista de Contas */}
-        <Card variant="glass">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-3">
-              <DollarSign className="w-5 h-5 text-primary-600" />
-              Lista de Contas
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {/* Filtros */}
-            <div className="flex flex-col lg:flex-row gap-3 sm:gap-4 mb-6">
-              <div className="relative flex-1">
-                <Search className="w-5 h-5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  placeholder="Buscar por descrição ou categoria..."
-                  value={globalFilter}
-                  onChange={(e) => setGlobalFilter(e.target.value)}
-                  className="pl-10 pr-4 py-2.5 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-primary-500 w-full bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 transition-all"
+          {view === 'calendario' ? (
+            <Panel flush>
+              <div className="p-3 sm:p-4">
+                <CustomCalendarBills
+                  bills={contas}
+                  loading={loading}
+                  onEventClick={(conta) => { setContaParaEditar(conta); setModalAberto(true); }}
+                  onUpdate={carregar}
                 />
               </div>
-
-              <select
-                value={statusFiltro}
-                onChange={(e) => setStatusFiltro(e.target.value as any)}
-                className="w-full px-4 py-2.5 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-primary-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 transition-all lg:w-auto lg:min-w-[180px]"
-              >
-                <option value="todos">Todos os Status</option>
-                <option value="pendente">Pendente</option>
-                <option value="atrasado">Atrasado</option>
-                <option value="pago">Pago</option>
-              </select>
-
-              <select
-                value={buscaCategoria}
-                onChange={(e) => setBuscaCategoria(e.target.value)}
-                className="w-full px-4 py-2.5 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-primary-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 transition-all lg:w-auto lg:min-w-[200px]"
-              >
-                <option value="">Todas as Categorias</option>
-                {categorias
-                  .filter(c => c.tipo === 'despesa')
-                  .map((categoria) => (
-                    <option key={categoria.id} value={categoria.id}>
-                      {categoria.nome}
-                    </option>
-                  ))}
-              </select>
-            </div>
-
-            {contasSelecionadas.length > 0 && (
-              <div className="mb-6 flex flex-col gap-3 rounded-xl border border-primary-200 bg-primary-50 p-4 dark:border-primary-500/30 dark:bg-primary-900/20 lg:flex-row lg:items-center lg:justify-between">
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold text-primary-900 dark:text-primary-100">
-                    {contasSelecionadas.length} conta(s) selecionada(s)
-                  </p>
-                  <p className="text-sm text-primary-700 dark:text-primary-200">
-                    Total selecionado: {formatCurrency(totalSelecionado)}
-                    {selectedPayableContas.length > 0 ? ` - ${selectedPayableContas.length} pendente(s)/atrasada(s)` : ''}
-                  </p>
+            </Panel>
+          ) : (
+            <Panel flush>
+              {loading ? (
+                <div className="space-y-px p-4">
+                  {[0, 1, 2, 3, 4].map((i) => <Skeleton key={i} className="mb-2 h-16" />)}
                 </div>
-                <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap sm:items-center sm:justify-end">
-                  {contasSelecionadas.length < filteredContas.length && (
-                    <Button
-                      onClick={selecionarTodasFiltradas}
-                      disabled={acaoEmMassaLoading}
-                      variant="ghost"
-                      size="sm"
-                      className="bg-white/70 dark:bg-gray-900/50"
-                    >
-                      Selecionar todas filtradas
-                    </Button>
+              ) : filtradas.length === 0 ? (
+                <EmptyState
+                  icon={Receipt}
+                  title={contas.length === 0 ? 'Nenhuma conta cadastrada' : 'Nada por aqui'}
+                  description={
+                    contas.length === 0
+                      ? 'Cadastre a primeira conta ou mande pelo WhatsApp: “cadastre conta de luz 200 vence dia 10”.'
+                      : 'Nenhuma conta corresponde aos filtros deste mês.'
+                  }
+                  action={<UIButton variant="primary" icon={Plus} onClick={novaConta}>Nova conta</UIButton>}
+                />
+              ) : (
+                <>
+                  <div className="ui-list-head">
+                    <button type="button" className={`ui-check ${todosDaPagina ? 'is-on' : ''}`} onClick={togglePagina} aria-label="Selecionar página">
+                      {todosDaPagina && <Check className="h-3 w-3" />}
+                    </button>
+                    <span>{filtradas.length} conta{filtradas.length === 1 ? '' : 's'}</span>
+                    <span className="ml-auto ui-money">{formatCurrency(filtradas.reduce((acc, c) => acc + Number(c.valor || 0), 0))}</span>
+                  </div>
+                  <ul>
+                    {visiveis.map((conta) => {
+                      const info = dueInfo(conta, today);
+                      const marcada = selecionadasSet.has(conta.id);
+                      const aberta = isOpen(conta);
+                      return (
+                        <li key={conta.id} className={`ui-bill ${marcada ? 'is-selected' : ''}`}>
+                          <span className={`ui-bill-stripe ${stripeClass(info.tone)}`} aria-hidden />
+                          <button type="button" className={`ui-check ${marcada ? 'is-on' : ''}`} onClick={() => toggle(conta.id)} aria-label={marcada ? 'Desmarcar' : 'Selecionar'}>
+                            {marcada && <Check className="h-3 w-3" />}
+                          </button>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                              <p className="truncate font-semibold text-ink">{conta.descricao}</p>
+                              {conta.recorrencia_id && <Repeat className="h-3.5 w-3.5 text-ink-subtle" aria-label="Recorrente" />}
+                            </div>
+                            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-muted">
+                              {conta.categoria?.nome && (
+                                <span className="inline-flex items-center gap-1.5">
+                                  <span className="h-2 w-2 rounded-full" style={{ background: conta.categoria.cor || 'currentColor' }} />
+                                  {conta.categoria.nome}
+                                </span>
+                              )}
+                              <span>Venc. {formatShort(conta.data_vencimento)}</span>
+                              <Badge tone={info.tone} dot>{info.label}</Badge>
+                            </div>
+                          </div>
+                          <strong className="ui-money shrink-0 text-right text-base text-ink">{formatCurrency(Number(conta.valor))}</strong>
+                          <div className="flex shrink-0 items-center gap-1">
+                            {aberta && (
+                              <UIButton size="sm" variant="success" icon={Check} loading={processando === conta.id} onClick={() => handlePagar(conta)}>
+                                <span className="hidden sm:inline">Pagar</span>
+                              </UIButton>
+                            )}
+                            <UIButton size="sm" variant="ghost" icon={Pencil} aria-label="Editar" onClick={() => { setContaParaEditar(conta); setModalAberto(true); }} />
+                            <UIButton size="sm" variant="ghost" icon={Trash2} aria-label="Excluir" className="hover:!text-signal-danger" onClick={() => handleDeletar(conta)} />
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  {totalPaginas > 1 && (
+                    <div className="flex items-center justify-between border-t border-hairline px-4 py-3 text-sm text-ink-muted">
+                      <span>Página {pagina + 1} de {totalPaginas}</span>
+                      <div className="flex gap-2">
+                        <UIButton size="sm" icon={ChevronLeft} disabled={pagina === 0} onClick={() => setPagina((p) => p - 1)} aria-label="Anterior" />
+                        <UIButton size="sm" icon={ChevronRight} disabled={pagina + 1 >= totalPaginas} onClick={() => setPagina((p) => p + 1)} aria-label="Próxima" />
+                      </div>
+                    </div>
                   )}
-                  <Button
-                    onClick={handlePagarSelecionadas}
-                    disabled={acaoEmMassaLoading || selectedPayableContas.length === 0}
-                    variant="primary"
-                    size="sm"
-                  >
-                    <Check className="h-4 w-4" />
-                    Pagar selecionadas
-                  </Button>
-                  <Button
-                    onClick={handleDeletarSelecionadas}
-                    disabled={acaoEmMassaLoading}
-                    variant="danger"
-                    size="sm"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                    Excluir
-                  </Button>
-                  <Button
-                    onClick={() => setContasSelecionadas([])}
-                    disabled={acaoEmMassaLoading}
-                    variant="ghost"
-                    size="sm"
-                    className="bg-white/70 dark:bg-gray-900/50"
-                  >
-                    <X className="h-4 w-4" />
-                    Limpar
-                  </Button>
-                </div>
-              </div>
+                </>
+              )}
+            </Panel>
+          )}
+        </div>
+
+        <aside className="space-y-5">
+          <Panel title="Próximos vencimentos" subtitle="O que exige atenção primeiro" icon={CalendarDays} tone="warning" flush>
+            {agenda.length === 0 ? (
+              <EmptyState icon={CircleDollarSign} title="Tudo em dia" description="Nenhuma conta em aberto." />
+            ) : (
+              <ul className="divide-y divide-hairline">
+                {agenda.map((conta) => {
+                  const info = dueInfo(conta, today);
+                  return (
+                    <li key={conta.id} className="flex items-center gap-3 px-4 py-3">
+                      <div className={`flex h-10 w-10 shrink-0 flex-col items-center justify-center rounded-md border text-center leading-none ui-tone-${info.tone}`}>
+                        <span className="text-sm font-bold">{dateOnly(conta.data_vencimento).slice(8, 10)}</span>
+                        <span className="text-[0.55rem] font-semibold uppercase">
+                          {new Date(`${dateOnly(conta.data_vencimento)}T12:00:00`).toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '')}
+                        </span>
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-ink">{conta.descricao}</p>
+                        <p className="text-xs text-ink-muted">{info.label}</p>
+                      </div>
+                      <span className="ui-money text-sm font-semibold text-ink">{formatCurrency(Number(conta.valor))}</span>
+                    </li>
+                  );
+                })}
+              </ul>
             )}
+          </Panel>
 
-            {/* Tabela */}
-            <div className="responsive-table-wrap rounded-xl border border-gray-200 dark:border-gray-700">
-              <table className="w-full min-w-[820px]">
-                <thead className="bg-gradient-to-r from-gray-50 to-gray-100 dark:from-gray-800 dark:to-gray-700">
-                  {table.getHeaderGroups().map(headerGroup => (
-                    <tr key={headerGroup.id}>
-                      {headerGroup.headers.map(header => (
-                        <th key={header.id} className="px-6 py-4 text-left text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
-                          {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                        </th>
-                      ))}
-                    </tr>
-                  ))}
-                </thead>
-                <tbody className="divide-y divide-gray-200 dark:divide-gray-700 bg-white dark:bg-gray-800">
-                  {loading ? (
-                    <tr>
-                      <td colSpan={table.getVisibleFlatColumns().length} className="px-6 py-12 text-center">
-                        <motion.div
-                          animate={{ rotate: 360 }}
-                          transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-                          className="inline-block w-8 h-8 border-4 border-primary-200 border-t-primary-600 rounded-full"
-                        />
-                        <p className="mt-4 text-gray-500 dark:text-gray-400">Carregando...</p>
-                      </td>
-                    </tr> 
-                  ) : paginatedContas.length === 0 ? (
-                    <tr>
-                      <td colSpan={table.getVisibleFlatColumns().length} className="px-6 py-12 text-center text-gray-500 dark:text-gray-400">
-                        <DollarSign className="w-12 h-12 mx-auto mb-4 text-gray-300 dark:text-gray-600" />
-                        <p className="font-medium">Nenhuma conta encontrada</p>
-                        <p className="text-sm mt-1">Tente ajustar os filtros de busca</p>
-                      </td>
-                    </tr>
-                  ) : (
-                    table.getRowModel().rows.map((row, index) => (
-                      <motion.tr
-                        key={row.id}
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: index * 0.05 }}
-                        className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
-                      >
-                        {row.getVisibleCells().map(cell => (
-                          <td key={cell.id} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100">
-                            {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                          </td>
-                        ))}
-                      </motion.tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
+          <Panel title="Por categoria" subtitle={`Previsto em ${mesTexto}`} icon={Layers} tone="brand">
+            {porCategoria.length === 0 ? (
+              <p className="text-sm text-ink-muted">Sem contas neste mês.</p>
+            ) : (
+              <ul className="space-y-3.5">
+                {porCategoria.map((item) => (
+                  <li key={item.nome}>
+                    <div className="mb-1.5 flex items-center justify-between text-sm">
+                      <span className="flex min-w-0 items-center gap-2 text-ink">
+                        <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: item.cor }} />
+                        <span className="truncate">{item.nome}</span>
+                      </span>
+                      <span className="ui-money font-semibold text-ink">{formatCurrency(item.total)}</span>
+                    </div>
+                    <Meter value={item.total} max={porCategoria[0].total} tone="brand" />
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Panel>
+        </aside>
+      </div>
 
-            {/* Paginação */}
-            <div className="mt-6 flex flex-col items-center justify-between gap-3 rounded-xl bg-gradient-to-r from-gray-50 to-gray-100 px-4 py-4 dark:from-gray-800 dark:to-gray-700 sm:flex-row">
-              <p className="text-center text-sm font-medium text-gray-700 dark:text-gray-300 sm:text-left">
-                Mostrando <span className="font-bold text-primary-600">{paginatedContas.length}</span> de <span className="font-bold text-primary-600">{filteredContas.length}</span> resultados
-              </p>
-              <div className="flex flex-wrap items-center justify-center gap-2 sm:justify-end">
-                <button
-                  type="button"
-                  onClick={() => setPagina(p => Math.max(0, p - 1))}
-                  disabled={pagina === 0}
-                  className="inline-flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-3 text-sm font-medium text-gray-700 transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-300 dark:hover:bg-gray-800"
-                >
-                  <ChevronLeft className="h-4 w-4 shrink-0" />
-                  Anterior
-                </button>
-                <span className="inline-flex h-9 items-center whitespace-nowrap rounded-lg bg-white px-3 text-sm font-medium text-gray-700 dark:bg-gray-800 dark:text-gray-300">
-                  Página <span className="font-bold text-primary-600">{pagina + 1}</span> de {totalPaginas || 1}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setPagina(p => Math.min(totalPaginas - 1, p + 1))}
-                  disabled={pagina >= totalPaginas - 1}
-                  className="inline-flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-3 text-sm font-medium text-gray-700 transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-300 dark:hover:bg-gray-800"
-                >
-                  Próxima
-                  <ChevronRight className="h-4 w-4 shrink-0" />
-                </button>
+      <AnimatePresence>
+        {selecionadas.length > 0 && (
+          <motion.div
+            initial={{ y: 40, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 40, opacity: 0 }}
+            className="ui-bulkbar"
+            role="region"
+            aria-label="Ações em lote"
+          >
+            <div className="flex items-center gap-3">
+              <span className="flex h-9 w-9 items-center justify-center rounded-md bg-brand/20 text-brand-soft"><ListChecks className="h-4 w-4" /></span>
+              <div className="leading-tight">
+                <p className="text-sm font-semibold text-ink">{selecionadas.length} selecionada{selecionadas.length === 1 ? '' : 's'}</p>
+                <p className="ui-money text-xs text-ink-muted">{formatCurrency(totalSelecionado)}</p>
               </div>
             </div>
-          </CardContent>
-        </Card>
-      </div>
+            <div className="flex items-center gap-2">
+              <UIButton size="sm" variant="success" icon={Check} loading={processando === 'lote'} disabled={!pagaveisSelecionadas.length} onClick={pagarSelecionadas}>Pagar</UIButton>
+              <UIButton size="sm" variant="danger" icon={Trash2} disabled={processando === 'lote'} onClick={excluirSelecionadas}>Excluir</UIButton>
+              <UIButton size="sm" variant="ghost" icon={X} aria-label="Limpar seleção" onClick={() => setSelecionadas([])} />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <ContaPagarModal
         isOpen={modalAberto}
-        onClose={() => {
-          setModalAberto(false);
-          setContaParaEditar(undefined);
-        }}
+        onClose={() => { setModalAberto(false); setContaParaEditar(undefined); }}
         contaParaEditar={contaParaEditar}
         categorias={categorias}
-        onSuccess={async () => {
-          await buscarDados();
-          await buscarContasCalendario();
-        }}
+        onSuccess={() => { setModalAberto(false); setContaParaEditar(undefined); void carregar(); }}
       />
     </div>
   );

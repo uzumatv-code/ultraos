@@ -245,9 +245,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const initial = profile.name.trim().charAt(0).toUpperCase() || 'U';
 
   const sidebar = (compact: boolean) => (
-    <aside className="flex h-full flex-col border-r border-hairline bg-surface">
+    <aside className="ui-shell-sidebar flex h-full flex-col border-r border-hairline bg-surface">
       <div className={`flex items-center gap-3 border-b border-hairline px-4 ${compact ? 'justify-center px-2' : ''} h-16 shrink-0`}>
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md border border-brand/30 bg-brand/15 text-brand-soft">
+        <span className="ui-brand-mark flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg">
           {brand.logo ? <img src={brand.logo} alt="" className="h-6 w-6 object-contain" /> : <Music2 className="h-4 w-4" />}
         </span>
         {!compact && (

@@ -21,6 +21,7 @@ export default {
   theme: {
     extend: {
       fontFamily: {
+        display: ['Plus Jakarta Sans Variable', 'Inter Variable', 'ui-sans-serif', 'system-ui', 'sans-serif'],
         sans: ['Inter Variable', 'Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
         mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
       },

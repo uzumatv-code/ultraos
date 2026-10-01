@@ -263,6 +263,10 @@ export interface FinanceiroIAAutorizado {
   permissao: 'consulta' | 'escrita' | 'admin';
   nivel_acesso: 'operador' | 'gerente' | 'admin';
   ativo: boolean;
+  proprietario?: boolean;
+  receber_avisos?: boolean;
+  hora_resumo?: string;
+  hora_lembrete?: string;
   created_at: string;
   updated_at: string;
   user_id: string;

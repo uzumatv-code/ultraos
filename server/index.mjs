@@ -11,6 +11,7 @@ import mysql from 'mysql2/promise';
 import nodemailer from 'nodemailer';
 import { detectImageMime, normalizeDocumentConfig } from './document-customization.mjs';
 import { occurrencesInRange, parseDateOnly, validatePayableInput } from './payable-recurrence.mjs';
+import { createFinanceAgent } from './finance-agent.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -5511,6 +5512,51 @@ app.post('/api/financeiro/contas-pagar/:id/pagar', requireAuth, requireAdmin, as
   }
 });
 
+async function openAiChatReply(system, userMessage) {
+  if (!process.env.OPENAI_API_KEY) return null;
+  const response = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: SYSTEM_AI_MODEL,
+      input: [{ role: 'system', content: system }, { role: 'user', content: String(userMessage || '') }],
+      max_output_tokens: 500,
+    }),
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(json.error?.message || `OpenAI chat HTTP ${response.status}`);
+  return extractResponsesText(json).trim() || null;
+}
+
+const financeAgent = createFinanceAgent({
+  pool,
+  uuid,
+  now,
+  todayDate,
+  money,
+  timezone: EVALUATION_TIMEZONE,
+  sendText: (userId, phone, text) => sendFinancialAiReply(userId, normalizePhone(phone), text),
+  ensureCategory: (userId, tipo, nome, cor) => ensureDefaultFinancialCategory(userId, tipo, nome, cor),
+  openAiChat: openAiChatReply,
+});
+
+app.post('/api/financeiro/ia/enviar-resumo', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const digits = String(req.body?.telefone || '').replace(/\D/g, '');
+    if (!digits) throw new Error('Informe o telefone');
+    const [rows] = await pool.query(
+      `SELECT * FROM financeiro_ia_autorizados WHERE user_id = ? AND REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(telefone,'+',''),' ',''),'-',''),'(',''),')','') = ? LIMIT 1`,
+      [req.user.id, digits],
+    );
+    if (!rows[0]) throw new Error('Número não cadastrado como autorizado');
+    const text = (await financeAgent.buildDigest(req.user.id)) || (await financeAgent.summary(req.user.id));
+    await sendFinancialAiReply(req.user.id, normalizePhone(rows[0].telefone), text);
+    res.json({ data: { enviado: true }, error: null });
+  } catch (error) {
+    res.status(400).json({ data: null, error: { message: error.message } });
+  }
+});
+
 async function handleFinancialAiWebhook(req, res) {
   const webhookMessage = extractEvolutionWebhookMessage(req.body);
   const phone = webhookMessage.phone;
@@ -5568,6 +5614,19 @@ async function handleFinancialAiWebhook(req, res) {
       return res.json({ reply, whatsapp_sent: true });
     }
 
+    const agentResult = await financeAgent.handleMessage({
+      authorized,
+      phone,
+      message,
+      payAccountPayable,
+      canWrite: canWriteSystem(authorized.permissao),
+    });
+    if (agentResult) {
+      await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, intencao: agentResult.intent, entidades: agentResult.entities || null, status: agentResult.status, resposta: agentResult.reply });
+      await sendFinancialAiReply(authorized.user_id, phone, agentResult.reply);
+      return res.json({ reply: agentResult.reply, whatsapp_sent: true });
+    }
+
     const intent = await getSystemIntent(message);
 
     if (intent.intent === 'confirmar_acao') {
@@ -5612,6 +5671,16 @@ async function handleFinancialAiWebhook(req, res) {
         await sendFinancialAiReply(authorized.user_id, phone, reply);
         return res.status(403).json({ reply, whatsapp_sent: true });
       }
+      if (intent.intent === 'registrar_despesa' && intent.value > 0) {
+        const quick = await financeAgent.quickExpenseResult(authorized.user_id, {
+          description: titleCaseDescription(intent.description || 'Despesa via WhatsApp'),
+          value: intent.value,
+          formaPagamento: intent.formaPagamento,
+        });
+        await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, intencao: 'registrar_despesa', entidades: quick.entities, status: quick.status, resposta: quick.reply });
+        await sendFinancialAiReply(authorized.user_id, phone, quick.reply);
+        return res.json({ reply: quick.reply, whatsapp_sent: true });
+      }
       const prepared = await prepareSystemWriteIntent(authorized.user_id, intent);
       if (!prepared.ok) {
         await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, intencao: intent.intent, entidades: intent, status: 'erro', resposta: prepared.reply });
@@ -5624,6 +5693,14 @@ async function handleFinancialAiWebhook(req, res) {
       await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, intencao: preparedIntent.intent, entidades: preparedIntent, status: 'aguardando_confirmacao', resposta: reply, confirmacao_token: token });
       await sendFinancialAiReply(authorized.user_id, phone, reply);
       return res.json({ reply, confirmation_required: true, token, whatsapp_sent: true });
+    }
+
+    if (intent.intent === 'desconhecida') {
+      const chat = await financeAgent.chatFallback(authorized.user_id, message);
+      const fallbackReply = chat || financeAgent.AJUDA;
+      await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, intencao: 'conversa', status: 'respondido', resposta: fallbackReply });
+      await sendFinancialAiReply(authorized.user_id, phone, fallbackReply);
+      return res.json({ reply: fallbackReply, whatsapp_sent: true });
     }
 
     const reply = await answerSystemQuery(authorized.user_id, intent);
@@ -6208,8 +6285,15 @@ async function startServer() {
     return;
   }
 
+  try {
+    await financeAgent.ensureSchema();
+  } catch (error) {
+    console.error('[startup] Agente financeiro sem esquema atualizado:', error.message);
+  }
+
   app.listen(PORT, HOST, () => {
     console.log(`Sistema OS API rodando em ${HOST}:${PORT}`);
+    financeAgent.startProactiveJob();
     startWhatsAppReconciliationJob();
     startEvaluationBackendJob();
   });
