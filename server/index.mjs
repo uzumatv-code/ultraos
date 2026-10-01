@@ -10,8 +10,9 @@ import jwt from 'jsonwebtoken';
 import mysql from 'mysql2/promise';
 import nodemailer from 'nodemailer';
 import { detectImageMime, normalizeDocumentConfig } from './document-customization.mjs';
-import { occurrencesInRange, parseDateOnly, validatePayableInput } from './payable-recurrence.mjs';
-import { createFinanceAgent } from './finance-agent.mjs';
+import { addMonthsClamped, formatDateOnly, occurrencesInRange, parseDateOnly, validatePayableInput } from './payable-recurrence.mjs';
+import { createFinanceAgent, inferExpenseCategory, formatBRL } from './finance-agent.mjs';
+import { createAgentBrain } from './agent-brain.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -5554,6 +5555,159 @@ const financeAgent = createFinanceAgent({
   sendText: (userId, phone, text) => sendFinancialAiReply(userId, normalizePhone(phone), text),
   ensureCategory: (userId, tipo, nome, cor) => ensureDefaultFinancialCategory(userId, tipo, nome, cor),
   openAiChat: openAiChatReply,
+  materializeRecurrences: async (userId, start, end) => {
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      await materializePayableRecurrences(conn, userId, start, end);
+      await conn.commit();
+    } catch (error) {
+      await conn.rollback();
+      throw error;
+    } finally {
+      conn.release();
+    }
+  },
+});
+
+async function agentCreatePayable(userId, args) {
+  const inferred = inferExpenseCategory(`${args.categoria || ''} ${args.descricao || ''}`);
+  const categoryName = inferred.nome === 'Operacional' && args.categoria ? titleCaseDescription(args.categoria) : inferred.nome;
+  const categoriaId = await ensureDefaultFinancialCategory(userId, 'despesa', categoryName, inferred.cor);
+  const parcelas = Math.max(1, Math.min(60, Number(args.parcelas) || 1));
+  const recorrente = Boolean(args.recorrente) && parcelas === 1;
+  const input = validatePayableInput({
+    descricao: titleCaseDescription(args.descricao),
+    valor: args.valor,
+    data_vencimento: args.vencimento,
+    recorrente,
+    periodicidade: recorrente ? args.periodicidade || 'mensal' : 'unica',
+    parcelas,
+    forma_pagamento: args.forma_pagamento || null,
+    categoria_id: categoriaId,
+    observacoes: args.observacoes || 'Cadastrada pelo agente via WhatsApp',
+  });
+  if (!(input.valor > 0)) throw new Error('O valor da conta precisa ser maior que zero');
+
+  const [dupes] = await pool.query(
+    `SELECT id FROM contas_pagar WHERE user_id = ? AND LOWER(descricao) = LOWER(?) AND LEFT(data_vencimento,10) = ? AND status <> 'cancelado' LIMIT 1`,
+    [userId, input.descricao, input.data_vencimento],
+  );
+  if (dupes[0] && parcelas === 1) throw new Error(`Já existe a conta "${input.descricao}" com vencimento em ${formatDateBr(input.data_vencimento)}.`);
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const ids = [];
+    const insert = (id, descricao, due, seriesId) => conn.query(
+      `INSERT INTO contas_pagar
+        (id,user_id,descricao,valor,data_vencimento,forma_pagamento,parcelas,status,categoria_id,recorrente,
+         periodicidade,observacoes,recorrencia_id,competencia,origem,alterada_manualmente,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,'pendente',?,0,?,?,?,?,?,0,?,?)`,
+      [id, userId, descricao, input.valor, due, input.forma_pagamento, input.parcelas, categoriaId,
+        input.periodicidade, input.observacoes, seriesId, seriesId ? due : null, seriesId ? 'recorrencia' : 'whatsapp_ia', now(), now()],
+    );
+
+    if (parcelas > 1) {
+      const anchor = parseDateOnly(input.data_vencimento);
+      for (let i = 0; i < parcelas; i += 1) {
+        const id = uuid();
+        ids.push(id);
+        await insert(id, `${input.descricao} (${i + 1}/${parcelas})`, formatDateOnly(addMonthsClamped(anchor, i)), null);
+      }
+    } else {
+      const id = uuid();
+      ids.push(id);
+      let seriesId = null;
+      if (recorrente) {
+        seriesId = uuid();
+        await conn.query(
+          `INSERT INTO contas_pagar_recorrencias
+            (id,user_id,conta_origem_id,descricao,valor,categoria_id,forma_pagamento,parcelas,periodicidade,data_inicio,observacoes,ativa,created_at,updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?,?)`,
+          [seriesId, userId, id, input.descricao, input.valor, categoriaId, input.forma_pagamento, 1,
+            input.periodicidade, input.data_vencimento, input.observacoes, now(), now()],
+        );
+      }
+      await insert(id, input.descricao, input.data_vencimento, seriesId);
+      if (recorrente) {
+        const horizon = formatDateOnly(addMonthsClamped(parseDateOnly(input.data_vencimento), 4));
+        await materializePayableRecurrences(conn, userId, input.data_vencimento, horizon);
+      }
+    }
+    await conn.commit();
+    return {
+      ok: true,
+      ids,
+      descricao: input.descricao,
+      valor: input.valor,
+      primeiro_vencimento: input.data_vencimento,
+      recorrente,
+      periodicidade: input.periodicidade,
+      parcelas,
+      categoria: categoryName,
+      total_reais: Number((input.valor * parcelas).toFixed(2)),
+    };
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
+}
+
+async function agentCancelPayable(userId, contaId, escopo) {
+  const [[conta]] = await pool.query('SELECT * FROM contas_pagar WHERE user_id = ? AND id = ? LIMIT 1', [userId, contaId]);
+  if (!conta) throw new Error('Conta não encontrada');
+  if (conta.status === 'pago') throw new Error('Conta já paga não pode ser cancelada');
+  await pool.query(
+    `UPDATE contas_pagar SET status='cancelado', alterada_manualmente=?, updated_at=? WHERE user_id=? AND id=?`,
+    [conta.recorrencia_id ? 1 : 0, now(), userId, contaId],
+  );
+  let canceladas = 1;
+  if (escopo === 'serie' && conta.recorrencia_id) {
+    await pool.query('UPDATE contas_pagar_recorrencias SET ativa=0, data_fim=?, updated_at=? WHERE user_id=? AND id=?',
+      [String(conta.data_vencimento).slice(0, 10), now(), userId, conta.recorrencia_id]);
+    const [result] = await pool.query(
+      `UPDATE contas_pagar SET status='cancelado', updated_at=?
+        WHERE user_id=? AND recorrencia_id=? AND id<>? AND status IN ('pendente','atrasado') AND alterada_manualmente=0
+          AND LEFT(data_vencimento,10)>=?`,
+      [now(), userId, conta.recorrencia_id, contaId, String(conta.data_vencimento).slice(0, 10)],
+    );
+    canceladas += result.affectedRows;
+  }
+  return { ok: true, descricao: conta.descricao, canceladas, serie_encerrada: escopo === 'serie' && Boolean(conta.recorrencia_id) };
+}
+
+const agentBrain = createAgentBrain({
+  pool,
+  now,
+  todayDate,
+  timezone: EVALUATION_TIMEZONE,
+  apiKey: process.env.OPENAI_API_KEY,
+  model: SYSTEM_AI_MODEL,
+  formatBRL,
+  actions: {
+    createPayable: agentCreatePayable,
+    cancelPayable: agentCancelPayable,
+    payPayable: async (userId, contaId, formaPagamento) => {
+      const { conta } = await payAccountPayable({ userId, contaId, formaPagamento, origem: 'whatsapp_ia' });
+      return { ok: true, descricao: conta.descricao, valor: Number(conta.valor), vencimento: String(conta.data_vencimento).slice(0, 10) };
+    },
+    registerExpense: async (userId, args) => {
+      const description = titleCaseDescription(args.descricao);
+      const inferred = inferExpenseCategory(`${args.categoria || ''} ${args.descricao}`);
+      const category = inferred.nome === 'Operacional' && args.categoria
+        ? { nome: titleCaseDescription(args.categoria), cor: inferred.cor }
+        : inferred;
+      const saved = await financeAgent.registerExpense(userId, { description, value: args.valor, formaPagamento: args.forma_pagamento, category });
+      return { id: saved.id, description, value: money(args.valor), category: category.nome };
+    },
+    registerIncome: (userId, args) => financeAgent.registerIncome(userId, { description: titleCaseDescription(args.descricao), value: args.valor, formaPagamento: args.forma_pagamento }),
+    summary: (userId) => financeAgent.summary(userId),
+    undoLast: (userId, phone) => financeAgent.undoLast(userId, phone),
+    answerSystem: (userId, intent) => answerSystemQuery(userId, intent),
+  },
 });
 
 app.post('/api/financeiro/ia/enviar-resumo', requireAuth, requireAdmin, async (req, res) => {
@@ -5659,6 +5813,24 @@ async function handleFinancialAiWebhook(req, res) {
       await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, intencao: agentResult.intent, entidades: agentResult.entities || null, status: agentResult.status, resposta: agentResult.reply });
       await sendFinancialAiReply(authorized.user_id, phone, agentResult.reply);
       return res.json({ reply: agentResult.reply, whatsapp_sent: true });
+    }
+
+    // Conversa natural com ferramentas; ordens/clientes e confirmações seguem o fluxo clássico abaixo.
+    const classicTopic = /\b(os|ordem|ordens|cliente|clientes)\b/i.test(message) || /^\s*confirmar\b/i.test(message);
+    if (!classicTopic && process.env.OPENAI_API_KEY) {
+      try {
+        const brain = await agentBrain.converse({ authorized, phone, message, canWrite: canWriteSystem(authorized.permissao) });
+        const expense = [...brain.actions].reverse().find((item) => item.type === 'despesa');
+        await logFinancialAi({
+          user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem,
+          intencao: 'agente', entidades: expense ? { transacao_id: expense.id, description: expense.description, value: expense.value } : { acoes: brain.actions },
+          status: expense ? 'lancamento_rapido' : 'agente', resposta: brain.reply,
+        });
+        await sendFinancialAiReply(authorized.user_id, phone, brain.reply);
+        return res.json({ reply: brain.reply, whatsapp_sent: true });
+      } catch (brainError) {
+        console.error('[financeiro-ia:agente] caindo no fluxo classico:', brainError.message);
+      }
     }
 
     const intent = await getSystemIntent(message);

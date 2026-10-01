@@ -30,6 +30,7 @@ const logTone: Record<string, { label: string; tone: Tone }> = {
   lancamento_rapido: { label: 'Gasto lançado', tone: 'success' },
   executado: { label: 'Executado', tone: 'success' },
   respondido: { label: 'Respondido', tone: 'info' },
+  agente: { label: 'Conversa', tone: 'info' },
   aguardando_confirmacao: { label: 'Aguardando', tone: 'warning' },
   desfeito: { label: 'Desfeito', tone: 'neutral' },
   negado: { label: 'Negado', tone: 'danger' },

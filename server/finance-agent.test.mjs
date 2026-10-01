@@ -25,7 +25,8 @@ test('não confunde outras frases com despesa', () => {
 
 test('detecta comandos do agente', () => {
   assert.equal(detectAgentCommand('desfazer'), 'desfazer');
-  assert.equal(detectAgentCommand('Oi'), 'ajuda');
+  assert.equal(detectAgentCommand('menu'), 'ajuda');
+  assert.equal(detectAgentCommand('Oi'), null);
   assert.equal(detectAgentCommand('quais contas atrasadas?'), 'atrasadas');
   assert.equal(detectAgentCommand('o que vence essa semana'), 'proximas');
   assert.equal(detectAgentCommand('quanto gastei hoje'), 'gastos_hoje');
@@ -43,4 +44,9 @@ test('vários verbos na mesma frase e almoço como alimentação', () => {
   assert.equal(r.value, 36.63);
   assert.equal(r.description, 'Despesa via WhatsApp');
   assert.equal(r.category.nome, 'Alimentação');
+});
+
+test('compra parcelada ou recorrente não vira gasto rápido', () => {
+  assert.equal(parseQuickExpense('comprei um notebook em 3x 1000'), null);
+  assert.equal(parseQuickExpense('conta de água 199 todo mês'), null);
 });

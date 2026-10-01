@@ -51,7 +51,7 @@ function parseAmount(text) {
 }
 
 const EXPENSE_VERB = /\b(comprei|gastei|paguei|pago|compra|gasto|despesa|almocei|jantei|abasteci|tomei|lanchei)\b/i;
-const NOT_EXPENSE = /\b(os|ordem|cliente|conta a pagar|vencimento|vence|boleto|fatura|cadastr|abr[ae]|cancel|confirmar|quanto|quais|qual)/i;
+const NOT_EXPENSE = /\b(os|ordem|cliente|conta a pagar|vencimento|vence|boleto|fatura|cadastr|abr[ae]|cancel|confirmar|quanto|quais|qual|parcel|vezes|recorrent|todo m[eê]s|mensal|\d+\s*x\b)/i;
 
 /**
  * Reconhece lançamentos curtos: "comprei um café 10,00", "gastei 50 no mercado",
@@ -96,7 +96,7 @@ export function detectAgentCommand(message) {
   const text = normalizeText(message);
   if (!text) return null;
   if (/^(desfaz|desfazer|desfaca|cancela|cancelar|apaga|apagar|errei|foi errado)( o)?( ultimo| ultima| lancamento| gasto| despesa)?$/.test(text)) return 'desfazer';
-  if (/^(oi|ola|bom dia|boa tarde|boa noite|e ai|opa|menu|ajuda|help|comandos|o que voce faz|como funciona)\b/.test(text) && text.split(' ').length <= 5) return 'ajuda';
+  if (/^(menu|ajuda|help|comandos|o que voce faz|como funciona)\b/.test(text) && text.split(' ').length <= 5) return 'ajuda';
   if (/(resumo|panorama|situacao).*(financ|hoje|dia|geral)|^resumo$|como estamos|como estao as contas/.test(text)) return 'resumo';
   if (/(contas?|boletos?|pagamentos?).*(atrasad|vencid|em atraso)|o que (esta|ta) atrasado|atrasadas?$/.test(text)) return 'atrasadas';
   if (/(contas?|boletos?|vencimentos?).*(semana|proximos? dias|proximas|a vencer|vao vencer)|proximas contas|o que vence/.test(text)) return 'proximas';
@@ -119,7 +119,7 @@ const AJUDA = [
   'Também aviso você todo dia sobre contas vencendo e atrasadas.',
 ].join('\n');
 
-export function createFinanceAgent({ pool, uuid, now, todayDate, money, timezone, sendText, ensureCategory, openAiChat, log = console }) {
+export function createFinanceAgent({ pool, uuid, now, todayDate, money, timezone, sendText, ensureCategory, openAiChat, materializeRecurrences, log = console }) {
   const ymNow = () => todayDate().slice(0, 7);
   const monthBounds = () => {
     const [y, m] = ymNow().split('-').map(Number);
@@ -248,6 +248,18 @@ export function createFinanceAgent({ pool, uuid, now, todayDate, money, timezone
       [id, userId, description, money(value), now(), categoriaId, formaPagamento || null, now(), now()],
     );
     return { id, category: cat };
+  }
+
+  async function registerIncome(userId, { description, value, formaPagamento }) {
+    const categoriaId = await ensureCategory(userId, 'receita', 'Outras receitas', '#10B981');
+    const id = uuid();
+    await pool.query(
+      `INSERT INTO transacoes_financeiras
+       (id, user_id, descricao, valor, tipo, data, categoria_id, forma_pagamento, origem, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'receita', ?, ?, ?, 'whatsapp_ia', ?, ?)`,
+      [id, userId, description, money(value), now(), categoriaId, formaPagamento || null, now(), now()],
+    );
+    return { id, description, value: money(value) };
   }
 
   async function undoLast(userId, phone) {
@@ -433,6 +445,7 @@ export function createFinanceAgent({ pool, uuid, now, todayDate, money, timezone
         if (clock > addMinutes(slot.at, 180)) continue;
         if (!(await claim(person.user_id, person.telefone, slot.key))) continue;
         try {
+          if (materializeRecurrences) await materializeRecurrences(person.user_id, today, addDays(today, 40)).catch(() => {});
           const text = await buildDigest(person.user_id, { reminder: slot.reminder });
           if (!text) continue;
           await sendText(person.user_id, person.telefone, text);
@@ -459,5 +472,5 @@ export function createFinanceAgent({ pool, uuid, now, todayDate, money, timezone
     log.log?.('[agente-financeiro] avisos proativos ativos (a cada 5 min).');
   }
 
-  return { ensureSchema, handleMessage, quickExpenseResult, chatFallback, buildDigest, summary, startProactiveJob, runProactive, AJUDA };
+  return { ensureSchema, handleMessage, quickExpenseResult, chatFallback, buildDigest, summary, startProactiveJob, runProactive, registerExpense, registerIncome, undoLast, AJUDA };
 }

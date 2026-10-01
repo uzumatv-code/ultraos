@@ -24,7 +24,7 @@ function addDays(date, days) {
   return next;
 }
 
-function addMonthsClamped(anchor, months) {
+export function addMonthsClamped(anchor, months) {
   const day = anchor.getUTCDate();
   const target = new Date(Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth() + months, 1));
   const lastDay = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
