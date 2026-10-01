@@ -55,3 +55,9 @@ test('mensagem com dois valores não vira um lançamento só', () => {
   assert.equal(parseQuickExpense('Paguei 37,00 dizimo e comprei 95,00 encordoamento na loja Vibratho'), null);
   assert.equal(inferExpenseCategory('dízimo').nome, 'Dízimo e doações');
 });
+
+test('empréstimo e cartão têm categoria própria', () => {
+  assert.equal(inferExpenseCategory('Empréstimo do terreno').nome, 'Empréstimos');
+  assert.equal(inferExpenseCategory('Cartão da Renner').nome, 'Cartões');
+  assert.equal(inferExpenseCategory('Aluguel').nome, 'Moradia');
+});

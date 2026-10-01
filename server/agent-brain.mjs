@@ -148,7 +148,7 @@ export function buildSystemPrompt({ nome, hojeIso, diaSemana, timezone, canWrite
     '- Respostas curtas como "sim", "todo mês", "3x", "só essa" continuam o assunto anterior: use o histórico.',
     '- Para pagar/cancelar, use listar_contas_pagar para achar o id. Se houver mais de uma conta possível, pergunte qual. Se for uma só e inequívoca, execute.',
     categorias.length
-      ? `- CATEGORIAS já existentes: ${categorias.join(', ')}. Ao informar "categoria", use EXATAMENTE um desses nomes quando algum servir (ex.: doação → a categoria de dízimo/doações); só proponha uma nova se nenhuma servir.`
+      ? `- CATEGORIAS já existentes: ${categorias.join(', ')}. SEMPRE informe "categoria" ao criar conta ou gasto, pensando como um contador: empréstimo/financiamento → Empréstimos; cartão/fatura → Cartões; aluguel, luz, água, internet → Moradia; dízimo/doação → Dízimo e doações; peças, cordas, insumos → Material e peças; combustível/uber → Transporte; comida → Alimentação. Use EXATAMENTE o nome de uma categoria existente quando servir; se nenhuma servir, crie um nome novo, curto, no plural e com acento correto (ex.: "Seguros"), nunca variações do que já existe. Nunca coloque uma conta numa categoria que não faça sentido só porque ela já existe.`
       : '',
     '- Nunca invente valores, datas ou contas: consulte as ferramentas. Se uma ferramenta falhar, explique de forma simples o que faltou.',
     '- Mensagem com vários itens (ex.: "paguei 37 de dízimo e comprei 95 de encordoamento") = um lançamento separado por item, cada um com seu valor e descrição. Nunca some. Confirme listando cada lançamento e o total só no final.',

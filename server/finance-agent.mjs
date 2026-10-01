@@ -16,6 +16,8 @@ const CATEGORY_RULES = [
   { nome: 'Alimentação', cor: '#F59E0B', re: /caf[eé]|almo[cç]|jant|lanch|padaria|pizza|restaurante|ifood|marmita|comida|refei[cç][aã]o|sorvete|hamb[uú]rguer|pastel|salgado|bar\b|cerveja|a[cç]a[ií]/ },
   { nome: 'Mercado', cor: '#10B981', re: /mercado|supermercado|atacad[aã]o|feira|hortifruti|a[cç]ougue/ },
   { nome: 'Transporte', cor: '#3B82F6', re: /uber|99\b|taxi|t[aá]xi|[oô]nibus|metr[oô]|passagem|estacionamento|ped[aá]gio|combust[ií]vel|gasolina|etanol|diesel|posto/ },
+  { nome: 'Empréstimos', cor: '#F97316', re: /empr[eé]stimo|financiamento|consignado|credi[aá]rio|refinanc/ },
+  { nome: 'Cartões', cor: '#EC4899', re: /cart[aã]o|fatura|renner|nubank|c&a|riachuelo|mastercard|visa\b/ },
   { nome: 'Moradia', cor: '#8B5CF6', re: /aluguel|condom[ií]nio|luz|energia|[aá]gua|internet|g[aá]s|iptu/ },
   { nome: 'Saúde', cor: '#EF4444', re: /farm[aá]cia|rem[eé]dio|m[eé]dico|consulta|exame|dentista|plano de sa[uú]de/ },
   { nome: 'Dízimo e doações', cor: '#A855F7', re: /d[ií]zimo|oferta|doa[cç]|doei|igreja/ },

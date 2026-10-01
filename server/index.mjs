@@ -2975,7 +2975,10 @@ function titleCaseDescription(text) {
   return String(text || '')
     .trim()
     .replace(/\s+/g, ' ')
-    .replace(/(^|\s)(\p{L})/gu, (_match, space, letter) => `${space}${letter.toUpperCase()}`);
+    .replace(/(^|\s)(\p{L}+)/gu, (_match, space, word, offset) => {
+      const minor = ['da', 'do', 'das', 'dos', 'de', 'e', 'a', 'o', 'em', 'no', 'na'].includes(word.toLowerCase());
+      return `${space}${offset > 0 && minor ? word.toLowerCase() : word.charAt(0).toUpperCase() + word.slice(1)}`;
+    });
 }
 
 function extractAccountPayableDescription(text) {
