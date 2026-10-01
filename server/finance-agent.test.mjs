@@ -50,3 +50,8 @@ test('compra parcelada ou recorrente não vira gasto rápido', () => {
   assert.equal(parseQuickExpense('comprei um notebook em 3x 1000'), null);
   assert.equal(parseQuickExpense('conta de água 199 todo mês'), null);
 });
+
+test('mensagem com dois valores não vira um lançamento só', () => {
+  assert.equal(parseQuickExpense('Paguei 37,00 dizimo e comprei 95,00 encordoamento na loja Vibratho'), null);
+  assert.equal(inferExpenseCategory('dízimo').nome, 'Dízimo e doações');
+});

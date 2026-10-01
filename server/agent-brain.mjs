@@ -65,7 +65,7 @@ const TOOLS = [
   {
     type: 'function',
     name: 'registrar_despesa',
-    description: 'Lança um gasto JÁ PAGO (ex.: "comprei um café 10"). Entra direto no caixa de hoje.',
+    description: 'Lança UM gasto JÁ PAGO (ex.: "comprei um café 10"). Entra direto no caixa de hoje. Se a mensagem trouxer vários gastos, chame esta ferramenta uma vez para CADA item, nunca some valores.',
     parameters: {
       type: 'object',
       properties: {
@@ -148,6 +148,7 @@ export function buildSystemPrompt({ nome, hojeIso, diaSemana, timezone, canWrite
     '- Respostas curtas como "sim", "todo mês", "3x", "só essa" continuam o assunto anterior: use o histórico.',
     '- Para pagar/cancelar, use listar_contas_pagar para achar o id. Se houver mais de uma conta possível, pergunte qual. Se for uma só e inequívoca, execute.',
     '- Nunca invente valores, datas ou contas: consulte as ferramentas. Se uma ferramenta falhar, explique de forma simples o que faltou.',
+    '- Mensagem com vários itens (ex.: "paguei 37 de dízimo e comprei 95 de encordoamento") = um lançamento separado por item, cada um com seu valor e descrição. Nunca some. Confirme listando cada lançamento e o total só no final.',
     '- Depois de executar, diga o que foi feito; não peça confirmação extra para ações simples e reversíveis.',
     canWrite ? '' : '- ATENÇÃO: este número tem permissão só de CONSULTA. Não tente lançar, pagar ou cancelar; explique que precisa de permissão.',
     '- Assuntos fora de finanças/oficina: responda em uma frase gentil e volte ao trabalho.',

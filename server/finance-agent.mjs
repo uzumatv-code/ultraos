@@ -18,6 +18,7 @@ const CATEGORY_RULES = [
   { nome: 'Transporte', cor: '#3B82F6', re: /uber|99\b|taxi|t[aá]xi|[oô]nibus|metr[oô]|passagem|estacionamento|ped[aá]gio|combust[ií]vel|gasolina|etanol|diesel|posto/ },
   { nome: 'Moradia', cor: '#8B5CF6', re: /aluguel|condom[ií]nio|luz|energia|[aá]gua|internet|g[aá]s|iptu/ },
   { nome: 'Saúde', cor: '#EF4444', re: /farm[aá]cia|rem[eé]dio|m[eé]dico|consulta|exame|dentista|plano de sa[uú]de/ },
+  { nome: 'Dízimo e doações', cor: '#A855F7', re: /d[ií]zimo|oferta|doa[cç][aã]o|doei|igreja/ },
   { nome: 'Material e peças', cor: '#06B6D4', re: /pe[cç]a|corda|cola|verniz|lixa|ferramenta|parafuso|madeira|tinta|insumo|material|solda|fio\b|cabo\b/ },
   { nome: 'Marketing', cor: '#EC4899', re: /an[uú]ncio|tr[aá]fego|instagram|google ads|panfleto|impuls/ },
   { nome: 'Impostos e taxas', cor: '#64748B', re: /imposto|das\b|mei\b|taxa|tarifa|contador|contabilidade|multa/ },
@@ -61,6 +62,9 @@ export function parseQuickExpense(message) {
   const raw = String(message || '').trim();
   if (!raw || raw.length > 160) return null;
   if (NOT_EXPENSE.test(raw)) return null;
+  // Mais de um valor na frase = vários lançamentos: deixa para a IA separar item a item.
+  const amounts = raw.match(/(?:r\$\s*)?(?:\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/gi) || [];
+  if (amounts.length > 1) return null;
   const value = parseAmount(raw);
   if (!value || value > 99999.99 || /\d{7,}/.test(raw.replace(/[.,\s]/g, ''))) return null;
 
@@ -272,10 +276,12 @@ export function createFinanceAgent({ pool, uuid, now, todayDate, money, timezone
     const last = rows[0];
     if (!last) return 'Não encontrei nenhum lançamento recente para desfazer.';
     const entities = typeof last.entidades === 'string' ? JSON.parse(last.entidades || '{}') : last.entidades || {};
-    if (!entities.transacao_id) return 'Esse lançamento não pode ser desfeito automaticamente.';
-    const [result] = await pool.query('DELETE FROM transacoes_financeiras WHERE user_id = ? AND id = ?', [userId, entities.transacao_id]);
+    const ids = Array.isArray(entities.transacao_ids) && entities.transacao_ids.length ? entities.transacao_ids : entities.transacao_id ? [entities.transacao_id] : [];
+    if (!ids.length) return 'Esse lançamento não pode ser desfeito automaticamente.';
+    const [result] = await pool.query(`DELETE FROM transacoes_financeiras WHERE user_id = ? AND id IN (${ids.map(() => '?').join(',')})`, [userId, ...ids]);
     await pool.query("UPDATE financeiro_ia_logs SET status = 'desfeito', updated_at = ? WHERE id = ?", [now(), last.id]);
     if (!result.affectedRows) return 'Esse lançamento já havia sido removido.';
+    if (ids.length > 1) return `↩️ Desfeito: ${result.affectedRows} lançamentos dessa mensagem foram removidos.`;
     return `↩️ Desfeito: *${entities.description}* (${formatBRL(entities.value)}) foi removido.`;
   }
 

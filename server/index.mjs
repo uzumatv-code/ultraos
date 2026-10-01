@@ -5820,10 +5820,11 @@ async function handleFinancialAiWebhook(req, res) {
     if (!classicTopic && process.env.OPENAI_API_KEY) {
       try {
         const brain = await agentBrain.converse({ authorized, phone, message, canWrite: canWriteSystem(authorized.permissao) });
-        const expense = [...brain.actions].reverse().find((item) => item.type === 'despesa');
+        const expenses = brain.actions.filter((item) => item.type === 'despesa');
+        const expense = expenses[expenses.length - 1];
         await logFinancialAi({
           user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem,
-          intencao: 'agente', entidades: expense ? { transacao_id: expense.id, description: expense.description, value: expense.value } : { acoes: brain.actions },
+          intencao: 'agente', entidades: expense ? { transacao_id: expense.id, transacao_ids: expenses.map((item) => item.id), description: expense.description, value: expense.value } : { acoes: brain.actions },
           status: expense ? 'lancamento_rapido' : 'agente', resposta: brain.reply,
         });
         await sendFinancialAiReply(authorized.user_id, phone, brain.reply);
