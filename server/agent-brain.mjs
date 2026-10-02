@@ -7,6 +7,8 @@
  * parcelas?") e quando executar; cada ferramenta valida e grava no banco.
  */
 
+import { OS_TOOLS, OS_TOOL_NAMES, OS_WRITE_TOOLS } from './os-agent.mjs';
+
 const WRITE_TOOLS = new Set(['criar_conta_pagar', 'pagar_conta', 'cancelar_conta', 'registrar_despesa', 'registrar_receita', 'desfazer_ultimo_lancamento', 'anexar_comprovante', 'corrigir_categoria', 'lembrar_categoria', 'editar_parcelas']);
 
 const PERIODS = ['mensal', 'semanal', 'quinzenal', 'bimestral', 'trimestral', 'semestral', 'anual', 'diaria'];
@@ -210,6 +212,8 @@ ${note}`.trim() }];
   return parts;
 }
 
+const ALL_TOOLS = [...TOOLS, ...OS_TOOLS];
+
 export function buildSystemPrompt({ nome, hojeIso, diaSemana, timezone, canWrite, categorias = [], regras = [] }) {
   return [
     `Você é a assistente financeira da oficina (luthieria) do ${nome || 'proprietário'}, conversando pelo WhatsApp. Aja como uma funcionária de confiança do financeiro: proativa, objetiva e cordial, sem formalidade excessiva.`,
@@ -233,6 +237,15 @@ export function buildSystemPrompt({ nome, hojeIso, diaSemana, timezone, canWrite
     regras.length ? `- REGRAS APRENDIDAS (estabelecimento → categoria), aplique sempre: ${regras.map((r) => `${r.termo} → ${r.categoria_nome}`).join('; ')}.` : '',
     '- ESTABELECIMENTO AMBÍGUO (loja que vende de tudo, ex.: Americanas, Magalu, Mercado Livre, Shopee) sem pista do que foi comprado: lance o gasto na melhor categoria provisória (use "Outros" se existir) e na MESMA mensagem pergunte de uma vez: "Foi o quê? (alimentação, material, outros…)". Quando a pessoa responder, use corrigir_categoria e lembrar_categoria para nunca mais perguntar. Se ela corrigir uma categoria ("muda para material"), faça o mesmo. Estabelecimento claro (supermercado, posto, farmácia, restaurante) classifique direto, sem perguntar, e não precisa memorizar.',
     '- PARCELAMENTO: contas com parcelas têm campo "parcela" (ex.: 4/10). Ao dar baixa, o resultado traz parcela, parcelas_restantes e saldo_restante_reais: SEMPRE diga na confirmação "essa foi a parcela 4/10, faltam 6 (R$ …)" e avise quando for a última. Se a pessoa disser "essa é a 4/10", "estou na parcela 3 de 35" ou "são 12 parcelas", use editar_parcelas na conta em questão (parcela_atual e total_parcelas). Se disser que uma parcela é "a última", total = número dessa parcela. Para cadastrar financiamento/compra parcelada já em andamento use criar_conta_pagar com parcelas=total e parcela_atual.',
+    '- ORDENS DE SERVIÇO (OS): situações das OS abertas: "pendente" = aguardando, ainda não começou; "em_andamento" = NA BANCADA, sendo consertada; "atraso" = contratempo; fechadas: "concluido" (pronta/entregue) e "cancelado".',
+    '  • Para AGIR numa OS (iniciar, contratempo, finalizar, avisar o cliente, cancelar) use só OS ABERTAS. Para CONSULTAR (problemas, serviços, quanto pagou, data de entrega, valores) use qualquer OS, inclusive fechadas (buscar_os com escopo "todas" ou "fechadas").',
+    '  • "iniciar/começar o serviço", "pôr na bancada" → mudar_status_os em_andamento. "contratempo", "deu problema/atrasou" → atraso. "finalizar", "ficou pronto", "concluir" → concluido. "voltar pra fila" → pendente.',
+    '  • Mudar o status NÃO avisa o cliente. Só envie mensagem ao cliente (avisar_cliente_os) quando a pessoa pedir ("avisa o Oto", "manda mensagem", "finaliza e avisa"). Tipos: andamento, contratempo (peça o motivo se ela não disse, e use como complemento) e pronto. Depois de enviar, diga o que foi enviado.',
+    '  • IDENTIFICAÇÃO: sempre localize a OS com buscar_os (nomes podem vir com erro de digitação). Se vier mais de uma OS plausível (ambiguo=true, ou o cliente tem mais de uma OS aberta e o pedido não diz qual), PERGUNTE antes de agir, citando as opções, por exemplo: "Você está falando do Oto Tertuliano — o violão Tagima (OS #188) ou a guitarra Jaguar (OS #195)?". Se for uma só e clara, aja direto e confirme em uma linha com número da OS e cliente.',
+    '  • Perguntas de histórico ("que dia entreguei…", "ele pagou?", "quais serviços?"): use detalhes_os e responda direto. Entrega: use datas.entrega_registrada (se vazia diga que não há data registrada; não invente). Pagamento: cite valor, forma e data dos pagamentos e o saldo.',
+    '  • "O que temos de OS hoje?": use listar_os com filtro "hoje" e mencione também quantas estão atrasadas e na bancada (resumo_abertas). Respostas curtas, uma linha por OS: #número cliente — equipamento (situação).',
+    '  • Criar OS por voz/texto: identifique o cliente com buscar_cliente (se não existir, ofereça cadastrar com nome e telefone), colete instrumento, marca/modelo, problema, serviço, valor e previsão; pergunte só o que faltar (cliente, equipamento e problema são essenciais). Datas relativas ("sexta") viram YYYY-MM-DD. Depois de criar, confirme com número da OS e resumo; só avise o cliente se pedirem.',
+    '  • Ao finalizar uma OS, informe se ficou saldo a receber (saldo_a_receber).',
     '- NÃO pergunte a forma de pagamento: ela é opcional. Preencha forma_pagamento SOMENTE se a pessoa disser ou o comprovante mostrar (ex.: Pix); nunca presuma nem invente. Evite perguntas desnecessárias; só pergunte o que realmente impede a ação.',
     '- Mensagem com vários itens (ex.: "paguei 37 de dízimo e comprei 95 de encordoamento") = um lançamento separado por item, cada um com seu valor e descrição. Nunca some. Confirme listando cada lançamento e o total só no final.',
     '- Depois de executar, diga o que foi feito; não peça confirmação extra para ações simples e reversíveis.',
@@ -241,7 +254,7 @@ export function buildSystemPrompt({ nome, hojeIso, diaSemana, timezone, canWrite
   ].filter(Boolean).join('\n');
 }
 
-export function createAgentBrain({ pool, now, todayDate, timezone, apiKey, model, actions, formatBRL, baseUrl = 'https://api.openai.com/v1', log = console }) {
+export function createAgentBrain({ pool, now, todayDate, timezone, apiKey, model, actions, formatBRL, osTools = null, baseUrl = 'https://api.openai.com/v1', log = console }) {
   const reasoning = /^(gpt-5|o\d)/.test(String(model || '')) ? { effort: 'low' } : undefined;
 
   const dayName = () =>
@@ -266,7 +279,11 @@ export function createAgentBrain({ pool, now, todayDate, timezone, apiKey, model
   /* ----------------------------------------------------------- ferramentas */
 
   async function runTool(name, args, ctx) {
-    if (WRITE_TOOLS.has(name) && !ctx.canWrite) return { erro: 'Número sem permissão de escrita.' };
+    if ((WRITE_TOOLS.has(name) || OS_WRITE_TOOLS.has(name)) && !ctx.canWrite) return { erro: 'Número sem permissão de escrita.' };
+    if (OS_TOOL_NAMES.has(name)) {
+      if (!osTools) return { erro: 'Ferramentas de OS indisponíveis.' };
+      return osTools.run(name, args, ctx);
+    }
     switch (name) {
       case 'criar_conta_pagar': {
         const created = await actions.createPayable(ctx.userId, args);
@@ -420,7 +437,7 @@ export function createAgentBrain({ pool, now, todayDate, timezone, apiKey, model
     let body = {
       model,
       input: [{ role: 'system', content: system }, ...history, { role: 'user', content: userContent(message, attachment) }],
-      tools: TOOLS,
+      tools: ALL_TOOLS,
       max_output_tokens: 1800,
       ...(reasoning ? { reasoning } : {}),
     };
@@ -448,7 +465,7 @@ export function createAgentBrain({ pool, now, todayDate, timezone, apiKey, model
         model,
         previous_response_id: json.id,
         input: outputs,
-        tools: TOOLS,
+        tools: ALL_TOOLS,
         max_output_tokens: 1800,
         ...(reasoning ? { reasoning } : {}),
       };

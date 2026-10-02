@@ -14,6 +14,7 @@ import { addMonthsClamped, formatDateOnly, installmentNumber, occurrenceDate, oc
 import { createFinanceAgent, inferExpenseCategory, formatBRL } from './finance-agent.mjs';
 import { createAgentBrain } from './agent-brain.mjs';
 import { createReceiptStore } from './receipts.mjs';
+import { createOsTools } from './os-agent.mjs';
 import { buildDps, cancelNfse, emitDps, parsePfx } from './nfse-nacional.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -6234,7 +6235,35 @@ async function sendReceiptToWhatsApp(userId, phone, receiptId) {
   return { ok: true, enviado: row.nome_arquivo };
 }
 
+async function sendCustomerMessage(userId, phone, message, { templateType = null, orderId = null } = {}) {
+  const req = { auth: { accountId: userId, userId } };
+  const logId = await createWhatsAppMessageLog(req, { phone, message, templateType, orderId });
+  try {
+    await ensureWhatsAppConnected(userId);
+    const config = await loadWhatsAppConfig(userId);
+    const provider = await sendEvaluationViaEvolution(phone, message, config);
+    await updateWhatsAppMessageLog(logId, { status: 'enviado', provider_message_id: provider.providerMessageId, erro: null });
+    return { ok: true, logId };
+  } catch (error) {
+    await updateWhatsAppMessageLog(logId, { status: 'erro', erro: error.message }).catch(() => {});
+    throw error;
+  }
+}
+
+const osTools = createOsTools({
+  pool,
+  uuid,
+  now,
+  todayDate,
+  money,
+  syncReceivable: (conn, userId, orderId) => syncReceivableForOrder(conn, userId, orderId),
+  sendCustomerMessage,
+  afterOrderCreated: (conn, userId, order) => markRemarketingConversion(conn, userId, order),
+  validatePhone,
+});
+
 const agentBrain = createAgentBrain({
+  osTools,
   pool,
   now,
   todayDate,
@@ -6434,7 +6463,7 @@ async function handleFinancialAiWebhook(req, res) {
     }
 
     // Conversa natural com ferramentas; ordens/clientes e confirmações seguem o fluxo clássico abaixo.
-    const classicTopic = /\b(os|ordem|ordens|cliente|clientes)\b/i.test(message) || /^\s*confirmar\b/i.test(message);
+    const classicTopic = /^\s*confirmar\b/i.test(message);
     if ((!classicTopic || attachment) && process.env.OPENAI_API_KEY) {
       try {
         const brain = await agentBrain.converse({ authorized, phone, message, canWrite: canWriteSystem(authorized.permissao), attachment });

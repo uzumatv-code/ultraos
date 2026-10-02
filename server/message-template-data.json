@@ -1,0 +1,176 @@
+[
+  {
+    "type": "nova_ordem",
+    "name": "Nova Ordem Criada",
+    "description": "Mensagem enviada quando uma nova ordem é criada",
+    "variables": [
+      "{cliente}",
+      "{instrumento}",
+      "{marca}",
+      "{modelo}",
+      "{numero}",
+      "{acessorios}",
+      "{servicos}",
+      "{problemas}",
+      "{valor}",
+      "{forma_pagamento}",
+      "{data_criacao}",
+      "{previsao_entrega}",
+      "{observacoes}",
+      "{nome_empresa}",
+      "{telefone_empresa}",
+      "{endereco_empresa}",
+      "{horario_funcionamento}",
+      "{dias_funcionamento}",
+      "{termos_de_uso}"
+    ],
+    "defaultContent": "Olá {cliente}! 😊\n\nRecebemos seu {instrumento} para reparo/manutenção.\n\n📋 *ORDEM DE SERVIÇO #{numero}*\n📅 Data de Entrada: {data_criacao}\n🎸 Instrumento: {instrumento} {marca} {modelo}\n📦 Acessórios: {acessorios}\n⚙️ Serviços: {servicos}\n🔧 Problemas Reportados: {problemas}\n💰 Valor: {valor}\n💳 Forma de Pagamento: {forma_pagamento}\n📅 Previsão de Entrega: {previsao_entrega}\n\n{observacoes}\n\nManteremos você informado sobre o andamento!\n\n📍 {nome_empresa}\n📞 {telefone_empresa}\n⏰ {horario_funcionamento}\n📅 {dias_funcionamento}"
+  },
+  {
+    "type": "servico_finalizado",
+    "name": "Serviço Finalizado",
+    "description": "Mensagem enviada quando um serviço é finalizado",
+    "variables": [
+      "{cliente}",
+      "{instrumento}",
+      "{numero}",
+      "{nome_empresa}",
+      "{cnpj}",
+      "{horario_funcionamento}",
+      "{dias_funcionamento}",
+      "{termos_de_uso}"
+    ],
+    "defaultContent": "Olá {cliente}, seu {instrumento} ficou pronto! 🎸\n\nPode retirar entre:\n⏰ {horario_funcionamento}\n📅 {dias_funcionamento}\n\n📍 {nome_empresa}\nCNPJ: {cnpj}\n\nOrdem de Serviço: #{numero}"
+  },
+  {
+    "type": "servico_andamento",
+    "name": "Serviço em Andamento",
+    "description": "Mensagem informando que o serviço está em andamento",
+    "variables": [
+      "{cliente}",
+      "{instrumento}",
+      "{numero}",
+      "{nome_empresa}",
+      "{horario_funcionamento}",
+      "{dias_funcionamento}",
+      "{termos_de_uso}"
+    ],
+    "defaultContent": "Olá {cliente}, informamos que seu {instrumento} está em andamento! 🔧\n\n📋 Ordem de Serviço: #{numero}\n⚙️ Nossos técnicos estão trabalhando no seu instrumento\n\n📍 {nome_empresa}\n📞 Entre em contato se tiver dúvidas\n\nHorário de atendimento:\n⏰ {horario_funcionamento}\n📅 {dias_funcionamento}"
+  },
+  {
+    "type": "servico_atraso",
+    "name": "Contratempo/Atraso",
+    "description": "Mensagem informando sobre atrasos no serviço",
+    "variables": [
+      "{cliente}",
+      "{instrumento}",
+      "{numero}",
+      "{nome_empresa}",
+      "{horario_funcionamento}",
+      "{dias_funcionamento}",
+      "{termos_de_uso}"
+    ],
+    "defaultContent": "Olá {cliente}, informamos sobre um contratempo no seu {instrumento} ⏰\n\n📋 Ordem de Serviço: #{numero}\n⚠️ Houve um pequeno atraso no cronograma\n\nEntraremos em contato em breve com nova previsão de entrega.\n\n📍 {nome_empresa}\n📞 Entre em contato se tiver dúvidas\n\nHorário de atendimento:\n⏰ {horario_funcionamento}\n📅 {dias_funcionamento}\n\nPedimos desculpas pelo inconveniente."
+  },
+  {
+    "type": "lembrete_retirada",
+    "name": "Lembrete de Retirada",
+    "description": "Lembrete para clientes retirarem instrumentos prontos",
+    "variables": [
+      "{cliente}",
+      "{instrumento}",
+      "{numero}",
+      "{nome_empresa}",
+      "{horario_funcionamento}",
+      "{dias_funcionamento}",
+      "{dias_prontos}",
+      "{termos_de_uso}"
+    ],
+    "defaultContent": "Olá {cliente}! 👋\n\nLembramos que seu {instrumento} está pronto há {dias_prontos} dias para retirada.\n\n📋 Ordem de Serviço: #{numero}\n⏰ {horario_funcionamento}\n📅 {dias_funcionamento}\n\n📍 {nome_empresa}\n\nAguardamos você! 😊"
+  },
+  {
+    "type": "cobranca_pagamento",
+    "name": "Cobrança/Pagamento",
+    "description": "Mensagem para cobrança ou confirmação de pagamento",
+    "variables": [
+      "{cliente}",
+      "{instrumento}",
+      "{numero}",
+      "{valor}",
+      "{valor_pendente}",
+      "{forma_pagamento}",
+      "{nome_empresa}",
+      "{termos_de_uso}"
+    ],
+    "defaultContent": "Olá {cliente}! 💳\n\nReferente ao seu {instrumento}:\n\n📋 Ordem de Serviço: #{numero}\n💰 Valor total: {valor}\n💵 Pendente: {valor_pendente}\n\nPara finalizar, precisamos acertar o pagamento.\n\n📍 {nome_empresa}\n📞 Entre em contato para mais detalhes\n\nObrigado! 😊"
+  },
+  {
+    "type": "lembrete_manutencao",
+    "name": "Lembrete Manutenção Preventiva",
+    "description": "Lembrete automático para manutenção preventiva (enviado após 6 meses)",
+    "variables": [
+      "{cliente}",
+      "{instrumento}",
+      "{ultimo_servico}",
+      "{meses_sem_manutencao}",
+      "{nome_empresa}",
+      "{telefone_empresa}",
+      "{horario_funcionamento}",
+      "{dias_funcionamento}",
+      "{termos_de_uso}"
+    ],
+    "defaultContent": "Olá {cliente}! 👋\n\nEsperamos que você e seu {instrumento} estejam bem! 🎸\n\nNotamos que já faz {meses_sem_manutencao} meses desde sua última manutenção ({ultimo_servico}).\n\n🔧 Que tal agendar uma revisão preventiva?\n- Troca de cordas\n- Regulagem\n- Limpeza e hidratação\n- Verificação geral\n\nUma manutenção regular mantém seu instrumento sempre em perfeito estado!\n\n📍 {nome_empresa}\n📞 {telefone_empresa}\n⏰ {horario_funcionamento}\n📅 {dias_funcionamento}\n\nEntre em contato para agendar! 😊"
+  },
+  {
+    "type": "orcamento_aprovado",
+    "name": "Orçamento Aprovado",
+    "description": "Confirmação quando cliente aprova o orçamento",
+    "variables": [
+      "{cliente}",
+      "{instrumento}",
+      "{numero}",
+      "{servicos}",
+      "{valor}",
+      "{previsao_entrega}",
+      "{nome_empresa}",
+      "{telefone_empresa}",
+      "{termos_de_uso}"
+    ],
+    "defaultContent": "Olá {cliente}! ✅\n\nOrçamento aprovado para seu {instrumento}!\n\n📋 Ordem de Serviço: #{numero}\n⚙️ Serviços autorizados: {servicos}\n💰 Valor aprovado: {valor}\n📅 Nova previsão: {previsao_entrega}\n\nIniciaremos os trabalhos imediatamente!\n\n📍 {nome_empresa}\n📞 {telefone_empresa}"
+  },
+  {
+    "type": "diagnostico_concluido",
+    "name": "Diagnóstico Concluído",
+    "description": "Mensagem com resultado do diagnóstico e orçamento",
+    "variables": [
+      "{cliente}",
+      "{instrumento}",
+      "{numero}",
+      "{problemas_encontrados}",
+      "{servicos_necessarios}",
+      "{valor_orcamento}",
+      "{nome_empresa}",
+      "{telefone_empresa}",
+      "{termos_de_uso}"
+    ],
+    "defaultContent": "Olá {cliente}! 🔍\n\nDiagnóstico concluído para seu {instrumento}:\n\n📋 Ordem de Serviço: #{numero}\n🔧 Problemas encontrados: {problemas_encontrados}\n⚙️ Serviços necessários: {servicos_necessarios}\n💰 Orçamento: {valor_orcamento}\n\nAguardamos sua aprovação para prosseguir!\n\n📍 {nome_empresa}\n📞 {telefone_empresa}"
+  },
+  {
+    "type": "avaliacao_google_instagram",
+    "name": "Solicitação de Avaliação e Instagram",
+    "description": "Pedido de avaliação no Google e convite para seguir no Instagram (enviado 7 dias após conclusão)",
+    "variables": [
+      "{cliente}",
+      "{instrumento}",
+      "{marca}",
+      "{modelo}",
+      "{numero}",
+      "{nome_empresa}",
+      "{telefone_empresa}",
+      "{google_review_link}",
+      "{instagram_handle}",
+      "{termos_de_uso}"
+    ],
+    "defaultContent": "Olá {cliente}! 😊\n\nEsperamos que esteja satisfeito(a) com o reparo do seu {instrumento} {marca} {modelo}!\n\n🌟 *SUA OPINIÃO É MUITO IMPORTANTE*\n\nPoderia nos ajudar avaliando nosso trabalho no Google? Sua avaliação ajuda outros músicos a nos conhecerem!\n\n👍 Link para avaliar: {google_review_link}\n\n📱 *SIGA-NOS NO INSTAGRAM*\nAcompanhe dicas de manutenção, novos projetos e promoções: {instagram_handle}\n\nMuito obrigado pela confiança! 🎸\n\n📍 {nome_empresa}\n📞 {telefone_empresa}\n\n#Luthieria #ReparoInstrumentos #MúsicaBrasília"
+  }
+]

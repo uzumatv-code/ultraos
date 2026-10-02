@@ -11,6 +11,7 @@
     "test:documents": "node --test server/document-customization.test.mjs",
     "test:payables": "node --test server/payable-recurrence.test.mjs",
     "migrate:mysql": "node scripts/migrate-mysql.mjs",
+    "sync:templates": "node scripts/export-message-templates.mjs",
     "import:supabase": "node scripts/import-supabase.mjs",
     "preview": "vite preview",
     "start": "node server/index.mjs"
