@@ -18,12 +18,11 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { NotificacoesModal } from './NotificacoesModal';
+import { NotificationCenter, notificationTotal, type AlertSummary } from './NotificationCenter';
 import { supabase } from '../lib/supabase';
 import { apiRequest } from '../lib/api-client';
 import { toast } from './ToastCustom';
 import { loadBrandLogoDataUrl } from '../utils/tenant-customization-service';
-import type { ContaPagar, OrdemServico } from '../types/database';
 import { type Permission, useAuth } from '../contexts/AuthContext';
 import { ThemeToggle } from './ThemeToggle';
 
@@ -89,19 +88,9 @@ const mobileTabs: NavItem[] = [
   { path: '/conversas', icon: MessageCircle, label: 'Conversas' },
 ];
 
-type AlertSummary = {
-  entregas_hoje: number;
-  atrasadas: number;
-  contas_hoje: number;
-  contas_vencidas: number;
-  mensagens_nao_lidas: number;
-  ordens: OrdemServico[];
-  contas: ContaPagar[];
-};
-
 const emptyAlerts: AlertSummary = {
   entregas_hoje: 0, atrasadas: 0, contas_hoje: 0, contas_vencidas: 0,
-  mensagens_nao_lidas: 0, ordens: [], contas: [],
+  mensagens_nao_lidas: 0, conversas_nao_lidas: 0, ordens: [], contas: [],
 };
 
 function isItemActive(pathname: string, path: string) {
@@ -243,7 +232,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
   }
 
-  const alertCount = alerts.atrasadas + alerts.contas_vencidas + alerts.entregas_hoje + alerts.contas_hoje;
+  const alertCount = notificationTotal(alerts);
   const initial = profile.name.trim().charAt(0).toUpperCase() || 'U';
 
   const sidebar = (compact: boolean) => (
@@ -404,9 +393,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 initial={{ opacity: 0, y: 6 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: 6 }}
-                className="absolute right-0 mt-2 w-[min(22rem,calc(100vw-1.5rem))] overflow-hidden rounded-lg border border-hairline bg-surface-raised shadow-glass-lg"
+                className="fixed inset-x-3 top-[4.25rem] z-50 overflow-hidden rounded-2xl border border-hairline bg-surface-raised shadow-glass-lg sm:absolute sm:inset-x-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-[28rem]"
               >
-                <NotificacoesModal ordens={alerts.ordens} contas={alerts.contas} onClose={() => setNotificationsOpen(false)} />
+                <NotificationCenter summary={alerts} onClose={() => setNotificationsOpen(false)} onRefresh={loadAlerts} />
               </motion.div>
             )}
           </AnimatePresence>

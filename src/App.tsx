@@ -332,32 +332,26 @@ function App() {
       </Routes>
       </Suspense>
       <Toaster
-        position="top-right"
+        position="bottom-right"
+        containerClassName="!bottom-[calc(5.25rem+env(safe-area-inset-bottom))] !right-3 lg:!bottom-6 lg:!right-6"
+        gutter={10}
         toastOptions={{
           duration: 4000,
           style: {
-            borderRadius: 'var(--ui-radius-md)',
+            borderRadius: 'var(--ui-radius-lg)',
             padding: '12px 14px',
             fontSize: '14px',
-            fontWeight: '500',
-            background: 'rgb(var(--ui-surface-2))',
+            fontWeight: '600',
+            maxWidth: '25rem',
+            background: 'rgb(var(--ui-surface-2) / 0.96)',
             color: 'rgb(var(--ui-text))',
-            border: '1px solid rgb(var(--ui-border))',
+            border: '1px solid rgb(var(--ui-border-strong))',
             boxShadow: 'var(--ui-shadow-lg)',
+            backdropFilter: 'blur(14px)',
           },
-          success: {
-            style: { borderLeft: '3px solid rgb(var(--ui-success))' },
-            iconTheme: { primary: 'rgb(var(--ui-success))', secondary: 'rgb(var(--ui-surface-2))' },
-          },
-          error: {
-            duration: 5000,
-            style: { borderLeft: '3px solid rgb(var(--ui-danger))' },
-            iconTheme: { primary: 'rgb(var(--ui-danger))', secondary: 'rgb(var(--ui-surface-2))' },
-          },
-          loading: {
-            style: { borderLeft: '3px solid rgb(var(--ui-brand))' },
-            iconTheme: { primary: 'rgb(var(--ui-brand))', secondary: 'rgb(var(--ui-surface-2))' },
-          },
+          success: { iconTheme: { primary: 'rgb(var(--ui-success))', secondary: 'rgb(var(--ui-surface-2))' } },
+          error: { duration: 6000, iconTheme: { primary: 'rgb(var(--ui-danger))', secondary: 'rgb(var(--ui-surface-2))' } },
+          loading: { iconTheme: { primary: 'rgb(var(--ui-brand))', secondary: 'rgb(var(--ui-surface-2))' } },
         }}
       />
       </BrowserRouter>

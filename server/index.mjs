@@ -2063,14 +2063,14 @@ app.get('/api/notificacoes/resumo', requireAuth, async (req, res) => {
     const countsPromise = pool.query(
       `SELECT
          SUM(CASE WHEN LEFT(data_previsao,10) = ? THEN 1 ELSE 0 END) AS entregas_hoje,
-         SUM(CASE WHEN status = 'atraso' OR LEFT(data_previsao,10) < ? THEN 1 ELSE 0 END) AS atrasadas
+         SUM(CASE WHEN LEFT(data_previsao,10) < ? THEN 1 ELSE 0 END) AS atrasadas
        FROM ordens_servico
       WHERE user_id = ? AND status IN ('pendente','em_andamento','atraso')`,
       [today, today, userId],
     );
 
     const messagesPromise = pool.query(
-      `SELECT COALESCE(SUM(nao_lidas),0) AS total FROM whatsapp_conversas WHERE user_id = ? AND status = 'aberta'`,
+      `SELECT COALESCE(SUM(nao_lidas),0) AS total, COALESCE(SUM(CASE WHEN nao_lidas > 0 THEN 1 ELSE 0 END),0) AS conversas FROM whatsapp_conversas WHERE user_id = ? AND status = 'aberta'`,
       [userId],
     );
 
@@ -2127,6 +2127,7 @@ app.get('/api/notificacoes/resumo', requireAuth, async (req, res) => {
         contas_hoje: Number(payableCounts.contas_hoje || 0),
         contas_vencidas: Number(payableCounts.contas_vencidas || 0),
         mensagens_nao_lidas: Number(messagesResult[0][0]?.total || 0),
+        conversas_nao_lidas: Number(messagesResult[0][0]?.conversas || 0),
         ordens,
         contas,
       },

@@ -113,7 +113,7 @@ export function ContasPagar() {
       if (contasResult.error) throw contasResult.error;
       setContas((contasResult.data as ContaPagar[]) || []);
       setCategorias((categoriasResult.data as CategoriaFinanceira[]) || []);
-      apiClient<Record<string, number>>('/api/financeiro/comprovantes/resumo').then(setAnexos).catch(() => undefined);
+      apiClient<Record<string, number>>('/api/financeiro/comprovantes/resumo').then((counts) => setAnexos(counts || {})).catch(() => undefined);
     } catch (error) {
       console.error('Erro ao carregar contas a pagar:', error);
       toast.error('Não foi possível carregar as contas.');
