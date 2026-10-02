@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { apiRequest } from '../lib/api-client';
 import { toast } from '../components/ToastCustom';
+import { useLiveRefresh } from '../lib/live-events';
 import { supabase } from '../lib/supabase';
 import { Badge, EmptyState, Segmented, Skeleton, UIButton } from '../components/ui';
 import type { Cliente, WhatsAppConversa, WhatsAppMensagem } from '../types/database';
@@ -259,6 +260,11 @@ export function Conversas() {
     const timer = window.setInterval(() => { if (!document.hidden) void loadConversations(); }, 8000);
     return () => window.clearInterval(timer);
   }, [loadConversations]);
+
+  useLiveRefresh(['conversas'], () => {
+    void loadConversations();
+    if (selectedId) void loadMessages(selectedId, true);
+  });
 
   useEffect(() => {
     supabase.from('clientes').select('*').order('nome').then(({ data }) => setClients((data as Cliente[]) || []));

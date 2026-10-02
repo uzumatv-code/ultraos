@@ -15,6 +15,7 @@ import { createFinanceAgent, inferExpenseCategory, formatBRL } from './finance-a
 import { createAgentBrain } from './agent-brain.mjs';
 import { createReceiptStore } from './receipts.mjs';
 import { createOsTools } from './os-agent.mjs';
+import { createRealtimeHub, instrumentDatabase } from './realtime.mjs';
 import { buildDps, cancelNfse, emitDps, parsePfx } from './nfse-nacional.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -114,6 +115,9 @@ const pool = mysql.createPool({
   decimalNumbers: true,
   timezone: 'Z',
 });
+
+const realtimeHub = createRealtimeHub();
+instrumentDatabase(pool, realtimeHub);
 
 const allowedTables = new Set([
   'clientes',
@@ -2092,6 +2096,23 @@ app.get('/api/dashboard/resumo', requireAuth, async (req, res) => {
  * pelo browser. Aqui as contagens saem agregadas do banco e só as linhas
  * realmente exibidas no painel de notificações trafegam.
  */
+/** Canal de atualização em tempo real (SSE): avisa "o assunto X mudou" para as telas abertas. */
+app.get('/api/eventos', requireAuth, (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.write('retry: 3000\n\nevent: ready\ndata: {}\n\n');
+  const unsubscribe = realtimeHub.subscribe(req.auth.accountId, res);
+  const heartbeat = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* fechado */ } }, 20_000);
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+  });
+});
+
 app.get('/api/notificacoes/resumo', requireAuth, async (req, res) => {
   try {
     const userId = req.auth.accountId;

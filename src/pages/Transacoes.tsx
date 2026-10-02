@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useLiveRefresh } from '../lib/live-events';
 import { motion } from 'framer-motion';
 import { DollarSign, Search, Plus, Pencil, Trash2, ChevronLeft, ChevronRight, Upload, Filter } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -31,6 +32,8 @@ export function Transacoes() {
   useEffect(() => {
     buscarDados();
   }, [pagina, busca, tipoFiltro, categoriaFiltro]);
+
+  useLiveRefresh(['financeiro'], buscarDados);
 
   async function buscarDados() {
     try {

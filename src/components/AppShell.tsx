@@ -22,6 +22,7 @@ import { NotificationCenter, notificationTotal, type AlertSummary } from './Noti
 import { supabase } from '../lib/supabase';
 import { apiRequest } from '../lib/api-client';
 import { toast } from './ToastCustom';
+import { useLiveRefresh } from '../lib/live-events';
 import { loadBrandLogoDataUrl } from '../utils/tenant-customization-service';
 import { type Permission, useAuth } from '../contexts/AuthContext';
 import { ThemeToggle } from './ThemeToggle';
@@ -159,6 +160,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       // Alertas são complementares: falhar aqui não pode travar a navegação.
     }
   }, []);
+
+  useLiveRefresh(['ordens', 'financeiro', 'conversas'], loadAlerts);
 
   const loadBranding = useCallback(async () => {
     try {

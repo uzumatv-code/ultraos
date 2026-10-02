@@ -7,6 +7,8 @@ import {
 import { apiRequest as apiClient } from '../lib/api-client';
 import { apiRequest, supabase } from '../lib/supabase';
 import { toast } from '../components/ToastCustom';
+import { useLiveRefresh } from '../lib/live-events';
+import { LiveBadge } from '../components/LiveBadge';
 import { alerts } from '../utils/alerts';
 import { ContaPagarModal } from '../components/ContaPagarModal';
 import { CustomCalendarBills } from '../components/CustomCalendarBills';
@@ -125,6 +127,8 @@ export function ContasPagar() {
   useEffect(() => {
     void carregar();
   }, [carregar]);
+
+  useLiveRefresh(['financeiro'], carregar);
 
   useEffect(() => {
     setPagina(0);
@@ -377,6 +381,7 @@ export function ContasPagar() {
         description="Vencimentos, atrasos e baixas em um só lugar. Cada pagamento vira despesa no caixa automaticamente."
         actions={
           <>
+            <LiveBadge />
             <div className="ui-month-nav" role="group" aria-label="Mês de referência">
               <button type="button" onClick={() => mudarMes(-1)} aria-label="Mês anterior"><ChevronLeft className="h-4 w-4" /></button>
               <span>{mesLabel}</span>

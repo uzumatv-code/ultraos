@@ -10,6 +10,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useLiveRefresh } from '../lib/live-events';
 import {
   AlertOctagon, ArrowRight, CalendarDays, CheckCircle2, ChevronDown, Clock3,
   ListChecks, MessageCircle, Plus, RefreshCw, TimerReset, TrendingUp, Wallet,
@@ -103,6 +104,8 @@ export function Dashboard() {
   useEffect(() => {
     void loadSummary();
   }, [loadSummary]);
+
+  useLiveRefresh(['ordens', 'financeiro'], () => void loadSummary(true));
 
   async function toggleCalendar() {
     const next = !showCalendar;

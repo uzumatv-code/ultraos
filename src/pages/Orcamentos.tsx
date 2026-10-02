@@ -5,6 +5,7 @@ import {
   CalendarCheck, CheckCircle2, ClipboardCheck, Clock, Download, FileText, Hourglass, Pencil, Plus, RotateCcw, Search, Send, ThumbsDown, Trash2, TrendingUp, X,
 } from 'lucide-react';
 import { apiRequest } from '../lib/api-client';
+import { useLiveRefresh } from '../lib/live-events';
 import { supabase } from '../lib/supabase';
 import { toast } from '../components/ToastCustom';
 import { alerts } from '../utils/alerts';
@@ -60,6 +61,8 @@ export function Orcamentos() {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  useLiveRefresh(['ordens'], load);
 
   const stats = useMemo(() => {
     const open = quotes.filter(isOpen);

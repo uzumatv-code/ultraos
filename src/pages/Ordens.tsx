@@ -20,6 +20,7 @@ import {
   Send, Star, Trash2, Wrench, X,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { useLiveRefresh } from '../lib/live-events';
 import { supabase } from '../lib/supabase';
 import { apiRequest } from '../lib/api-client';
 import { toast } from '../components/ToastCustom';
@@ -106,8 +107,8 @@ export function Ordens() {
 
   const isBoard = state.view === 'bancada';
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const params = new URLSearchParams({
         q: state.q,
@@ -129,6 +130,8 @@ export function Ordens() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useLiveRefresh(['ordens'], () => load(true));
 
   // Busca com atraso para não disparar uma consulta por tecla digitada.
   useEffect(() => {

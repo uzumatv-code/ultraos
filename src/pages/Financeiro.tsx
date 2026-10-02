@@ -19,6 +19,8 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useLiveRefresh } from '../lib/live-events';
+import { LiveBadge } from '../components/LiveBadge';
 import {
   ArcElement, BarElement, CategoryScale, Chart as ChartJS, Filler, Legend,
   LineElement, LinearScale, PointElement, Tooltip,
@@ -129,8 +131,8 @@ export function Financeiro() {
   const [categoriaOpen, setCategoriaOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
 
-  const loadResumo = useCallback(async () => {
-    setLoading(true);
+  const loadResumo = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       setResumo(await apiRequest<Resumo>(`/api/financeiro/resumo?mes=${month}`));
     } catch (error) {
@@ -140,8 +142,8 @@ export function Financeiro() {
     }
   }, [month]);
 
-  const loadWallet = useCallback(async () => {
-    setWalletLoading(true);
+  const loadWallet = useCallback(async (silent = false) => {
+    if (!silent) setWalletLoading(true);
     try {
       const [receber, pagar] = await Promise.all([
         apiRequest<{ rows: Receivable[] }>('/api/financeiro/carteira?tipo=receber&limit=100'),
@@ -175,8 +177,11 @@ export function Financeiro() {
   }, [loadWallet, loadCategorias]);
 
   async function refreshAll() {
-    await Promise.all([loadResumo(), loadWallet()]);
+    await Promise.all([loadResumo(true), loadWallet(true)]);
   }
+
+  // Qualquer mudança no financeiro (outra tela, WhatsApp, agente de IA…) atualiza esta tela sozinha.
+  useLiveRefresh(['financeiro'], () => Promise.all([loadResumo(true), loadWallet(true)]));
 
   async function receberConta(conta: Receivable) {
     if (!conta.ordem_servico_id) {
@@ -284,6 +289,7 @@ export function Financeiro() {
           </p>
         </div>
         <div className="ui-page-actions">
+          <LiveBadge />
           <div className="flex items-center gap-1 rounded-md border border-hairline bg-surface-raised p-1">
             <button type="button" onClick={() => setMonth(shiftMonth(month, -1))} className="app-icon-button h-8 w-8" aria-label="Mês anterior">
               <ChevronLeft className="h-4 w-4" />
