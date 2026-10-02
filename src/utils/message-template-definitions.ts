@@ -159,6 +159,31 @@ Uma manutenção regular mantém seu instrumento sempre em perfeito estado!
 Entre em contato para agendar! 😊`,
   },
   {
+    type: 'orcamento_enviado',
+    name: 'Orçamento Enviado',
+    description: 'Orçamento enviado ao cliente para aprovação',
+    variables: withTerms(['{cliente}', '{instrumento}', '{marca}', '{modelo}', '{numero}', '{problemas}', '{servicos}', '{valor}', '{desconto}', '{forma_pagamento}', '{previsao_entrega}', '{validade_orcamento}', '{observacoes}', '{nome_empresa}', '{telefone_empresa}', '{horario_funcionamento}', '{dias_funcionamento}']),
+    defaultContent: `Olá {cliente}! 😊
+
+Segue o *ORÇAMENTO #{numero}* do seu {instrumento}:
+
+🎸 {instrumento} {marca} {modelo}
+🔧 Problemas: {problemas}
+⚙️ Serviços: {servicos}
+💰 *Valor: {valor}*
+📅 Prazo de entrega: {previsao_entrega}
+⏳ Válido até: {validade_orcamento}
+
+{observacoes}
+
+Para aprovar, é só responder *APROVADO* que já agendamos a entrega. 🙌
+
+📍 {nome_empresa}
+📞 {telefone_empresa}
+⏰ {horario_funcionamento}
+📅 {dias_funcionamento}`,
+  },
+  {
     type: 'orcamento_aprovado',
     name: 'Orçamento Aprovado',
     description: 'Confirmação quando cliente aprova o orçamento',

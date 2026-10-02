@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
-  AlertTriangle, Banknote, Bell, Bookmark, ChevronDown, ChevronsLeft, CreditCard, Landmark,
+  AlertTriangle, Banknote, Bell, Bookmark, ChevronDown, ChevronsLeft, ClipboardCheck, CreditCard, Landmark,
   FileText, Gauge, LayoutGrid, LogOut, Menu, MessageCircle, Music2, PanelsTopLeft,
   PenTool, Receipt, Search, Settings, Sparkles, Star, User, Users, Wallet, Wrench, X,
   type LucideIcon,
@@ -36,6 +36,7 @@ const navigation: NavGroup[] = [
     items: [
       { path: '/dashboard', icon: Gauge, label: 'Painel', hint: 'Prioridades do dia' },
       { path: '/ordens', icon: PenTool, label: 'Ordens de serviço', hint: 'Bancada e prazos' },
+      { path: '/orcamentos', icon: ClipboardCheck, label: 'Orçamentos', hint: 'Do pedido à OS aberta' },
       { path: '/clientes', icon: Users, label: 'Clientes' },
       { path: '/conversas', icon: MessageCircle, label: 'Conversas', hint: 'WhatsApp' },
     ],

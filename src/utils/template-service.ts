@@ -124,6 +124,7 @@ function templateValues(content: string, data: Record<string, unknown>, companyC
     valor_orcamento: formatCurrency(data.valor_orcamento ?? data.valor_total, 'A definir'),
     data_criacao: formatTemplateDate(data.data_criacao || data.data_entrada || data.created_at),
     previsao_entrega: formatTemplateDate(data.previsao_entrega || data.data_previsao),
+    validade_orcamento: formatTemplateDate(data.validade_orcamento, 'a combinar'),
     observacoes: cleanObservations(content, data),
     nome_empresa: String(company.nome_empresa || data.nome_empresa || '').trim() || 'Sua Empresa',
     cnpj: String(company.cnpj || data.cnpj || '').trim(),

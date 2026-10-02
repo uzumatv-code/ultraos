@@ -91,6 +91,7 @@ const MESSAGE_TEMPLATE_TYPES = new Set([
   'cobranca_pagamento',
   'lembrete_manutencao',
   'orcamento_aprovado',
+  'orcamento_enviado',
   'diagnostico_concluido',
   'avaliacao_google_instagram',
 ]);
@@ -4916,12 +4917,278 @@ async function answerSystemQuery(userId, intent) {
   return 'Nao entendi o pedido. Exemplos: "quais OS tenho hoje?", "cadastre cliente Maria telefone 61999999999", "abra OS para Maria dia 05/06" ou "registre que a OS 125 foi paga em pix".';
 }
 
-app.post('/api/ordens/salvar', requireAuth, async (req, res) => {
+
+/* ------------------------------------------------------------------ Orçamentos */
+
+async function ensureQuoteSchema() {
+  await pool.query(`CREATE TABLE IF NOT EXISTS orcamentos (
+    id varchar(36) NOT NULL PRIMARY KEY,
+    user_id varchar(36) NOT NULL,
+    numero int NOT NULL,
+    cliente_id varchar(36) NOT NULL,
+    status varchar(20) NOT NULL DEFAULT 'rascunho',
+    valor_servicos decimal(10,2) NOT NULL DEFAULT 0.00,
+    desconto decimal(10,2) NOT NULL DEFAULT 0.00,
+    valor_total decimal(10,2) NOT NULL DEFAULT 0.00,
+    forma_pagamento varchar(50) DEFAULT NULL,
+    validade varchar(10) DEFAULT NULL,
+    equipamento varchar(300) DEFAULT NULL,
+    problema_descricao text DEFAULT NULL,
+    servico_descricao text DEFAULT NULL,
+    observacoes text DEFAULT NULL,
+    data_previsao varchar(10) DEFAULT NULL,
+    payload json DEFAULT NULL,
+    enviado_em varchar(50) DEFAULT NULL,
+    aprovado_em varchar(50) DEFAULT NULL,
+    recusado_em varchar(50) DEFAULT NULL,
+    motivo_recusa varchar(500) DEFAULT NULL,
+    ordem_servico_id varchar(36) DEFAULT NULL,
+    created_at varchar(50) DEFAULT NULL,
+    updated_at varchar(50) DEFAULT NULL,
+    UNIQUE KEY unique_orcamento_numero_user (user_id, numero),
+    INDEX idx_orcamentos_user_status (user_id, status),
+    INDEX idx_orcamentos_cliente (cliente_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+}
+
+const QUOTE_OPEN_STATUSES = ['rascunho', 'enviado'];
+const QUOTE_PAYLOAD_FIELDS = [
+  'cliente_id', 'instrumento_id', 'marca_id', 'modelo', 'acessorios', 'problemas_ids', 'problemas_descricoes', 'problema_descricao',
+  'servicos_ids', 'servicos_descricoes', 'servico_descricao', 'valor_servicos', 'desconto', 'valor_total', 'forma_pagamento', 'observacoes', 'data_previsao',
+];
+
+function quoteEffectiveStatus(row) {
+  if (QUOTE_OPEN_STATUSES.includes(row.status) && row.validade && String(row.validade).slice(0, 10) < todayDate()) return 'expirado';
+  return row.status;
+}
+
+const QUOTE_SELECT = `
+  SELECT q.*, c.nome AS cliente_nome, c.telefone AS cliente_telefone, c.cpf_cnpj AS cliente_cpf_cnpj, c.email AS cliente_email,
+         i.nome AS instrumento_nome, m.nome AS marca_nome, o.numero AS ordem_numero
+    FROM orcamentos q
+    JOIN clientes c ON c.id = q.cliente_id AND c.user_id = q.user_id
+    LEFT JOIN instrumentos i ON i.id = JSON_UNQUOTE(JSON_EXTRACT(q.payload, '$.instrumento_id'))
+    LEFT JOIN marcas m ON m.id = JSON_UNQUOTE(JSON_EXTRACT(q.payload, '$.marca_id'))
+    LEFT JOIN ordens_servico o ON o.id = q.ordem_servico_id`;
+
+function presentQuote(row, { withPayload = false } = {}) {
+  const out = {
+    ...row,
+    valor_servicos: Number(row.valor_servicos || 0),
+    desconto: Number(row.desconto || 0),
+    valor_total: Number(row.valor_total || 0),
+    status_efetivo: quoteEffectiveStatus(row),
+  };
+  if (!withPayload) delete out.payload;
+  else if (typeof out.payload === 'string') { try { out.payload = JSON.parse(out.payload); } catch { out.payload = {}; } }
+  return out;
+}
+
+async function loadQuote(userId, id, options) {
+  const [rows] = await pool.query(`${QUOTE_SELECT} WHERE q.user_id = ? AND q.id = ? LIMIT 1`, [userId, id]);
+  return rows[0] ? presentQuote(rows[0], options) : null;
+}
+
+async function normalizeQuoteInput(userId, body) {
+  const source = body?.ordem || {};
+  const clienteId = cleanNullableText(source.cliente_id);
+  if (!clienteId) throw new Error('Escolha o cliente do orçamento');
+  const [[client]] = await pool.query('SELECT id FROM clientes WHERE id = ? AND user_id = ? LIMIT 1', [clienteId, userId]);
+  if (!client) throw new Error('Cliente inválido para esta empresa');
+  const valorServicos = money(source.valor_servicos);
+  const desconto = money(source.desconto);
+  const valorTotal = money(Math.max(0, valorServicos - desconto));
+  if (!(valorTotal > 0)) throw new Error('Informe o valor do orçamento (maior que zero)');
+
+  const payload = {};
+  for (const field of QUOTE_PAYLOAD_FIELDS) if (source[field] !== undefined) payload[field] = source[field];
+  Object.assign(payload, { cliente_id: clienteId, valor_servicos: valorServicos, desconto, valor_total: valorTotal });
+
+  const [[instrument]] = payload.instrumento_id ? await pool.query('SELECT nome FROM instrumentos WHERE id = ? AND user_id = ? LIMIT 1', [payload.instrumento_id, userId]) : [[null]];
+  const [[brand]] = payload.marca_id ? await pool.query('SELECT nome FROM marcas WHERE id = ? AND user_id = ? LIMIT 1', [payload.marca_id, userId]) : [[null]];
+  const equipamento = [instrument?.nome, brand?.nome, cleanNullableText(payload.modelo)].filter(Boolean).join(' ') || null;
+
+  const days = clampInteger(body?.validade_dias, 1, 90, 7);
+  const validade = /^\d{4}-\d{2}-\d{2}$/.test(String(body?.validade || ''))
+    ? String(body.validade)
+    : addDaysToIsoDate(todayDate(), days);
+
+  return {
+    clienteId, valorServicos, desconto, valorTotal, payload, equipamento, validade,
+    formaPagamento: cleanNullableText(payload.forma_pagamento),
+    problema: cleanNullableText(payload.problema_descricao),
+    servico: cleanNullableText(payload.servico_descricao),
+    observacoes: cleanNullableText(payload.observacoes),
+    dataPrevisao: String(payload.data_previsao || '').slice(0, 10) || null,
+  };
+}
+
+async function createQuote(userId, body) {
+  const input = await normalizeQuoteInput(userId, body);
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [[last]] = await conn.query('SELECT COALESCE(MAX(numero), 0) AS numero FROM orcamentos WHERE user_id = ? FOR UPDATE', [userId]);
+    const numero = Number(last.numero) + 1;
+    const id = uuid();
+    await conn.query(
+      `INSERT INTO orcamentos
+       (id,user_id,numero,cliente_id,status,valor_servicos,desconto,valor_total,forma_pagamento,validade,equipamento,problema_descricao,servico_descricao,observacoes,data_previsao,payload,created_at,updated_at)
+       VALUES (?,?,?,?,'rascunho',?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [id, userId, numero, input.clienteId, input.valorServicos, input.desconto, input.valorTotal, input.formaPagamento, input.validade, input.equipamento,
+        input.problema, input.servico, input.observacoes, input.dataPrevisao, JSON.stringify(input.payload), now(), now()],
+    );
+    await conn.commit();
+    return { id, numero };
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
+}
+
+/** Fecha o orçamento: cria a OS com a data de entrega combinada (e sinal opcional) e liga as duas pontas. */
+async function approveQuote({ auth, req = null, quoteId, dataPrevisao, sinalValor = 0, sinalForma = 'pix' }) {
+  const userId = auth.accountId;
+  const delivery = String(dataPrevisao || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(delivery)) throw new Error('Informe a data de entrega combinada com o cliente');
+  if (delivery < todayDate()) throw new Error('A data de entrega não pode estar no passado');
+  const [[quote]] = await pool.query('SELECT * FROM orcamentos WHERE id = ? AND user_id = ? LIMIT 1', [quoteId, userId]);
+  if (!quote) throw Object.assign(new Error('Orçamento não encontrado'), { status: 404 });
+  if (quote.status === 'convertido') throw new Error('Este orçamento já virou ordem de serviço.');
+  if (quote.status === 'cancelado') throw new Error('Este orçamento foi cancelado.');
+
+  // "Reserva" o orçamento para impedir duas conversões simultâneas.
+  const [claim] = await pool.query("UPDATE orcamentos SET status = 'convertendo', updated_at = ? WHERE id = ? AND user_id = ? AND status IN ('rascunho','enviado','recusado')", [now(), quoteId, userId]);
+  if (!claim.affectedRows) throw new Error('Este orçamento está sendo convertido agora. Atualize a página.');
+
+  try {
+    const payload = typeof quote.payload === 'string' ? JSON.parse(quote.payload || '{}') : (quote.payload || {});
+    const total = money(quote.valor_total);
+    const deposit = money(sinalValor);
+    if (deposit < 0 || deposit >= total) {
+      if (deposit !== 0) throw new Error('O sinal precisa ser menor que o valor total do orçamento.');
+    }
+    const conditions = deposit > 0
+      ? [
+        { valor: deposit, forma_pagamento: sinalForma || 'pix', momento: 'agora', status: 'recebido', observacoes: `Sinal do orçamento #${quote.numero}` },
+        { valor: money(total - deposit), forma_pagamento: 'a_definir', momento: 'retirada', status: 'pendente' },
+      ]
+      : [{ valor: total, forma_pagamento: 'a_definir', momento: 'retirada', status: 'pendente' }];
+    const ordem = {
+      ...payload,
+      cliente_id: quote.cliente_id,
+      status: 'pendente',
+      data_entrada: todayDate(),
+      data_previsao: delivery,
+      valor_servicos: money(quote.valor_servicos),
+      desconto: money(quote.desconto),
+      valor_total: total,
+      forma_pagamento: deposit > 0 ? (sinalForma || 'pix') : 'a_definir',
+      observacoes: [cleanNullableText(payload.observacoes), `Gerada do orçamento #${quote.numero}`].filter(Boolean).join('\n'),
+    };
+    delete ordem.id;
+    const saved = await saveServiceOrderForAccount({ auth, body: { ordem, condicoes_pagamento: conditions }, req });
+    await pool.query(
+      "UPDATE orcamentos SET status = 'convertido', ordem_servico_id = ?, aprovado_em = ?, data_previsao = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+      [saved.id, now(), delivery, now(), quoteId, userId],
+    );
+    return { ordem_id: saved.id, numero: saved.numero, orcamento_numero: quote.numero };
+  } catch (error) {
+    await pool.query('UPDATE orcamentos SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?', [quote.status, now(), quoteId, userId]).catch(() => {});
+    throw error;
+  }
+}
+
+const quoteRoute = (handler) => async (req, res) => {
+  try {
+    res.json({ data: await handler(req), error: null });
+  } catch (error) {
+    res.status(error.status || 400).json({ data: null, error: { message: error.message } });
+  }
+};
+
+app.get('/api/orcamentos', requireAuth, quoteRoute(async (req) => {
+  const [rows] = await pool.query(`${QUOTE_SELECT} WHERE q.user_id = ? ORDER BY q.created_at DESC LIMIT 400`, [req.auth.accountId]);
+  return rows.map((row) => presentQuote(row));
+}));
+
+app.get('/api/orcamentos/:id', requireAuth, quoteRoute(async (req) => {
+  const quote = await loadQuote(req.auth.accountId, req.params.id, { withPayload: true });
+  if (!quote) throw Object.assign(new Error('Orçamento não encontrado'), { status: 404 });
+  return quote;
+}));
+
+app.post('/api/orcamentos', requireAuth, quoteRoute(async (req) => {
+  const created = await createQuote(req.auth.accountId, req.body);
+  await writeAudit(req, { action: 'orcamento.criar', resource: 'orcamentos', resourceId: created.id, details: { numero: created.numero } });
+  return created;
+}));
+
+app.put('/api/orcamentos/:id', requireAuth, quoteRoute(async (req) => {
+  const userId = req.auth.accountId;
+  const [[current]] = await pool.query('SELECT status FROM orcamentos WHERE id = ? AND user_id = ? LIMIT 1', [req.params.id, userId]);
+  if (!current) throw Object.assign(new Error('Orçamento não encontrado'), { status: 404 });
+  if (['convertido', 'convertendo'].includes(current.status)) throw new Error('Orçamento já virou OS e não pode mais ser editado.');
+  const input = await normalizeQuoteInput(userId, req.body);
+  await pool.query(
+    `UPDATE orcamentos SET cliente_id=?,valor_servicos=?,desconto=?,valor_total=?,forma_pagamento=?,validade=?,equipamento=?,problema_descricao=?,servico_descricao=?,
+            observacoes=?,data_previsao=?,payload=?,status=IF(status IN ('recusado','cancelado'),'rascunho',status),updated_at=? WHERE id=? AND user_id=?`,
+    [input.clienteId, input.valorServicos, input.desconto, input.valorTotal, input.formaPagamento, input.validade, input.equipamento, input.problema, input.servico,
+      input.observacoes, input.dataPrevisao, JSON.stringify(input.payload), now(), req.params.id, userId],
+  );
+  await writeAudit(req, { action: 'orcamento.atualizar', resource: 'orcamentos', resourceId: req.params.id });
+  return { id: req.params.id };
+}));
+
+app.post('/api/orcamentos/:id/enviado', requireAuth, quoteRoute(async (req) => {
+  const [result] = await pool.query("UPDATE orcamentos SET status='enviado', enviado_em=?, updated_at=? WHERE id=? AND user_id=? AND status IN ('rascunho','enviado')", [now(), now(), req.params.id, req.auth.accountId]);
+  return { updated: result.affectedRows };
+}));
+
+app.post('/api/orcamentos/:id/recusar', requireAuth, quoteRoute(async (req) => {
+  const [result] = await pool.query(
+    "UPDATE orcamentos SET status='recusado', recusado_em=?, motivo_recusa=?, updated_at=? WHERE id=? AND user_id=? AND status IN ('rascunho','enviado')",
+    [now(), cleanNullableText(req.body?.motivo)?.slice(0, 500) || null, now(), req.params.id, req.auth.accountId],
+  );
+  if (!result.affectedRows) throw new Error('Só é possível recusar orçamentos em aberto.');
+  return { updated: true };
+}));
+
+app.post('/api/orcamentos/:id/reabrir', requireAuth, quoteRoute(async (req) => {
+  const days = clampInteger(req.body?.validade_dias, 1, 90, 7);
+  const [result] = await pool.query(
+    "UPDATE orcamentos SET status='enviado', validade=?, recusado_em=NULL, motivo_recusa=NULL, updated_at=? WHERE id=? AND user_id=? AND status IN ('recusado','rascunho','enviado')",
+    [addDaysToIsoDate(todayDate(), days), now(), req.params.id, req.auth.accountId],
+  );
+  if (!result.affectedRows) throw new Error('Não foi possível reabrir este orçamento.');
+  return { updated: true };
+}));
+
+app.post('/api/orcamentos/:id/aprovar', requireAuth, quoteRoute(async (req) => {
+  const result = await approveQuote({
+    auth: req.auth, req, quoteId: req.params.id, dataPrevisao: req.body?.data_previsao,
+    sinalValor: req.body?.sinal_valor, sinalForma: req.body?.sinal_forma,
+  });
+  await writeAudit(req, { action: 'orcamento.aprovar', resource: 'orcamentos', resourceId: req.params.id, details: result });
+  return result;
+}));
+
+app.delete('/api/orcamentos/:id', requireAuth, quoteRoute(async (req) => {
+  const [result] = await pool.query("DELETE FROM orcamentos WHERE id = ? AND user_id = ? AND status NOT IN ('convertido','convertendo')", [req.params.id, req.auth.accountId]);
+  if (!result.affectedRows) throw new Error('Não foi possível excluir (orçamentos que viraram OS ficam no histórico).');
+  await writeAudit(req, { action: 'orcamento.excluir', resource: 'orcamentos', resourceId: req.params.id });
+  return { deleted: true };
+}));
+
+
+async function saveServiceOrderForAccount({ auth, body, req = null }) {
   const conn = await pool.getConnection();
   let savedOrder = null;
   try {
-    const orderPayload = req.body?.ordem || {};
-    const conditions = req.body?.condicoes_pagamento;
+    const orderPayload = body?.ordem || {};
+    const conditions = body?.condicoes_pagamento;
     const cols = await getColumns('ordens_servico');
     const data = await filterDataToColumns('ordens_servico', orderPayload);
     const orderId = cleanNullableText(orderPayload.id);
@@ -4933,10 +5200,10 @@ app.post('/api/ordens/salvar', requireAuth, async (req, res) => {
     if (orderId) {
       const [[current]] = await conn.query(
         'SELECT * FROM ordens_servico WHERE id = ? AND user_id = ? LIMIT 1 FOR UPDATE',
-        [orderId, req.auth.accountId],
+        [orderId, auth.accountId],
       );
       if (!current) throw Object.assign(new Error('Ordem de servico nao encontrada'), { status: 404 });
-      if (req.auth.role === 'operador') {
+      if (auth.role === 'operador') {
         if (['concluido', 'cancelado'].includes(current.status)) {
           throw Object.assign(new Error('Ordens concluidas ou canceladas nao podem ser editadas pelo operador'), { status: 403 });
         }
@@ -4957,19 +5224,19 @@ app.post('/api/ordens/salvar', requireAuth, async (req, res) => {
       if (keys.length) {
         await conn.query(
           `UPDATE ordens_servico SET ${keys.map((key) => `\`${key}\` = ?`).join(', ')} WHERE id = ? AND user_id = ?`,
-          [...Object.values(data), orderId, req.auth.accountId],
+          [...Object.values(data), orderId, auth.accountId],
         );
       }
       [[savedOrder]] = await conn.query(
         `SELECT o.*, c.nome AS cliente_nome FROM ordens_servico o
          JOIN clientes c ON c.user_id = o.user_id AND c.id = o.cliente_id
          WHERE o.id = ? AND o.user_id = ? LIMIT 1`,
-        [orderId, req.auth.accountId],
+        [orderId, auth.accountId],
       );
     } else {
       data.id = uuid();
-      data.user_id = req.auth.accountId;
-      data.numero = Number(data.numero || await getNextOrderNumber(req.auth.accountId));
+      data.user_id = auth.accountId;
+      data.numero = Number(data.numero || await getNextOrderNumber(auth.accountId));
       data.data_entrada = data.data_entrada || todayDate();
       data.status = ['pendente', 'em_andamento'].includes(data.status) ? data.status : 'pendente';
       data.valor_total = money(data.valor_total ?? (Number(data.valor_servicos || 0) - Number(data.desconto || 0)));
@@ -4984,34 +5251,43 @@ app.post('/api/ordens/salvar', requireAuth, async (req, res) => {
         `SELECT o.*, c.nome AS cliente_nome FROM ordens_servico o
          JOIN clientes c ON c.user_id = o.user_id AND c.id = o.cliente_id
          WHERE o.id = ? AND o.user_id = ? LIMIT 1`,
-        [data.id, req.auth.accountId],
+        [data.id, auth.accountId],
       );
     }
 
     if (!savedOrder) throw new Error('Falha ao salvar a ordem de servico');
-    const [[client]] = await conn.query('SELECT id FROM clientes WHERE id = ? AND user_id = ? LIMIT 1', [savedOrder.cliente_id, req.auth.accountId]);
+    const [[client]] = await conn.query('SELECT id FROM clientes WHERE id = ? AND user_id = ? LIMIT 1', [savedOrder.cliente_id, auth.accountId]);
     if (!client) throw new Error('Cliente invalido para esta empresa');
     const savedConditions = await saveOrderPaymentConditions(conn, {
-      userId: req.auth.accountId,
+      userId: auth.accountId,
       order: savedOrder,
       rawConditions: conditions,
-      role: req.auth.role,
+      role: auth.role,
     });
     await conn.commit();
 
-    await markRemarketingConversion(pool, req.auth.accountId, savedOrder).catch(() => {});
-    await writeAudit(req, {
+    await markRemarketingConversion(pool, auth.accountId, savedOrder).catch(() => {});
+    if (req) await writeAudit(req, {
       action: orderId ? 'ordem.atualizar_com_pagamentos' : 'ordem.criar_com_pagamentos',
       resource: 'ordens_servico',
       resourceId: savedOrder.id,
       details: { condicoes_pagamento: savedConditions.length },
     }).catch((auditError) => console.error('Falha ao auditar salvamento da OS:', auditError));
-    return res.json({ data: { id: savedOrder.id, numero: savedOrder.numero, condicoes_pagamento: savedConditions }, error: null });
+    return { id: savedOrder.id, numero: savedOrder.numero, condicoes_pagamento: savedConditions, savedOrder };
   } catch (error) {
     await conn.rollback();
-    return res.status(error.status || 400).json({ data: null, error: { message: error.message } });
+    throw error;
   } finally {
     conn.release();
+  }
+}
+
+app.post('/api/ordens/salvar', requireAuth, async (req, res) => {
+  try {
+    const result = await saveServiceOrderForAccount({ auth: req.auth, body: req.body, req });
+    return res.json({ data: { id: result.id, numero: result.numero, condicoes_pagamento: result.condicoes_pagamento }, error: null });
+  } catch (error) {
+    return res.status(error.status || 400).json({ data: null, error: { message: error.message } });
   }
 });
 
@@ -6260,6 +6536,8 @@ const osTools = createOsTools({
   sendCustomerMessage,
   afterOrderCreated: (conn, userId, order) => markRemarketingConversion(conn, userId, order),
   validatePhone,
+  createQuote: (userId, body) => createQuote(userId, body),
+  approveQuote: (userId, args) => approveQuote({ auth: { accountId: userId, userId, role: 'admin' }, ...args }),
 });
 
 const agentBrain = createAgentBrain({
@@ -7172,6 +7450,7 @@ async function startServer() {
     await financeAgent.ensureSchema();
     await ensureInstallmentSchema();
     await ensureNfseSchema();
+    await ensureQuoteSchema();
     await ensureWhatsAppMediaSchema();
     await receipts.ensureSchema();
   } catch (error) {

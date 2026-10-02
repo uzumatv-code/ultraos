@@ -170,14 +170,59 @@ export const OS_TOOLS = [
       required: ['cliente_id'],
     },
   },
+  {
+    type: 'function',
+    name: 'listar_orcamentos',
+    description: 'Lista orçamentos. filtro "abertos" (aguardando resposta do cliente, padrão) ou "todos". Opcionalmente filtre pelo nome do cliente.',
+    parameters: { type: 'object', properties: { filtro: { type: 'string', enum: ['abertos', 'todos'] }, cliente: { type: 'string' } } },
+  },
+  {
+    type: 'function',
+    name: 'criar_orcamento',
+    description:
+      'Cria um ORÇAMENTO (não abre OS) para um cliente existente. Use quando o usuário pedir "orçamento", "orçar" ou "passar um valor". Mesmos campos de criar_os; validade_dias padrão 7. Não envia ao cliente.',
+    parameters: {
+      type: 'object',
+      properties: {
+        cliente_id: { type: 'string' },
+        instrumento: { type: 'string' },
+        marca: { type: 'string' },
+        modelo: { type: 'string' },
+        problemas: { type: 'string' },
+        servicos: { type: 'string' },
+        valor: { type: 'number' },
+        previsao: { type: 'string', description: 'Prazo estimado de entrega YYYY-MM-DD' },
+        validade_dias: { type: 'integer' },
+        observacoes: { type: 'string' },
+      },
+      required: ['cliente_id', 'valor'],
+    },
+  },
+  {
+    type: 'function',
+    name: 'aprovar_orcamento',
+    description:
+      'O cliente fechou o orçamento: abre a OS com a data de entrega combinada (obrigatória, YYYY-MM-DD). sinal_valor opcional (sinal já recebido). Sempre use listar_orcamentos antes para achar o id e, se houver mais de um, pergunte qual.',
+    parameters: {
+      type: 'object',
+      properties: { orcamento_id: { type: 'string' }, data_entrega: { type: 'string' }, sinal_valor: { type: 'number' }, sinal_forma: { type: 'string', enum: ['pix', 'dinheiro', 'debito', 'credito'] } },
+      required: ['orcamento_id', 'data_entrega'],
+    },
+  },
+  {
+    type: 'function',
+    name: 'recusar_orcamento',
+    description: 'Marca um orçamento como recusado pelo cliente, com o motivo se houver.',
+    parameters: { type: 'object', properties: { orcamento_id: { type: 'string' }, motivo: { type: 'string' } }, required: ['orcamento_id'] },
+  },
 ];
 
-export const OS_WRITE_TOOLS = new Set(['mudar_status_os', 'avisar_cliente_os', 'cancelar_os', 'cadastrar_cliente', 'criar_os']);
+export const OS_WRITE_TOOLS = new Set(['mudar_status_os', 'avisar_cliente_os', 'cancelar_os', 'cadastrar_cliente', 'criar_os', 'criar_orcamento', 'aprovar_orcamento', 'recusar_orcamento']);
 export const OS_TOOL_NAMES = new Set(OS_TOOLS.map((tool) => tool.name));
 
 /* ------------------------------------------------------------------ implementação */
 
-export function createOsTools({ pool, uuid, now, todayDate, money, syncReceivable, sendCustomerMessage, afterOrderCreated, validatePhone }) {
+export function createOsTools({ pool, uuid, now, todayDate, money, syncReceivable, sendCustomerMessage, afterOrderCreated, validatePhone, createQuote, approveQuote }) {
   const day = (value) => String(value || '').slice(0, 10);
 
   const ORDER_SELECT = `
@@ -419,8 +464,68 @@ export function createOsTools({ pool, uuid, now, todayDate, money, syncReceivabl
     }
   }
 
+  async function listQuotes(userId, { filtro, cliente }) {
+    const [rows] = await pool.query(
+      `SELECT q.id, q.numero, q.status, q.valor_total, q.validade, q.equipamento, c.nome AS cliente_nome
+         FROM orcamentos q JOIN clientes c ON c.id = q.cliente_id AND c.user_id = q.user_id
+        WHERE q.user_id = ? ${filtro === 'todos' ? '' : "AND q.status IN ('rascunho','enviado')"} ORDER BY q.numero DESC LIMIT 300`,
+      [userId],
+    );
+    const today = todayDate();
+    const filtered = cliente ? rows.filter((row) => similarity(cliente, row.cliente_nome) >= 0.6) : rows;
+    return {
+      quantidade: filtered.length,
+      orcamentos: filtered.slice(0, 15).map((row) => ({
+        orcamento_id: row.id, numero: row.numero, cliente: row.cliente_nome, equipamento: row.equipamento, valor: Number(row.valor_total),
+        validade: String(row.validade || '').slice(0, 10) || null, situacao: row.status === 'convertido' ? 'virou OS' : row.status === 'recusado' ? 'recusado'
+          : String(row.validade || '').slice(0, 10) && String(row.validade).slice(0, 10) < today && ['rascunho', 'enviado'].includes(row.status) ? 'vencido' : row.status === 'enviado' ? 'enviado ao cliente' : 'rascunho',
+      })),
+    };
+  }
+
+  async function createQuoteFromArgs(userId, args) {
+    const [[client]] = await pool.query('SELECT id, nome FROM clientes WHERE user_id = ? AND id = ? LIMIT 1', [userId, args.cliente_id]);
+    if (!client) throw new Error('Cliente não encontrado. Use buscar_cliente primeiro.');
+    if (!(Number(args.valor) > 0)) throw new Error('Informe o valor do orçamento.');
+    const conn = await pool.getConnection();
+    let instrumentoId = null;
+    let marcaId = null;
+    try {
+      instrumentoId = await resolveCatalog(conn, 'instrumentos', userId, args.instrumento);
+      marcaId = await resolveCatalog(conn, 'marcas', userId, args.marca);
+    } finally {
+      conn.release();
+    }
+    const total = money(args.valor);
+    const created = await createQuote(userId, {
+      validade_dias: args.validade_dias || 7,
+      ordem: {
+        cliente_id: client.id, instrumento_id: instrumentoId, marca_id: marcaId, modelo: String(args.modelo || '').trim() || null,
+        problema_descricao: String(args.problemas || '').trim() || null, servico_descricao: String(args.servicos || '').trim() || null,
+        valor_servicos: total, desconto: 0, valor_total: total, forma_pagamento: 'a_definir',
+        observacoes: String(args.observacoes || '').trim() || null, data_previsao: String(args.previsao || '').slice(0, 10) || null,
+      },
+    });
+    return { ok: true, orcamento_id: created.id, numero: created.numero, cliente: client.nome, valor: total };
+  }
+
   async function run(name, args, ctx) {
     switch (name) {
+      case 'listar_orcamentos': return listQuotes(ctx.userId, args);
+      case 'criar_orcamento': return createQuoteFromArgs(ctx.userId, args);
+      case 'aprovar_orcamento': {
+        const result = await approveQuote(ctx.userId, { quoteId: args.orcamento_id, dataPrevisao: args.data_entrega, sinalValor: args.sinal_valor, sinalForma: args.sinal_forma });
+        ctx.actions?.push({ type: 'orcamento_aprovado', id: args.orcamento_id });
+        return { ok: true, ...result, data_entrega: String(args.data_entrega).slice(0, 10) };
+      }
+      case 'recusar_orcamento': {
+        const [result] = await pool.query(
+          "UPDATE orcamentos SET status='recusado', recusado_em=?, motivo_recusa=?, updated_at=? WHERE id=? AND user_id=? AND status IN ('rascunho','enviado')",
+          [now(), String(args.motivo || '').slice(0, 500) || null, now(), args.orcamento_id, ctx.userId],
+        );
+        if (!result.affectedRows) throw new Error('Só dá para recusar orçamentos em aberto.');
+        return { ok: true };
+      }
       case 'listar_os': return listOrders(ctx.userId, args.filtro);
       case 'buscar_os': return findOrders(ctx.userId, args);
       case 'detalhes_os': return orderDetails(ctx.userId, args.os_id);

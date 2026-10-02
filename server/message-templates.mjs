@@ -62,6 +62,7 @@ export function templateValues(data, company = {}) {
     valor_orcamento: currency(data.valor_orcamento ?? data.valor_total, 'A definir'),
     data_criacao: dateBr(data.data_criacao || data.data_entrada || data.created_at),
     previsao_entrega: dateBr(data.previsao_entrega || data.data_previsao),
+    validade_orcamento: dateBr(data.validade_orcamento, 'a combinar'),
     observacoes: observations(data.observacoes),
     nome_empresa: text(company.nome_empresa) || 'Sua Empresa',
     cnpj: text(company.cnpj),

@@ -122,6 +122,32 @@
     "defaultContent": "Olá {cliente}! 👋\n\nEsperamos que você e seu {instrumento} estejam bem! 🎸\n\nNotamos que já faz {meses_sem_manutencao} meses desde sua última manutenção ({ultimo_servico}).\n\n🔧 Que tal agendar uma revisão preventiva?\n- Troca de cordas\n- Regulagem\n- Limpeza e hidratação\n- Verificação geral\n\nUma manutenção regular mantém seu instrumento sempre em perfeito estado!\n\n📍 {nome_empresa}\n📞 {telefone_empresa}\n⏰ {horario_funcionamento}\n📅 {dias_funcionamento}\n\nEntre em contato para agendar! 😊"
   },
   {
+    "type": "orcamento_enviado",
+    "name": "Orçamento Enviado",
+    "description": "Orçamento enviado ao cliente para aprovação",
+    "variables": [
+      "{cliente}",
+      "{instrumento}",
+      "{marca}",
+      "{modelo}",
+      "{numero}",
+      "{problemas}",
+      "{servicos}",
+      "{valor}",
+      "{desconto}",
+      "{forma_pagamento}",
+      "{previsao_entrega}",
+      "{validade_orcamento}",
+      "{observacoes}",
+      "{nome_empresa}",
+      "{telefone_empresa}",
+      "{horario_funcionamento}",
+      "{dias_funcionamento}",
+      "{termos_de_uso}"
+    ],
+    "defaultContent": "Olá {cliente}! 😊\n\nSegue o *ORÇAMENTO #{numero}* do seu {instrumento}:\n\n🎸 {instrumento} {marca} {modelo}\n🔧 Problemas: {problemas}\n⚙️ Serviços: {servicos}\n💰 *Valor: {valor}*\n📅 Prazo de entrega: {previsao_entrega}\n⏳ Válido até: {validade_orcamento}\n\n{observacoes}\n\nPara aprovar, é só responder *APROVADO* que já agendamos a entrega. 🙌\n\n📍 {nome_empresa}\n📞 {telefone_empresa}\n⏰ {horario_funcionamento}\n📅 {dias_funcionamento}"
+  },
+  {
     "type": "orcamento_aprovado",
     "name": "Orçamento Aprovado",
     "description": "Confirmação quando cliente aprova o orçamento",

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   ArrowLeft,
@@ -8,6 +8,7 @@ import {
   ChevronLeft,
   ChevronRight,
   FileText,
+  ClipboardCheck,
   X,
   MessageCircle,
   Printer,
@@ -27,6 +28,8 @@ import { ProblemaModal } from '../components/ProblemaModal';
 import { ServicoModal } from '../components/ServicoModal';
 import { supabase } from '../lib/supabase';
 import { toast } from '../components/ToastCustom';
+import { apiRequest } from '../lib/api-client';
+import { sendQuoteToCustomer, type Orcamento } from '../utils/quotes';
 import { formatCurrency } from '../utils/formatters';
 import { addDaysToDateOnly, formatLocalDate, parseLocalDate, toDateOnly, todayLocalDate } from '../utils/dates';
 import { WhatsAppService } from '../utils/whatsapp-service';
@@ -147,6 +150,12 @@ export function NovaOrdem() {
   const { can } = useAuth();
   const navigate = useNavigate();
   const { id } = useParams();
+  const location = useLocation();
+  const quoteMode = location.pathname.startsWith('/orcamentos');
+  const [showQuoteModal, setShowQuoteModal] = useState(false);
+  const [quoteDays, setQuoteDays] = useState(7);
+  const [quoteSendNow, setQuoteSendNow] = useState(true);
+  const [savingQuote, setSavingQuote] = useState(false);
   const [step, setStep] = useState(1);
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [instrumentos, setInstrumentos] = useState<Instrumento[]>([]);
@@ -330,7 +339,33 @@ export function NovaOrdem() {
     }
   }
 
+  async function carregarOrcamento(quoteId: string) {
+    try {
+      const quote = await apiRequest<Orcamento>(`/api/orcamentos/${quoteId}`);
+      if (['convertido', 'convertendo'].includes(quote.status)) throw new Error('Este orçamento já virou OS e não pode ser editado.');
+      const data = (quote.payload || {}) as Record<string, any>;
+      setClienteId(String(data.cliente_id || quote.cliente_id || ''));
+      setInstrumentoId(String(data.instrumento_id || ''));
+      setMarcaId(String(data.marca_id || ''));
+      setModelo(String(data.modelo || ''));
+      setAcessorios(String(data.acessorios || ''));
+      setProblemasIds(data.problemas_ids || []);
+      setProblemasDescricoes(normalizeDescriptions(data.problemas_descricoes));
+      setServicosIds(data.servicos_ids || []);
+      setServicosDescricoes(normalizeDescriptions(data.servicos_descricoes));
+      setValorServicos(Number(data.valor_servicos ?? quote.valor_servicos ?? 0));
+      setDesconto(Number(data.desconto ?? quote.desconto ?? 0));
+      setObservacoes(getUserObservations(String(data.observacoes || '')));
+      setDataPrevisao(data.data_previsao ? dateForDatabase(String(data.data_previsao)) : '');
+      setStep(3);
+    } catch (error: any) {
+      toast.error(error?.message || 'Erro ao carregar orçamento');
+      navigate('/orcamentos');
+    }
+  }
+
   async function carregarOrdem(orderId: string) {
+    if (quoteMode) return carregarOrcamento(orderId);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Usuário não autenticado');
@@ -450,8 +485,70 @@ export function NovaOrdem() {
     };
   }
 
+  function buildQuoteOrder() {
+    return {
+      cliente_id: clienteId,
+      instrumento_id: instrumentoId,
+      marca_id: marcaId,
+      modelo: modelo.trim(),
+      acessorios,
+      problemas_ids: problemasIds,
+      problemas_descricoes: selectedDescriptions(problemasIds, problemasDescricoes),
+      problema_descricao: buildProblemsText(),
+      servicos_ids: servicosIds,
+      servicos_descricoes: selectedDescriptions(servicosIds, servicosDescricoes),
+      servico_descricao: buildServicesText(),
+      valor_servicos: Number(valorServicos || 0),
+      desconto: Number(desconto || 0),
+      valor_total: total,
+      forma_pagamento: 'a_definir',
+      observacoes: getUserObservations(observacoes),
+      data_previsao: dataPrevisao ? dateForDatabase(dataPrevisao) : null,
+    };
+  }
+
+  async function saveQuote() {
+    if (!clienteId || !instrumentoId || !marcaId || !modelo.trim()) {
+      toast.error('Preencha o cliente e o equipamento antes de gerar o orçamento.');
+      setShowQuoteModal(false);
+      setStep(1);
+      return;
+    }
+    if (!(total > 0)) {
+      toast.error('Informe o valor do orçamento.');
+      setShowQuoteModal(false);
+      setStep(2);
+      return;
+    }
+    setSavingQuote(true);
+    try {
+      const body = JSON.stringify({ ordem: buildQuoteOrder(), validade_dias: quoteDays });
+      const quoteId = quoteMode && id
+        ? (await apiRequest<{ id: string }>(`/api/orcamentos/${id}`, { method: 'PUT', body })).id
+        : (await apiRequest<{ id: string; numero: number }>('/api/orcamentos', { method: 'POST', body })).id;
+      toast.success(quoteMode && id ? 'Orçamento atualizado!' : 'Orçamento criado!');
+      if (quoteSendNow) {
+        try {
+          await sendQuoteToCustomer(quoteId);
+          toast.success('Orçamento enviado ao cliente pelo WhatsApp.');
+        } catch (error: any) {
+          toast.error(`Orçamento salvo, mas o envio falhou: ${error?.message || 'erro desconhecido'}. Envie pela tela de Orçamentos.`);
+        }
+      }
+      navigate('/orcamentos');
+    } catch (error: any) {
+      toast.error(error?.message || 'Não foi possível salvar o orçamento.');
+    } finally {
+      setSavingQuote(false);
+    }
+  }
+
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
+    if (quoteMode) {
+      setShowQuoteModal(true);
+      return;
+    }
     if (!canGoNext) {
       toast.error('Revise os campos obrigatórios desta etapa.');
       return;
@@ -560,12 +657,12 @@ export function NovaOrdem() {
       <div className="responsive-page">
         <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-3">
-            <button type="button" onClick={() => navigate('/ordens')} className="rounded-lg border border-gray-200 bg-white p-2 text-gray-700 hover:bg-gray-50">
+            <button type="button" onClick={() => navigate(quoteMode ? '/orcamentos' : '/ordens')} className="rounded-lg border border-gray-200 bg-white p-2 text-gray-700 hover:bg-gray-50">
               <ArrowLeft className="h-5 w-5" />
             </button>
             <div>
               <p className="command-eyebrow">Fluxo de atendimento</p>
-              <h1 className="text-2xl font-bold tracking-tight text-gray-950">{id ? 'Editar Ordem' : 'Nova Ordem'}</h1>
+              <h1 className="text-2xl font-bold tracking-tight text-gray-950">{quoteMode ? (id ? 'Editar orçamento' : 'Novo orçamento') : id ? 'Editar Ordem' : 'Nova Ordem'}</h1>
               <p className="command-page-description">Identifique o cliente, defina o serviço e confirme entrega e pagamento.</p>
             </div>
           </div>
@@ -713,7 +810,7 @@ export function NovaOrdem() {
 
               <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_360px]">
                 <div className="space-y-5">
-                  <Field label="Data de entrega / previsão *">
+                  <Field label={quoteMode ? 'Prazo de entrega previsto' : 'Data de entrega / previsão *'}>
                     <input
                       type="date"
                       value={dataPrevisao}
@@ -721,7 +818,7 @@ export function NovaOrdem() {
                       onFocus={() => setAgendaOpen(true)}
                       onChange={(event) => setDataPrevisao(event.target.value)}
                       className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
-                      required
+                      required={!quoteMode}
                     />
                   </Field>
                   {agendaOpen && (
@@ -739,7 +836,15 @@ export function NovaOrdem() {
                   </Field>
                 </div>
 
-                <div className="space-y-4">
+                {quoteMode && (
+                  <div className="space-y-3 rounded-xl border border-violet-200 bg-violet-50/60 p-4 text-sm text-violet-900">
+                    <p className="flex items-center gap-2 font-semibold"><ClipboardCheck className="h-4 w-4" /> Orçamento</p>
+                    <p>O pagamento e a data de entrega definitiva são combinados quando o cliente aprovar. Aí a OS é aberta com poucos cliques.</p>
+                    <p className="font-semibold">Total: {formatCurrency(total)}</p>
+                  </div>
+                )}
+
+                <div className={`space-y-4 ${quoteMode ? 'hidden' : ''}`}>
                   <div className="space-y-3">
                     <div className="flex items-start justify-between gap-3">
                       <div>
@@ -831,7 +936,7 @@ export function NovaOrdem() {
           )}
 
           <div className="mt-8 flex flex-col-reverse gap-3 border-t border-gray-100 pt-5 sm:flex-row sm:items-center sm:justify-between">
-            <button type="button" onClick={() => step === 1 ? navigate('/ordens') : setStep((current) => Math.max(1, current - 1))} className="inline-flex items-center justify-center gap-2 rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
+            <button type="button" onClick={() => step === 1 ? navigate(quoteMode ? '/orcamentos' : '/ordens') : setStep((current) => Math.max(1, current - 1))} className="inline-flex items-center justify-center gap-2 rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
               {step === 1 ? <ArrowLeft className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
               {step === 1 ? 'Cancelar' : 'Voltar'}
             </button>
@@ -841,15 +946,62 @@ export function NovaOrdem() {
                 Continuar
                 <ChevronRight className="h-4 w-4" />
               </button>
-            ) : (
-              <button type="submit" disabled={loading} className="inline-flex items-center justify-center gap-2 rounded-lg bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60">
-                {loading ? 'Salvando...' : id ? 'Atualizar ordem' : 'Salvar ordem'}
-                <Send className="h-4 w-4" />
+            ) : quoteMode ? (
+              <button type="button" onClick={() => setShowQuoteModal(true)} className="inline-flex items-center justify-center gap-2 rounded-lg bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-violet-700">
+                Salvar orçamento
+                <ClipboardCheck className="h-4 w-4" />
               </button>
+            ) : (
+              <div className="flex flex-col-reverse gap-2 sm:flex-row">
+                {!id && (
+                  <button type="button" onClick={() => setShowQuoteModal(true)} className="inline-flex items-center justify-center gap-2 rounded-lg border border-violet-300 bg-white px-5 py-2.5 text-sm font-semibold text-violet-700 hover:bg-violet-50">
+                    <ClipboardCheck className="h-4 w-4" />
+                    Gerar orçamento
+                  </button>
+                )}
+                <button type="submit" disabled={loading} className="inline-flex items-center justify-center gap-2 rounded-lg bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60">
+                  {loading ? 'Salvando...' : id ? 'Atualizar ordem' : 'Salvar ordem'}
+                  <Send className="h-4 w-4" />
+                </button>
+              </div>
             )}
           </div>
         </form>
       </div>
+
+      {showQuoteModal && (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/60 p-4" onClick={() => !savingQuote && setShowQuoteModal(false)}>
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+            <div className="mb-4 flex items-start gap-3">
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-violet-100 text-violet-700"><ClipboardCheck className="h-5 w-5" /></span>
+              <div>
+                <h3 className="text-lg font-bold text-gray-950">{quoteMode ? 'Salvar orçamento' : 'Gerar orçamento'}</h3>
+                <p className="text-sm text-gray-500">Nenhuma OS será aberta. Quando o cliente aprovar, você transforma em OS com a data de entrega.</p>
+              </div>
+            </div>
+            <div className="mb-4 rounded-xl bg-gray-50 p-3 text-sm text-gray-700">
+              <p><b>{clienteSelecionado?.nome || 'Cliente'}</b> · {modelo || 'equipamento'}</p>
+              <p className="mt-1 text-lg font-bold text-gray-950">{formatCurrency(total)}</p>
+            </div>
+            <label className="mb-3 block text-sm font-medium text-gray-700">
+              Validade do orçamento
+              <select value={quoteDays} onChange={(event) => setQuoteDays(Number(event.target.value))} className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm">
+                {[3, 7, 15, 30].map((days) => <option key={days} value={days}>{days} dias</option>)}
+              </select>
+            </label>
+            <label className="mb-5 flex items-start gap-3 rounded-xl border border-gray-200 p-3 text-sm">
+              <input type="checkbox" checked={quoteSendNow} onChange={(event) => setQuoteSendNow(event.target.checked)} className="mt-1 h-4 w-4" />
+              <span><b className="text-gray-900">Enviar ao cliente agora</b><br /><span className="text-gray-500">Mensagem no WhatsApp com o PDF do orçamento.</span></span>
+            </label>
+            <div className="flex justify-end gap-2">
+              <button type="button" disabled={savingQuote} onClick={() => setShowQuoteModal(false)} className="rounded-lg px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100">Cancelar</button>
+              <button type="button" disabled={savingQuote} onClick={() => void saveQuote()} className="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-5 py-2 text-sm font-semibold text-white hover:bg-violet-700 disabled:opacity-60">
+                {savingQuote ? 'Salvando…' : quoteSendNow ? 'Salvar e enviar' : 'Salvar orçamento'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <ClienteModal isOpen={showClienteModal} onClose={() => setShowClienteModal(false)} onSuccess={() => { carregarDados(); setShowClienteModal(false); }} />
       <InstrumentoModal isOpen={showInstrumentoModal} onClose={() => setShowInstrumentoModal(false)} onSuccess={() => { carregarDados(); setShowInstrumentoModal(false); }} />

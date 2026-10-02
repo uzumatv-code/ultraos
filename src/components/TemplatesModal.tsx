@@ -68,6 +68,7 @@ const TEMPLATE_ICONS: Record<string, LucideIcon> = {
   lembrete_retirada: Bell,
   cobranca_pagamento: Wallet,
   lembrete_manutencao: Hammer,
+  orcamento_enviado: FileText,
   orcamento_aprovado: CheckCircle2,
   diagnostico_concluido: Sparkles,
   avaliacao_google_instagram: Star,
