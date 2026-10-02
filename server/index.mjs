@@ -5101,6 +5101,56 @@ async function approveQuote({ auth, req = null, quoteId, dataPrevisao, sinalValo
   }
 }
 
+/**
+ * Transforma uma OS que ainda não começou (e sem pagamento nem nota) em orçamento:
+ * o orçamento nasce com os mesmos dados e a OS é cancelada com a referência.
+ */
+async function convertOrderToQuote({ userId, orderId }) {
+  const [[order]] = await pool.query(
+    'SELECT o.*, c.nome AS cliente_nome FROM ordens_servico o JOIN clientes c ON c.id = o.cliente_id AND c.user_id = o.user_id WHERE o.id = ? AND o.user_id = ? LIMIT 1',
+    [orderId, userId],
+  );
+  if (!order) throw Object.assign(new Error('Ordem de serviço não encontrada'), { status: 404 });
+  if (order.status !== 'pendente') {
+    throw new Error(`A OS #${order.numero} está ${readableOrderStatus(order.status)}. Só dá para transformar em orçamento uma OS que ainda não começou.`);
+  }
+  const [[payments]] = await pool.query("SELECT COUNT(*) AS total FROM os_pagamentos WHERE user_id = ? AND ordem_servico_id = ? AND status = 'confirmado'", [userId, orderId]);
+  if (Number(payments.total) > 0) throw new Error(`A OS #${order.numero} já tem pagamento registrado. Estorne o pagamento antes de transformar em orçamento.`);
+  const [[invoices]] = await pool.query("SELECT COUNT(*) AS total FROM notas_fiscais WHERE user_id = ? AND ordem_servico_id = ? AND status <> 'cancelado'", [userId, orderId]);
+  if (Number(invoices.total) > 0) throw new Error(`A OS #${order.numero} já tem nota fiscal. Cancele a nota antes.`);
+  const [[sent]] = await pool.query("SELECT COUNT(*) AS total FROM whatsapp_mensagens_log WHERE user_id = ? AND ordem_servico_id = ? AND status = 'enviado'", [userId, orderId]);
+
+  const parse = (value) => (typeof value === 'string' ? (() => { try { return JSON.parse(value); } catch { return null; } })() : value);
+  const created = await createQuote(userId, {
+    validade_dias: 7,
+    ordem: {
+      cliente_id: order.cliente_id, instrumento_id: order.instrumento_id, marca_id: order.marca_id, modelo: order.modelo, acessorios: order.acessorios,
+      problemas_ids: parse(order.problemas_ids) || [], problemas_descricoes: parse(order.problemas_descricoes) || {}, problema_descricao: order.problema_descricao,
+      servicos_ids: parse(order.servicos_ids) || [], servicos_descricoes: parse(order.servicos_descricoes) || {}, servico_descricao: order.servico_descricao,
+      valor_servicos: order.valor_servicos, desconto: order.desconto, valor_total: order.valor_total, forma_pagamento: 'a_definir',
+      observacoes: order.observacoes, data_previsao: String(order.data_previsao || '').slice(0, 10) || null,
+    },
+  });
+  if (Number(sent.total) > 0) await pool.query("UPDATE orcamentos SET status = 'enviado', enviado_em = ? WHERE id = ? AND user_id = ?", [now(), created.id, userId]);
+  await pool.query(
+    "UPDATE ordens_servico SET status = 'cancelado', observacoes = TRIM(CONCAT(COALESCE(observacoes, ''), ?)), updated_at = ? WHERE id = ? AND user_id = ?",
+    [`\nTransformada no orçamento #${created.numero}.`, now(), orderId, userId],
+  );
+  await pool.query("UPDATE os_condicoes_pagamento SET status = 'cancelado' WHERE ordem_servico_id = ? AND user_id = ? AND status <> 'recebido'", [orderId, userId]);
+  await syncReceivableForOrder(pool, userId, orderId);
+  return { orcamento_id: created.id, numero: created.numero, os_numero: order.numero, cliente: order.cliente_nome };
+}
+
+app.post('/api/ordens/:id/virar-orcamento', requireAuth, async (req, res) => {
+  try {
+    const result = await convertOrderToQuote({ userId: req.auth.accountId, orderId: req.params.id });
+    await writeAudit(req, { action: 'ordem.virar_orcamento', resource: 'ordens_servico', resourceId: req.params.id, details: result });
+    res.json({ data: result, error: null });
+  } catch (error) {
+    res.status(error.status || 400).json({ data: null, error: { message: error.message } });
+  }
+});
+
 const quoteRoute = (handler) => async (req, res) => {
   try {
     res.json({ data: await handler(req), error: null });
@@ -6537,6 +6587,7 @@ const osTools = createOsTools({
   afterOrderCreated: (conn, userId, order) => markRemarketingConversion(conn, userId, order),
   validatePhone,
   createQuote: (userId, body) => createQuote(userId, body),
+  convertOrderToQuote: (userId, orderId) => convertOrderToQuote({ userId, orderId }),
   approveQuote: (userId, args) => approveQuote({ auth: { accountId: userId, userId, role: 'admin' }, ...args }),
 });
 

@@ -211,18 +211,25 @@ export const OS_TOOLS = [
   },
   {
     type: 'function',
+    name: 'transformar_os_em_orcamento',
+    description:
+      'Transforma uma OS ABERTA que ainda não começou (status aguardando, sem pagamento e sem nota) em orçamento: cria o orçamento com os mesmos dados e cancela a OS. Use quando o usuário disser que aquela OS era na verdade um orçamento. Localize a OS com buscar_os antes.',
+    parameters: { type: 'object', properties: { os_id: { type: 'string' } }, required: ['os_id'] },
+  },
+  {
+    type: 'function',
     name: 'recusar_orcamento',
     description: 'Marca um orçamento como recusado pelo cliente, com o motivo se houver.',
     parameters: { type: 'object', properties: { orcamento_id: { type: 'string' }, motivo: { type: 'string' } }, required: ['orcamento_id'] },
   },
 ];
 
-export const OS_WRITE_TOOLS = new Set(['mudar_status_os', 'avisar_cliente_os', 'cancelar_os', 'cadastrar_cliente', 'criar_os', 'criar_orcamento', 'aprovar_orcamento', 'recusar_orcamento']);
+export const OS_WRITE_TOOLS = new Set(['mudar_status_os', 'avisar_cliente_os', 'cancelar_os', 'cadastrar_cliente', 'criar_os', 'criar_orcamento', 'aprovar_orcamento', 'recusar_orcamento', 'transformar_os_em_orcamento']);
 export const OS_TOOL_NAMES = new Set(OS_TOOLS.map((tool) => tool.name));
 
 /* ------------------------------------------------------------------ implementação */
 
-export function createOsTools({ pool, uuid, now, todayDate, money, syncReceivable, sendCustomerMessage, afterOrderCreated, validatePhone, createQuote, approveQuote }) {
+export function createOsTools({ pool, uuid, now, todayDate, money, syncReceivable, sendCustomerMessage, afterOrderCreated, validatePhone, createQuote, approveQuote, convertOrderToQuote }) {
   const day = (value) => String(value || '').slice(0, 10);
 
   const ORDER_SELECT = `
@@ -512,6 +519,7 @@ export function createOsTools({ pool, uuid, now, todayDate, money, syncReceivabl
   async function run(name, args, ctx) {
     switch (name) {
       case 'listar_orcamentos': return listQuotes(ctx.userId, args);
+      case 'transformar_os_em_orcamento': return { ok: true, ...(await convertOrderToQuote(ctx.userId, args.os_id)) };
       case 'criar_orcamento': return createQuoteFromArgs(ctx.userId, args);
       case 'aprovar_orcamento': {
         const result = await approveQuote(ctx.userId, { quoteId: args.orcamento_id, dataPrevisao: args.data_entrega, sinalValor: args.sinal_valor, sinalForma: args.sinal_forma });

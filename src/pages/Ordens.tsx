@@ -15,7 +15,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowUpDown, CheckCircle2, ChevronLeft, ChevronRight, DollarSign, Edit3,
+  ArrowUpDown, CheckCircle2, ClipboardCheck, ChevronLeft, ChevronRight, DollarSign, Edit3,
   FileText, History, LayoutGrid, MoreHorizontal, Printer, Search,
   Send, Star, Trash2, Wrench, X,
 } from 'lucide-react';
@@ -168,6 +168,23 @@ export function Ordens() {
       await load();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Erro ao atualizar status');
+    }
+  }
+
+  async function convertToQuote(ordem: OrdemServico) {
+    const confirmed = await alerts.confirm({
+      title: 'Transformar em orçamento?',
+      text: `A OS #${ordem.numero} vira um orçamento (mesmos dados e valores) e a OS é cancelada. O cliente não é avisado.`,
+      icon: 'question',
+      confirmButtonText: 'Transformar',
+    });
+    if (!confirmed.isConfirmed) return;
+    try {
+      const result = await apiRequest<{ numero: number }>(`/api/ordens/${ordem.id}/virar-orcamento`, { method: 'POST' });
+      toast.success(`OS #${ordem.numero} virou o orçamento #${result.numero}.`);
+      navigate('/orcamentos');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Não foi possível transformar em orçamento.');
     }
   }
 
@@ -468,6 +485,7 @@ export function Ordens() {
                             onEvaluation={() => void requestEvaluation(ordem)}
                             onInvoice={() => void generateInvoice(ordem)}
                             onPayment={() => void registerPayment(ordem)}
+                            onQuote={() => void convertToQuote(ordem)}
                             onDelete={() => void removeOrder(ordem)}
                           />
                         </Td>
@@ -534,6 +552,7 @@ export function Ordens() {
                       onEvaluation={() => void requestEvaluation(ordem)}
                       onInvoice={() => void generateInvoice(ordem)}
                       onPayment={() => void registerPayment(ordem)}
+                      onQuote={() => void convertToQuote(ordem)}
                       onDelete={() => void removeOrder(ordem)}
                     />
                   </div>
@@ -625,6 +644,7 @@ function RowMenu({
   onEvaluation,
   onInvoice,
   onPayment,
+  onQuote,
   onDelete,
 }: {
   ordem: OrdemServico;
@@ -636,6 +656,7 @@ function RowMenu({
   onEvaluation: () => void;
   onInvoice: () => void;
   onPayment: () => void;
+  onQuote: () => void;
   onDelete: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -656,6 +677,7 @@ function RowMenu({
     },
     { label: 'Gerar NFS-e', icon: FileText, action: onInvoice, show: can('nfse.manage'), disabled: ordem.status !== 'concluido' },
     { label: 'Registrar pagamento', icon: DollarSign, action: onPayment, show: can('financeiro.write') },
+    { label: 'Transformar em orçamento', icon: ClipboardCheck, action: onQuote, show: true, disabled: ordem.status !== 'pendente' },
     { label: 'Excluir', icon: Trash2, action: onDelete, show: can('ordens.delete'), danger: true },
   ].filter((item) => item.show);
 
