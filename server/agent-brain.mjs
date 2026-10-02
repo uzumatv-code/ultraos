@@ -8,6 +8,7 @@
  */
 
 import { OS_TOOLS, OS_TOOL_NAMES, OS_WRITE_TOOLS } from './os-agent.mjs';
+import { FINANCE_QUERY_TOOL, createFinanceQueries } from './finance-queries.mjs';
 
 const WRITE_TOOLS = new Set(['criar_conta_pagar', 'pagar_conta', 'cancelar_conta', 'registrar_despesa', 'registrar_receita', 'desfazer_ultimo_lancamento', 'anexar_comprovante', 'corrigir_categoria', 'lembrar_categoria', 'editar_parcelas']);
 
@@ -83,7 +84,7 @@ const TOOLS = [
   {
     type: 'function',
     name: 'registrar_receita',
-    description: 'Lança uma entrada avulsa de dinheiro (venda de acessório, reembolso). Para pagamento de OS use o fluxo de ordens, não esta ferramenta.',
+    description: 'Lança uma entrada de dinheiro avulsa já recebida: serviço feito sem OS ("fiz um serviço de 50"), venda de acessório, reembolso. Para pagamento de OS existente use o fluxo de ordens, não esta ferramenta.',
     parameters: {
       type: 'object',
       properties: { descricao: { type: 'string' }, valor: { type: 'number' }, forma_pagamento: { type: 'string', enum: PAYMENT_METHODS } },
@@ -184,7 +185,7 @@ const TOOLS = [
   {
     type: 'function',
     name: 'consultar_sistema',
-    description: 'Consultas de ordens de serviço e recebíveis: OS do dia, buscar uma OS, OS pendentes de pagamento, quanto receber no mês, faturamento do mês, dívida de um cliente.',
+    description: 'Consultas de ORDENS DE SERVIÇO: OS previstas/abertas no dia, buscar uma OS, OS pendentes de pagamento. Para dinheiro (quanto entrou, quem deve, gastos, contas, faturamento) use consultar_financeiro, não esta.',
     parameters: {
       type: 'object',
       properties: {
@@ -212,7 +213,7 @@ ${note}`.trim() }];
   return parts;
 }
 
-const ALL_TOOLS = [...TOOLS, ...OS_TOOLS];
+const ALL_TOOLS = [...TOOLS, FINANCE_QUERY_TOOL, ...OS_TOOLS];
 
 export function buildSystemPrompt({ nome, hojeIso, diaSemana, timezone, canWrite, categorias = [], regras = [] }) {
   return [
@@ -247,6 +248,8 @@ export function buildSystemPrompt({ nome, hojeIso, diaSemana, timezone, canWrite
     '  • Criar OS por voz/texto: identifique o cliente com buscar_cliente (se não existir, ofereça cadastrar com nome e telefone), colete instrumento, marca/modelo, problema, serviço, valor e previsão; pergunte só o que faltar (cliente, equipamento e problema são essenciais). Datas relativas ("sexta") viram YYYY-MM-DD. Depois de criar, confirme com número da OS e resumo; só avise o cliente se pedirem.',
     '  • Ao finalizar uma OS, informe se ficou saldo a receber (saldo_a_receber).',
     '  • ORÇAMENTOS: "orçamento"/"orçar"/"passar valor" = criar_orcamento (não abre OS). Colete cliente, equipamento, problema/serviço e valor como na OS e crie. Quando o cliente fechar ("o Oto aprovou", "fechou", "pode abrir a OS"), use listar_orcamentos para achar o orçamento certo (pergunte se houver mais de um do mesmo cliente), peça a DATA DE ENTREGA se não foi dita e use aprovar_orcamento (opcional: sinal já recebido). Se o cliente recusou, recusar_orcamento com o motivo. Se a pessoa disser que uma OS aberta era na verdade um orçamento, localize-a com buscar_os e use transformar_os_em_orcamento (só vale para OS aguardando, sem pagamento nem nota).',
+    '- DINHEIRO (SEMPRE consulte, nunca estime nem responda de memória): use consultar_financeiro. "Quanto entrou/recebi/faturei hoje, na semana, no mês" = consulta entradas (soma pagamentos de OS recebidos NO período + entradas lançadas à mão ou por voz; NÃO é a lista de OS do dia, e OS em execução/aberta sem pagamento não é dinheiro que entrou). Responda com o total, quanto veio de OS e quanto de entradas avulsas, e liste cada item (descrição, valor, forma). Se a pessoa falar de "ordens novas/abertas hoje já pagas", use também os_abertas_pagas. "Quem está me devendo", "quanto tenho a receber", "quanto fulano deve" = a_receber (por cliente, com as OS). "Quanto gastei", "liste meus gastos" = gastos (liste TODOS os itens e o total por categoria). "Contas que faltam pagar", "contas atrasadas", "contas já pagas/quitadas" = contas_pagar com status abertas/atrasadas/pagas. "Quanto sobrou", "lucro", "como estou no mês", "balanço" = balanco. Períodos: hoje, ontem, semana, mes, mes_passado, ano; datas específicas = personalizado com de/ate. Se o pedido misturar assuntos (ex.: "quanto entrou e quanto gastei"), chame as consultas necessárias e responda tudo numa só mensagem. Dados de uma consulta nunca vêm de outra: se não houver lançamentos, diga "nada entrou ainda" em vez de inventar.',
+    '- Quando a pessoa disser que recebeu ou fez um serviço avulso ("fiz um serviço de 50", "vendi uma palheta por 20", "recebi 80 de um conserto") sem citar uma OS existente, registre com registrar_receita (descrição curta + valor) e confirme; esse valor passa a contar em "quanto entrou". Se citar uma OS, use o fluxo de ordens.',
     '- NÃO pergunte a forma de pagamento: ela é opcional. Preencha forma_pagamento SOMENTE se a pessoa disser ou o comprovante mostrar (ex.: Pix); nunca presuma nem invente. Evite perguntas desnecessárias; só pergunte o que realmente impede a ação.',
     '- Mensagem com vários itens (ex.: "paguei 37 de dízimo e comprei 95 de encordoamento") = um lançamento separado por item, cada um com seu valor e descrição. Nunca some. Confirme listando cada lançamento e o total só no final.',
     '- Depois de executar, diga o que foi feito; não peça confirmação extra para ações simples e reversíveis.',
@@ -256,6 +259,7 @@ export function buildSystemPrompt({ nome, hojeIso, diaSemana, timezone, canWrite
 }
 
 export function createAgentBrain({ pool, now, todayDate, timezone, apiKey, model, actions, formatBRL, osTools = null, baseUrl = 'https://api.openai.com/v1', log = console }) {
+  const financeQueries = createFinanceQueries({ pool, todayDate });
   const reasoning = /^(gpt-5|o\d)/.test(String(model || '')) ? { effort: 'low' } : undefined;
 
   const dayName = () =>
@@ -350,6 +354,8 @@ export function createAgentBrain({ pool, now, todayDate, timezone, apiKey, model
         }
         return out;
       }
+      case 'consultar_financeiro':
+        return financeQueries.run(ctx.userId, args);
       case 'resumo_financeiro':
         return { resumo: await actions.summary(ctx.userId) };
       case 'desfazer_ultimo_lancamento':

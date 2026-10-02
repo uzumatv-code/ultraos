@@ -67,3 +67,12 @@ test('mensagem de parcela informa andamento e saldo', () => {
   assert.match(installmentNote({ parcela_numero: 10, parcela_total: 10, valor: 2700 }), /última parcela/);
   assert.equal(installmentNote({ valor: 10 }), '');
 });
+
+test('entradas e serviços avulsos não viram despesa rápida', async () => {
+  const { parseQuickExpense, detectAgentCommand } = await import('./finance-agent.mjs');
+  assert.equal(parseQuickExpense('fiz um serviço de 50,00'), null);
+  assert.equal(parseQuickExpense('recebi 80 de cola'), null);
+  assert.equal(parseQuickExpense('vendi corda 30'), null);
+  assert.equal(detectAgentCommand('Quanto entrou hoje?'), null);
+  assert.equal(detectAgentCommand('qual o saldo do mês'), 'saldo_mes');
+});

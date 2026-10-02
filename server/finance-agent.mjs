@@ -54,7 +54,7 @@ function parseAmount(text) {
 }
 
 const EXPENSE_VERB = /\b(comprei|gastei|paguei|pago|compra|gasto|despesa|almocei|jantei|abasteci|tomei|lanchei)\b/i;
-const NOT_EXPENSE = /\b(os|ordem|cliente|conta a pagar|vencimento|vence|boleto|fatura|cadastr|abr[ae]|cancel|confirmar|quanto|quais|qual|parcel|vezes|recorrent|todo m[eê]s|mensal|\d+\s*x\b)/i;
+const NOT_EXPENSE = /\b(recebi|recebeu|vendi|ganhei|entrou|entrada|fiz um servi[cç]o|fiz uma|servi[cç]o|os|ordem|cliente|conta a pagar|vencimento|vence|boleto|fatura|cadastr|abr[ae]|cancel|confirmar|quanto|quais|qual|parcel|vezes|recorrent|todo m[eê]s|mensal|\d+\s*x\b)/i;
 
 /**
  * Reconhece lançamentos curtos: "comprei um café 10,00", "gastei 50 no mercado",
@@ -108,7 +108,8 @@ export function detectAgentCommand(message) {
   if (/(contas?|boletos?|vencimentos?).*(semana|proximos? dias|proximas|a vencer|vao vencer)|proximas contas|o que vence/.test(text)) return 'proximas';
   if (/(quanto|total).*(gastei|gasto|gastos|despesas?).*(hoje|dia)|gastos? de hoje|gastei hoje/.test(text)) return 'gastos_hoje';
   if (/(quanto|total).*(gastei|gasto|gastos|despesas?).*(mes)|gastos? do mes|despesas? do mes|gastei no mes/.test(text)) return 'gastos_mes';
-  if (/(saldo|caixa|sobrou|lucro).*(mes|hoje)?|quanto (entrou|recebi)/.test(text)) return 'saldo_mes';
+  // Pedidos com outro período (hoje, ontem, semana…) ou sobre entradas vão para a IA, que consulta o período certo.
+  if (/(saldo|caixa|sobrou|lucro)/.test(text) && !/hoje|ontem|semana|ano|passado|dia/.test(text)) return 'saldo_mes';
   return null;
 }
 
