@@ -1410,9 +1410,9 @@ app.get('/api/whatsapp/conversations', requireAuth, async (req, res) => {
   try {
     const search = String(req.query.search || '').trim();
     const params = [req.auth.accountId];
-    let searchSql = '';
+    let searchSql = req.query.filtro === 'nao_lidas' ? ' AND wc.nao_lidas > 0' : '';
     if (search) {
-      searchSql = ' AND (c.nome LIKE ? OR wc.nome_contato LIKE ? OR wc.telefone LIKE ?)';
+      searchSql += ' AND (c.nome LIKE ? OR wc.nome_contato LIKE ? OR wc.telefone LIKE ?)';
       params.push(...Array(3).fill(`%${search}%`));
     }
     const [rows] = await pool.query(
@@ -1455,7 +1455,9 @@ app.get('/api/whatsapp/conversations/:id/messages', requireAuth, async (req, res
       `SELECT wm.id,wm.conversa_id,wm.cliente_id,wm.ordem_servico_id,wm.provider_message_id,wm.direcao,wm.tipo,wm.conteudo,wm.status,
               wm.from_me,wm.enviada_pelo_sistema,wm.mensagem_referencia_id,wm.enviada_em,wm.entregue_em,wm.lida_em,wm.apagada_em,wm.created_at,
               (SELECT wa.id FROM whatsapp_anexos wa WHERE wa.mensagem_id=wm.id AND wa.user_id=wm.user_id LIMIT 1) AS anexo_id,
-              (SELECT wa.nome_arquivo FROM whatsapp_anexos wa WHERE wa.mensagem_id=wm.id AND wa.user_id=wm.user_id LIMIT 1) AS anexo_nome
+              (SELECT wa.nome_arquivo FROM whatsapp_anexos wa WHERE wa.mensagem_id=wm.id AND wa.user_id=wm.user_id LIMIT 1) AS anexo_nome,
+              (SELECT wa.tipo_mime FROM whatsapp_anexos wa WHERE wa.mensagem_id=wm.id AND wa.user_id=wm.user_id LIMIT 1) AS anexo_mime,
+              (SELECT wa.tamanho_bytes FROM whatsapp_anexos wa WHERE wa.mensagem_id=wm.id AND wa.user_id=wm.user_id LIMIT 1) AS anexo_tamanho
          FROM whatsapp_mensagens wm WHERE wm.user_id=? AND wm.conversa_id=?${beforeSql.replaceAll('enviada_em', 'wm.enviada_em')}
         ORDER BY wm.enviada_em DESC LIMIT 100`, params,
     );
@@ -1519,6 +1521,55 @@ app.patch('/api/whatsapp/conversations/:id', requireAuth, async (req, res) => {
     await pool.query('UPDATE whatsapp_conversas SET ordem_servico_id=?,status=?,updated_at=? WHERE id=? AND user_id=?', [orderId, req.body.status === 'fechada' ? 'fechada' : 'aberta', now(), req.params.id, req.auth.accountId]);
     return res.json({ data: { updated: true } });
   } catch (error) { return res.status(500).json({ error: { message: error.message } }); }
+});
+
+app.post('/api/whatsapp/conversations/read-all', requireAuth, async (req, res) => {
+  try {
+    const [result] = await pool.query('UPDATE whatsapp_conversas SET nao_lidas=0,updated_at=? WHERE user_id=? AND nao_lidas>0', [now(), req.auth.accountId]);
+    return res.json({ data: { updated: result.affectedRows } });
+  } catch (error) { return res.status(500).json({ error: { message: error.message } }); }
+});
+
+app.post('/api/whatsapp/conversations/bulk', requireAuth, async (req, res) => {
+  try {
+    const ids = [...new Set((Array.isArray(req.body?.ids) ? req.body.ids : []).map(String))].slice(0, 200);
+    const action = String(req.body?.action || '');
+    if (!ids.length) return res.status(400).json({ error: { message: 'Selecione ao menos uma conversa' } });
+    const sets = {
+      read: 'nao_lidas=0',
+      unread: 'nao_lidas=GREATEST(nao_lidas,1)',
+      close: "status='fechada'",
+      open: "status='aberta'",
+    };
+    if (!sets[action]) return res.status(400).json({ error: { message: 'Ação inválida' } });
+    const [result] = await pool.query(
+      `UPDATE whatsapp_conversas SET ${sets[action]},updated_at=? WHERE user_id=? AND id IN (${ids.map(() => '?').join(',')})`,
+      [now(), req.auth.accountId, ...ids],
+    );
+    return res.json({ data: { updated: result.affectedRows } });
+  } catch (error) { return res.status(500).json({ error: { message: error.message } }); }
+});
+
+app.post('/api/whatsapp/conversations/:id/unread', requireAuth, async (req, res) => {
+  await pool.query('UPDATE whatsapp_conversas SET nao_lidas=GREATEST(nao_lidas,1),updated_at=? WHERE id=? AND user_id=?', [now(), req.params.id, req.auth.accountId]);
+  return res.json({ data: { unread: true } });
+});
+
+app.post('/api/whatsapp/messages/:id/transcribe', requireAuth, async (req, res) => {
+  try {
+    const [[row]] = await pool.query(
+      `SELECT wm.id, wm.tipo, wa.tipo_mime, wa.conteudo FROM whatsapp_mensagens wm
+         JOIN whatsapp_anexos wa ON wa.mensagem_id = wm.id AND wa.user_id = wm.user_id
+        WHERE wm.id = ? AND wm.user_id = ? LIMIT 1`,
+      [req.params.id, req.auth.accountId],
+    );
+    if (!row?.conteudo) return res.status(404).json({ error: { message: 'Áudio ainda não foi arquivado' } });
+    if (row.tipo !== 'audio') return res.status(400).json({ error: { message: 'Só é possível transcrever áudios' } });
+    const text = (await transcribeAudioFromBase64(Buffer.from(row.conteudo).toString('base64'), row.tipo_mime || 'audio/ogg')).trim();
+    if (!text) return res.status(422).json({ error: { message: 'Não consegui entender este áudio' } });
+    await pool.query('UPDATE whatsapp_mensagens SET conteudo=?,updated_at=? WHERE id=? AND user_id=?', [`🎤 ${text}`, now(), row.id, req.auth.accountId]);
+    return res.json({ data: { conteudo: `🎤 ${text}` } });
+  } catch (error) { return res.status(502).json({ error: { message: error.message } }); }
 });
 
 app.post('/api/whatsapp/conversations/:id/read', requireAuth, async (req, res) => {
@@ -4536,24 +4587,108 @@ async function archiveEvolutionMessage(userId, body) {
     const preview = parsed.text || `[${parsed.messageType}]`;
     await pool.query(
       `UPDATE whatsapp_conversas SET ultima_mensagem=?, ultima_mensagem_em=?,
-              nao_lidas=nao_lidas + ?, updated_at=? WHERE id=? AND user_id=?`,
-      [preview.slice(0, 1000), sentAt, parsed.fromMe ? 0 : 1, now(), conversation.id, userId],
+              nao_lidas=CASE WHEN ? = 1 THEN 0 ELSE nao_lidas + 1 END, updated_at=? WHERE id=? AND user_id=?`,
+      // responder pelo celular significa que a conversa foi lida
+      [preview.slice(0, 1000), sentAt, parsed.fromMe ? 1 : 0, now(), conversation.id, userId],
     );
-    if (parsed.messageType !== 'texto' && parsed.mediaBase64) {
-      const cleanBase64 = String(parsed.mediaBase64).replace(/^data:[^;]+;base64,/, '');
-      if (/^[a-zA-Z0-9+/]*={0,2}$/.test(cleanBase64) && cleanBase64.length <= 11_200_000) {
-        const content = Buffer.from(cleanBase64, 'base64');
-        if (content.length <= 8 * 1024 * 1024) {
-          await pool.query(
-            `INSERT INTO whatsapp_anexos (id,user_id,mensagem_id,tipo_mime,nome_arquivo,tamanho_bytes,conteudo,sha256,created_at)
-             VALUES (?,?,?,?,?,?,?,?,?)`,
-            [uuid(), userId, messageId, parsed.mimetype || 'application/octet-stream', String(parsed.fileName || `${parsed.messageType}-${providerId}`).slice(0, 255), content.length, content, crypto.createHash('sha256').update(content).digest('hex'), now()],
-          );
-        }
-      }
+    if (WHATSAPP_MEDIA_TYPES.has(parsed.messageType)) {
+      // Em segundo plano: baixar a mídia da Evolution não deve atrasar a resposta do webhook.
+      void storeMessageMedia(userId, messageId, parsed, providerId).catch(async (error) => {
+        console.warn('[whatsapp:midia] nao foi possivel arquivar:', error.message);
+        await pool.query('UPDATE whatsapp_mensagens SET midia_tentativas=COALESCE(midia_tentativas,0)+1 WHERE id=?', [messageId]).catch(() => {});
+      });
     }
   }
   return { ...parsed, conversationId: conversation.id, messageId, inserted: result.affectedRows > 0 };
+}
+
+const WHATSAPP_MEDIA_TYPES = new Set(['imagem', 'audio', 'video', 'documento', 'figurinha']);
+const WHATSAPP_MEDIA_MAX_BYTES = 16 * 1024 * 1024;
+
+async function ensureWhatsAppMediaSchema() {
+  const [rows] = await pool.query(
+    "SELECT COUNT(*) AS total FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'whatsapp_mensagens' AND COLUMN_NAME = 'midia_tentativas'",
+  );
+  if (Number(rows[0]?.total || 0) === 0) await pool.query('ALTER TABLE whatsapp_mensagens ADD COLUMN midia_tentativas int NOT NULL DEFAULT 0');
+  columnCache.delete('whatsapp_mensagens');
+}
+
+/** Pede à Evolution o arquivo de uma mensagem de mídia (base64 + tipo). */
+async function fetchEvolutionMedia(userId, parsed) {
+  const config = await loadWhatsAppConfig(userId);
+  if (!parsed.messageKey?.id || !config || config.method !== 'webhook' || !config.webhook_url) return null;
+  const baseUrl = String(config.webhook_url).replace(/\/$/, '');
+  const instanceName = parsed.instance || config.instance_name || 'default';
+  const response = await fetch(`${baseUrl}/chat/getBase64FromMediaMessage/${encodeURIComponent(instanceName)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', apikey: config.api_key || '' },
+    body: JSON.stringify({ message: { key: parsed.messageKey }, convertToMp4: false }),
+  });
+  const text = await response.text();
+  if (!response.ok) throw new Error(`Evolution media HTTP ${response.status}`);
+  const json = JSON.parse(text || '{}');
+  const base64 = json.base64 || json.data?.base64 || json.media?.base64 || json.message?.base64 || null;
+  return base64 ? { base64, mimetype: json.mimetype || json.data?.mimetype || null, fileName: json.fileName || json.data?.fileName || null } : null;
+}
+
+const MIME_EXTENSIONS = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'audio/ogg': 'ogg', 'audio/mpeg': 'mp3', 'audio/mp4': 'm4a', 'video/mp4': 'mp4', 'application/pdf': 'pdf' };
+
+/** Guarda a mídia da mensagem em whatsapp_anexos. Retorna true se ficou arquivada. */
+async function storeMessageMedia(userId, messageId, parsed, providerId) {
+  const [[exists]] = await pool.query('SELECT id FROM whatsapp_anexos WHERE mensagem_id=? AND user_id=? LIMIT 1', [messageId, userId]);
+  if (exists) return true;
+  let base64 = parsed.mediaBase64;
+  let mimetype = parsed.mimetype;
+  let fileName = parsed.fileName;
+  if (!base64) {
+    const media = await fetchEvolutionMedia(userId, parsed);
+    if (!media) throw new Error('mídia indisponível na Evolution');
+    base64 = media.base64;
+    mimetype = mimetype || media.mimetype;
+    fileName = fileName || media.fileName;
+  }
+  const clean = String(base64).replace(/^data:[^;]+;base64,/, '');
+  const content = Buffer.from(clean, 'base64');
+  if (!content.length) throw new Error('mídia vazia');
+  if (content.length > WHATSAPP_MEDIA_MAX_BYTES) throw new Error('mídia maior que 16 MB');
+  const mime = String(mimetype || 'application/octet-stream').split(';')[0].trim().toLowerCase();
+  const name = String(fileName || `${parsed.messageType}-${String(providerId).slice(0, 12)}.${MIME_EXTENSIONS[mime] || 'bin'}`).slice(0, 255);
+  await pool.query(
+    `INSERT INTO whatsapp_anexos (id,user_id,mensagem_id,tipo_mime,nome_arquivo,tamanho_bytes,conteudo,sha256,created_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+    [uuid(), userId, messageId, mime, name, content.length, content, crypto.createHash('sha256').update(content).digest('hex'), now()],
+  );
+  return true;
+}
+
+let whatsappMediaBackfillRunning = false;
+/** Recupera mídias de mensagens antigas que chegaram sem arquivo (tenta até 3 vezes cada). */
+async function backfillWhatsAppMedia() {
+  if (whatsappMediaBackfillRunning || !EVOLUTION_API_URL) return;
+  whatsappMediaBackfillRunning = true;
+  try {
+    const since = new Date(Date.now() - 45 * 86_400_000).toISOString();
+    const [rows] = await pool.query(
+      `SELECT wm.id, wm.user_id, wm.provider_message_id, wm.raw_payload FROM whatsapp_mensagens wm
+        WHERE wm.tipo IN ('imagem','audio','video','documento','figurinha') AND wm.midia_tentativas < 3 AND wm.enviada_em >= ?
+          AND wm.raw_payload IS NOT NULL AND NOT EXISTS (SELECT 1 FROM whatsapp_anexos wa WHERE wa.mensagem_id = wm.id)
+        ORDER BY wm.enviada_em DESC LIMIT 30`,
+      [since],
+    );
+    for (const row of rows) {
+      try {
+        const payload = typeof row.raw_payload === 'string' ? JSON.parse(row.raw_payload) : row.raw_payload;
+        const parsed = extractEvolutionWebhookMessage(payload);
+        await storeMessageMedia(row.user_id, row.id, parsed, row.provider_message_id || row.id);
+      } catch (error) {
+        await pool.query('UPDATE whatsapp_mensagens SET midia_tentativas = midia_tentativas + 1 WHERE id = ?', [row.id]).catch(() => {});
+      }
+    }
+    if (rows.length) console.log(`[whatsapp:midia] backfill processou ${rows.length} mensagem(ns).`);
+  } catch (error) {
+    console.warn('[whatsapp:midia] backfill falhou:', error.message);
+  } finally {
+    whatsappMediaBackfillRunning = false;
+  }
 }
 
 async function processRemarketingInbound(userId, archived) {
@@ -7008,6 +7143,7 @@ async function startServer() {
     await financeAgent.ensureSchema();
     await ensureInstallmentSchema();
     await ensureNfseSchema();
+    await ensureWhatsAppMediaSchema();
     await receipts.ensureSchema();
   } catch (error) {
     console.error('[startup] Agente financeiro sem esquema atualizado:', error.message);
@@ -7016,6 +7152,8 @@ async function startServer() {
   app.listen(PORT, HOST, () => {
     console.log(`Sistema OS API rodando em ${HOST}:${PORT}`);
     financeAgent.startProactiveJob();
+    setTimeout(() => void backfillWhatsAppMedia(), 30_000);
+    setInterval(() => void backfillWhatsAppMedia(), 3 * 60_000);
     startWhatsAppReconciliationJob();
     startEvaluationBackendJob();
   });
