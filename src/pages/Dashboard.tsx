@@ -21,6 +21,7 @@ import { apiRequest } from '../lib/api-client';
 import { useAuth } from '../contexts/AuthContext';
 import { formatCurrency, formatDateOnly } from '../utils/formatters';
 import { CustomCalendar } from '../components/CustomCalendar';
+import { AssistantChat } from '../components/AssistantChat';
 import { supabase } from '../lib/supabase';
 import { alerts } from '../utils/alerts';
 import { toast } from '../components/ToastCustom';
@@ -63,7 +64,8 @@ function activityLabel(type: string) {
 
 export function Dashboard() {
   const navigate = useNavigate();
-  const { user, can } = useAuth();
+  const { user, can, role } = useAuth();
+  const isAdmin = role === 'admin';
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -153,6 +155,8 @@ export function Dashboard() {
           </UIButton>
         </div>
       </header>
+
+      {isAdmin && <AssistantChat />}
 
       {/* Indicadores acionáveis — cada um leva à lista já filtrada. */}
       <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">

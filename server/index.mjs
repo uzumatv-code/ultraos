@@ -7045,6 +7045,61 @@ async function handleEvolutionWebhook(req, res) {
   return res.json({ received: true, event });
 }
 
+// Chat do painel: mesmo agente do WhatsApp, sem passar pelo WhatsApp.
+// O histórico é guardado em financeiro_ia_logs sob um identificador "telefone" próprio do usuário (web-<id>).
+function webChatKey(req) {
+  return `web-${String(req.auth.userId).replace(/[^a-zA-Z0-9]/g, '').slice(0, 24)}`;
+}
+
+app.get('/api/ia/chat/historico', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT id, mensagem, resposta, status, created_at FROM financeiro_ia_logs
+        WHERE user_id = ? AND telefone = ? AND mensagem IS NOT NULL
+        ORDER BY created_at DESC LIMIT 40`,
+      [req.user.id, webChatKey(req)],
+    );
+    res.json({ data: rows.reverse(), error: null });
+  } catch (error) {
+    res.status(400).json({ data: null, error: { message: error.message } });
+  }
+});
+
+app.post('/api/ia/chat', requireAuth, requireAdmin, async (req, res) => {
+  const message = String(req.body?.mensagem || '').trim().slice(0, 2000);
+  if (!message) return res.status(400).json({ data: null, error: { message: 'Escreva uma mensagem' } });
+  const phone = webChatKey(req);
+  const userId = req.user.id;
+  try {
+    const [[person]] = await pool.query('SELECT nome FROM usuarios WHERE id = ? LIMIT 1', [req.auth.userId]);
+    const authorized = { user_id: userId, nome: person?.nome || req.auth.email || '', permissao: 'admin' };
+    const record = (fields) => logFinancialAi({ user_id: userId, autorizado_id: null, telefone: phone, mensagem: message, tipo_mensagem: 'texto', ...fields });
+
+    const quick = await financeAgent.handleMessage({ authorized, phone, message, payAccountPayable, canWrite: true });
+    if (quick) {
+      await record({ intencao: quick.intent, entidades: quick.entities || null, status: quick.status, resposta: quick.reply });
+      return res.json({ data: { reply: quick.reply }, error: null });
+    }
+
+    if (!process.env.OPENAI_API_KEY) {
+      return res.status(503).json({ data: null, error: { message: 'A IA não está configurada neste servidor (OPENAI_API_KEY ausente).' } });
+    }
+    const brain = await agentBrain.converse({ authorized, phone, message, canWrite: true });
+    const expenses = brain.actions.filter((item) => item.type === 'despesa');
+    const expense = expenses[expenses.length - 1];
+    await record({
+      intencao: 'agente',
+      entidades: expense ? { transacao_id: expense.id, transacao_ids: expenses.map((item) => item.id), description: expense.description, value: expense.value } : { acoes: brain.actions },
+      status: expense ? 'lancamento_rapido' : 'agente',
+      resposta: brain.reply,
+    });
+    res.json({ data: { reply: brain.reply, acoes: brain.actions.length }, error: null });
+  } catch (error) {
+    console.error('[ia-chat:erro]', error.message);
+    res.status(400).json({ data: null, error: { message: 'Não consegui responder agora. Tente de novo em instantes.' } });
+  }
+});
+
 app.post('/api/financeiro/ia/webhook', handleFinancialAiWebhook);
 app.post('/api/webhooks/evolution/:secret', handleEvolutionWebhook);
 
