@@ -423,7 +423,6 @@ export function LojaProdutos() {
   const pendencias = status ? [
     !status.integrado && 'O site ainda não está conectado a esta conta (PORTAL_SHARED_SECRET / PORTAL_TENANT_EMAIL).',
     !status.mercado_pago && 'Pagamento: falta MERCADOPAGO_ACCESS_TOKEN no servidor. Sem ele o site mostra os produtos mas não finaliza compras.',
-    status.mercado_pago && !status.aviso_assinado && `Configure o aviso de pagamento no Mercado Pago (Webhooks → evento Pagamentos) com a URL ${status.url_aviso_pagamento} e salve a assinatura secreta em MERCADOPAGO_WEBHOOK_SECRET.`,
     !status.melhor_envio && 'Frete: falta MELHOR_ENVIO_TOKEN. Enquanto isso, produtos físicos só podem ser retirados na loja.',
   ].filter(Boolean) as string[] : [];
 
