@@ -721,5 +721,5 @@ export function createPortal({ pool, uuid, now, todayDate, sendCustomerMessage, 
     }
   }));
 
-  return { get enabled() { return isEnabled(); }, ensureSchema, router, adminRouter, startVerification, confirmVerification };
+  return { get enabled() { return isEnabled(); }, get tenantId() { return tenantId; }, ensureSchema, router, adminRouter, startVerification, confirmVerification };
 }

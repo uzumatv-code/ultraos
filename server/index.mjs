@@ -18,6 +18,7 @@ import { createOsTools } from './os-agent.mjs';
 import { createRealtimeHub, instrumentDatabase } from './realtime.mjs';
 import { buildDps, cancelNfse, emitDps, parsePfx } from './nfse-nacional.mjs';
 import { createPortal } from './portal.mjs';
+import { createLoja } from './loja.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -229,8 +230,9 @@ app.use(cors({
   credentials: true,
 }));
 // rawBody: o portal do cliente confere a assinatura HMAC sobre o corpo exato enviado pelo site.
-app.use(express.json({ limit: '10mb', verify: (req, _res, buf) => { if (req.url.startsWith('/api/portal/')) req.rawBody = buf; } }));
+app.use(express.json({ limit: '10mb', verify: (req, _res, buf) => { if (req.url.startsWith('/api/portal/') || req.url.startsWith('/api/loja/')) req.rawBody = buf; } }));
 app.use('/uploads/certificados', (_req, res) => res.status(404).end());
+app.use('/uploads/privado', (_req, res) => res.status(404).end());
 app.use('/uploads', express.static(uploadsDir));
 
 app.get('/api/health', (_req, res) => {
@@ -6629,6 +6631,29 @@ const portal = createPortal({
 app.use('/api/portal/v1', portal.router);
 app.use('/api/portal-admin', requireAuth, requireAdmin, portal.adminRouter);
 
+// Loja do site: produtos, cursos e ebooks. Usa a mesma assinatura e a mesma conta do portal.
+const loja = createLoja({
+  pool,
+  uuid,
+  now,
+  getTenantId: () => (portal.enabled ? portal.tenantId : null),
+  secret: process.env.PORTAL_SHARED_SECRET,
+  uploadsDir,
+  sendCustomerMessage,
+  ensureReceitaCategoria: (userId, conn) => ensureDefaultFinancialCategory(userId, 'receita', 'Loja do site', '#8B5CF6', conn),
+  mpAccessToken: process.env.MERCADOPAGO_ACCESS_TOKEN,
+  mpWebhookSecret: process.env.MERCADOPAGO_WEBHOOK_SECRET,
+  melhorEnvioToken: process.env.MELHOR_ENVIO_TOKEN,
+  melhorEnvioEmail: process.env.MELHOR_ENVIO_EMAIL,
+  siteUrl: process.env.PORTAL_SITE_URL,
+  osPublicUrl: process.env.PUBLIC_APP_URL,
+  mpApiUrl: process.env.MERCADOPAGO_API_URL || undefined,
+  melhorEnvioApiUrl: process.env.MELHOR_ENVIO_API_URL || undefined,
+});
+app.use('/api/loja/v1/webhooks', loja.webhookRouter);
+app.use('/api/loja/v1', loja.router);
+app.use('/api/loja-admin', requireAuth, requireAdmin, loja.adminRouter);
+
 const agentBrain = createAgentBrain({
   osTools,
   pool,
@@ -7606,6 +7631,14 @@ async function startServer() {
     console.log(`[startup] Portal do cliente ${portal.enabled ? 'ativo' : 'desligado (sem PORTAL_SHARED_SECRET de 32+ caracteres ou PORTAL_TENANT_EMAIL)'}.`);
   } catch (error) {
     console.error('[startup] Portal do cliente sem esquema:', error.message);
+  }
+
+  try {
+    await loja.ensureSchema();
+    loja.startJobs();
+    console.log(`[startup] Loja do site ${process.env.MERCADOPAGO_ACCESS_TOKEN ? 'com' : 'sem'} Mercado Pago, ${process.env.MELHOR_ENVIO_TOKEN ? 'com' : 'sem'} Melhor Envio.`);
+  } catch (error) {
+    console.error('[startup] Loja do site sem esquema:', error.message);
   }
 
   app.listen(PORT, HOST, () => {
