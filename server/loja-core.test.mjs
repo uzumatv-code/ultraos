@@ -2,9 +2,26 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import test from 'node:test';
 import {
-  mercadoPagoPreference, mercadoPagoSignatureValid, melhorEnvioPayload, normalizeCep, orderStatusFromPayment,
-  parseMelhorEnvio, slugify, validateCart,
+  limparTextosIA, mercadoPagoPreference, mercadoPagoSignatureValid, melhorEnvioPayload, normalizeCep, orderStatusFromPayment,
+  parseMelhorEnvio, promptTextosProduto, slugify, validateCart,
 } from './loja-core.mjs';
+
+test('IA: só campos conhecidos, laudo exige anotações e limites respeitados', () => {
+  const p = { tipo: 'fisico', titulo: 'Fender Strato', condicao: 'seminovo', marca: 'Fender', preco: 5490, laudo: '' };
+  assert.equal(promptTextosProduto(p, ['nada']), null);
+  assert.match(promptTextosProduto(p, ['laudo']).erro, /anotações/);
+  const pr = promptTextosProduto(p, ['descricao', 'seo_titulo', 'invalido'], { instrucoes: 'destacar o braço' });
+  assert.deepEqual(pr.campos, ['descricao', 'seo_titulo']);
+  assert.deepEqual(pr.schema.required, ['descricao', 'seo_titulo']);
+  assert.match(pr.sistema, /Nunca invente/);
+  assert.match(pr.sistema, /destacar o braço/);
+  assert.match(pr.entrada, /Fender Strato/);
+  const limpo = limparTextosIA({ seo_titulo: `"**${'Guitarra '.repeat(20)}**"`, descricao: '## Título\nTexto', extra: 'x' }, ['seo_titulo', 'descricao']);
+  assert.ok(limpo.seo_titulo.length <= 60);
+  assert.ok(!limpo.seo_titulo.includes('*'));
+  assert.equal(limpo.descricao, 'Título\nTexto');
+  assert.equal(limpo.extra, undefined);
+});
 
 const catalogo = new Map([
   ['g1', { id: 'g1', tipo: 'fisico', titulo: 'Guitarra Tagima', preco: 1500, estoque: 1, status: 'publicado', peso_g: 4500, altura_cm: 15, largura_cm: 40, comprimento_cm: 110 }],

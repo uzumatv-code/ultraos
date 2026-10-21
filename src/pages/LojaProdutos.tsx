@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Swal from 'sweetalert2';
 import {
-  AlertCircle, ArrowDown, ArrowUp, BookOpen, ExternalLink, FileUp, ImagePlus, Package, PlaySquare, Plus, RefreshCw, Save, Store, Trash2, X,
+  AlertCircle, ArrowDown, ArrowUp, BookOpen, ExternalLink, FileUp, ImagePlus, Loader2, Package, PlaySquare, Plus, RefreshCw, Save, Sparkles, Store, Trash2, X,
 } from 'lucide-react';
 import { PageContainer } from '../components/PageContainer';
 import { Card } from '../components/Card';
@@ -23,7 +23,7 @@ interface Produto {
   imagens: Imagem[]; tem_arquivo: boolean; aulas?: Aula[]; updated_at: string;
 }
 interface LojaStatus {
-  integrado: boolean; mercado_pago: boolean; aviso_assinado: boolean; melhor_envio: boolean; url_aviso_pagamento: string;
+  integrado: boolean; mercado_pago: boolean; aviso_assinado: boolean; melhor_envio: boolean; url_aviso_pagamento: string; ia?: boolean;
   config: { loja_ativa: boolean; cep_origem: string; retirada_ativa: boolean; retirada_texto: string; envio_ativo: boolean; prazo_postagem_dias: number };
 }
 
@@ -53,23 +53,59 @@ async function prepararImagem(file: File): Promise<Blob> {
   return new Promise((ok, falha) => canvas.toBlob((b) => (b ? ok(b) : falha(new Error('Não foi possível ler a imagem'))), 'image/webp', 0.85));
 }
 
-function Campo({ label, children, ajuda }: { label: string; children: React.ReactNode; ajuda?: string }) {
+function Campo({ label, children, ajuda, acao }: { label: string; children: React.ReactNode; ajuda?: string; acao?: React.ReactNode }) {
   return (
-    <label className="block">
-      <span className="text-sm font-semibold text-slate-900 dark:text-white">{label}</span>
-      {children}
+    <div className="block">
+      <div className="flex items-center justify-between gap-2">
+        <label className="text-sm font-semibold text-slate-900 dark:text-white">{label}</label>
+        {acao}
+      </div>
+      <label className="block">{children}</label>
       {ajuda && <span className="mt-1 block text-xs text-slate-500">{ajuda}</span>}
-    </label>
+    </div>
   );
 }
 
-function Editor({ inicial, onFechar, onSalvo }: { inicial: Produto; onFechar: () => void; onSalvo: () => void }) {
+type CampoIA = 'subtitulo' | 'descricao' | 'seo_titulo' | 'seo_descricao' | 'laudo';
+
+/** Botão pequeno que pede à IA o texto de um campo. */
+function BotaoIA({ ocupado, onClick, rotulo = 'Gerar com IA' }: { ocupado: boolean; onClick: () => void; rotulo?: string }) {
+  return (
+    <button type="button" onClick={onClick} disabled={ocupado}
+      className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-semibold text-violet-600 hover:bg-violet-500/10 disabled:opacity-50">
+      {ocupado ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} {rotulo}
+    </button>
+  );
+}
+
+function Editor({ inicial, onFechar, onSalvo, iaAtiva }: { inicial: Produto; onFechar: () => void; onSalvo: () => void; iaAtiva: boolean }) {
   const [p, setP] = useState<Produto>(inicial);
   const [salvando, setSalvando] = useState(false);
+  const [gerando, setGerando] = useState<CampoIA[]>([]);
+  const [pedidoIA, setPedidoIA] = useState('');
   const [enviando, setEnviando] = useState(false);
   const [novaAula, setNovaAula] = useState({ modulo: '', titulo: '', video_url: '', duracao_min: '', gratis: false });
   const set = <K extends keyof Produto>(k: K, v: Produto[K]) => setP((atual) => ({ ...atual, [k]: v }));
   const num = (v: string) => (v === '' ? null : Number(v));
+
+  // A IA usa o que está no formulário (mesmo sem salvar) e a foto de capa; o texto volta para revisão, nada é salvo sozinho.
+  async function gerarIA(campos: CampoIA[]) {
+    if (!p.titulo.trim()) return toast.error('Informe o nome do produto antes');
+    setGerando(campos);
+    try {
+      const r = await apiRequest<{ textos: Partial<Record<CampoIA, string>> }>(`/api/loja-admin/produtos/${p.id}/ia`, {
+        method: 'POST',
+        body: JSON.stringify({ campos, instrucoes: pedidoIA.trim() || undefined, rascunho: p }),
+      });
+      setP((atual) => ({ ...atual, ...r.textos }));
+      toast.success('Texto gerado. Revise antes de salvar.');
+    } catch (error: any) {
+      toast.error(error.message || 'A IA não respondeu agora');
+    } finally {
+      setGerando([]);
+    }
+  }
+  const ia = (campo: CampoIA, rotulo?: string) => (iaAtiva ? <BotaoIA ocupado={gerando.includes(campo)} onClick={() => void gerarIA([campo])} rotulo={rotulo} /> : undefined);
 
   async function recarregar() {
     setP(await apiRequest<Produto>(`/api/loja-admin/produtos/${p.id}`));
@@ -199,9 +235,21 @@ function Editor({ inicial, onFechar, onSalvo }: { inicial: Produto; onFechar: ()
         </div>
 
         <div className="space-y-6">
+          {iaAtiva && (
+            <section className="rounded-xl border border-violet-200 bg-violet-50/60 p-4 dark:border-slate-700 dark:bg-slate-900">
+              <p className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white"><Sparkles className="h-4 w-4 text-violet-600" /> Escrever com IA</p>
+              <p className="mt-1 text-xs text-slate-500">Preencha nome, marca, condição e a foto de capa. A IA escreve resumo, descrição e os textos do Google usando só essas informações; revise e salve.</p>
+              <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                <input className={`${input} mt-0`} placeholder="Opcional: o que destacar (ex.: braço fino, ideal para iniciantes)" value={pedidoIA} onChange={(e) => setPedidoIA(e.target.value)} />
+                <Button size="sm" icon={gerando.length > 1 ? Loader2 : Sparkles} disabled={gerando.length > 0} onClick={() => void gerarIA(['subtitulo', 'descricao', 'seo_titulo', 'seo_descricao'])}>
+                  {gerando.length > 1 ? 'Escrevendo…' : 'Gerar textos'}
+                </Button>
+              </div>
+            </section>
+          )}
           <section className="grid gap-4 sm:grid-cols-2">
             <div className="sm:col-span-2"><Campo label="Nome"><input className={input} value={p.titulo} onChange={(e) => set('titulo', e.target.value)} /></Campo></div>
-            <div className="sm:col-span-2"><Campo label="Resumo (aparece abaixo do nome)"><input className={input} value={p.subtitulo || ''} onChange={(e) => set('subtitulo', e.target.value)} /></Campo></div>
+            <div className="sm:col-span-2"><Campo label="Resumo (aparece abaixo do nome)" acao={ia('subtitulo')}><input className={input} value={p.subtitulo || ''} onChange={(e) => set('subtitulo', e.target.value)} /></Campo></div>
             <Campo label="Preço (R$)"><input type="number" min={0} step="0.01" className={input} value={p.preco || ''} onChange={(e) => set('preco', Number(e.target.value))} /></Campo>
             <Campo label="Preço antigo, riscado (opcional)"><input type="number" min={0} step="0.01" className={input} value={p.preco_de ?? ''} onChange={(e) => set('preco_de', num(e.target.value))} /></Campo>
             {p.tipo === 'fisico' && (
@@ -221,13 +269,13 @@ function Editor({ inicial, onFechar, onSalvo }: { inicial: Produto; onFechar: ()
             {p.tipo === 'curso' && <Campo label="Carga horária"><input className={input} placeholder="3h20" value={p.carga_horaria || ''} onChange={(e) => set('carga_horaria', e.target.value)} /></Campo>}
             {p.tipo === 'ebook' && <Campo label="Páginas"><input type="number" min={1} className={input} value={p.ebook_paginas ?? ''} onChange={(e) => set('ebook_paginas', num(e.target.value))} /></Campo>}
             <div className="sm:col-span-2">
-              <Campo label="Descrição" ajuda="Texto da página do produto. Linhas em branco separam parágrafos.">
+              <Campo label="Descrição" ajuda="Texto da página do produto. Linhas em branco separam parágrafos." acao={ia('descricao')}>
                 <textarea rows={6} className={input} value={p.descricao || ''} onChange={(e) => set('descricao', e.target.value)} />
               </Campo>
             </div>
             {p.tipo === 'fisico' && p.condicao === 'seminovo' && (
               <div className="sm:col-span-2">
-                <Campo label="Laudo da oficina" ajuda="Estado do instrumento, o que foi revisado e marcas de uso. Passa confiança para quem compra seminovo.">
+                <Campo label="Laudo da oficina" ajuda="Anote o estado do instrumento, o que foi revisado e as marcas de uso. A IA só melhora o texto do que você escreveu." acao={ia('laudo', 'Melhorar texto')}>
                   <textarea rows={4} className={input} value={p.laudo || ''} onChange={(e) => set('laudo', e.target.value)} />
                 </Campo>
               </div>
@@ -326,8 +374,8 @@ function Editor({ inicial, onFechar, onSalvo }: { inicial: Produto; onFechar: ()
 
           <section className="grid gap-4">
             <h3 className="font-bold text-slate-950 dark:text-white">Google (opcional)</h3>
-            <Campo label="Título no Google" ajuda={`${(p.seo_titulo || '').length}/60. Em branco, usa o nome.`}><input maxLength={70} className={input} value={p.seo_titulo || ''} onChange={(e) => set('seo_titulo', e.target.value)} /></Campo>
-            <Campo label="Descrição no Google" ajuda={`${(p.seo_descricao || '').length}/155. Em branco, usa o resumo.`}><textarea maxLength={170} rows={2} className={input} value={p.seo_descricao || ''} onChange={(e) => set('seo_descricao', e.target.value)} /></Campo>
+            <Campo label="Título no Google" acao={ia('seo_titulo')} ajuda={`${(p.seo_titulo || '').length}/60. Em branco, usa o nome.`}><input maxLength={70} className={input} value={p.seo_titulo || ''} onChange={(e) => set('seo_titulo', e.target.value)} /></Campo>
+            <Campo label="Descrição no Google" acao={ia('seo_descricao')} ajuda={`${(p.seo_descricao || '').length}/155. Em branco, usa o resumo.`}><textarea maxLength={170} rows={2} className={input} value={p.seo_descricao || ''} onChange={(e) => set('seo_descricao', e.target.value)} /></Campo>
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" className="h-4 w-4 accent-violet-600" checked={p.destaque} onChange={(e) => set('destaque', e.target.checked)} /> Destacar no topo da loja</label>
           </section>
 
@@ -501,7 +549,7 @@ export function LojaProdutos() {
         </Card>
       </div>
 
-      {editando && <Editor key={editando.id} inicial={editando} onFechar={() => setEditando(null)} onSalvo={() => void load()} />}
+      {editando && <Editor key={editando.id} inicial={editando} iaAtiva={Boolean(status?.ia)} onFechar={() => setEditando(null)} onSalvo={() => void load()} />}
     </PageContainer>
   );
 }

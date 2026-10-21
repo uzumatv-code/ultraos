@@ -159,3 +159,67 @@ export const TRANSICOES_PAINEL = {
   enviado: ['entregue'],
   aguardando_pagamento: ['cancelado'],
 };
+
+// ---------- Textos com IA ----------
+
+/** Campos que a IA pode escrever, com o limite de cada um (o mesmo das colunas). */
+export const CAMPOS_IA = {
+  subtitulo: { max: 300, regra: 'Resumo de uma frase (até 140 caracteres) que aparece abaixo do nome. Destaque o principal motivo para comprar.' },
+  descricao: { max: 4000, regra: 'Descrição da página do produto, 2 a 4 parágrafos curtos separados por linha em branco, sem markdown, sem emojis, sem listas com símbolos. Explique para quem é, o que tem de bom e o que vem junto, só com o que foi informado.' },
+  seo_titulo: { max: 60, regra: 'Título para o Google com no máximo 60 caracteres, com o termo que as pessoas buscam (tipo do instrumento, marca, modelo) e, se couber, "Brasília".' },
+  seo_descricao: { max: 155, regra: 'Descrição para o Google com 120 a 155 caracteres, convidativa, com o principal benefício e uma chamada (ex.: retire em Águas Claras ou receba em casa; acesso imediato para cursos e ebooks).' },
+  laudo: { max: 2000, regra: 'Reescreva as anotações da oficina sobre o estado do seminovo em texto claro e honesto para o comprador, em parágrafos curtos. Use somente o que está nas anotações: não acrescente reparos, medidas, estado ou garantias que não estejam escritos.' },
+};
+
+const TIPO_TEXTO = { fisico: 'produto físico (instrumento musical ou acessório)', curso: 'curso em vídeo online', ebook: 'ebook em PDF' };
+
+/** Monta as instruções e os dados enviados à IA para gerar os textos de um produto. */
+export function promptTextosProduto(produto, campos, { instrucoes = '', aulas = [] } = {}) {
+  const pedidos = campos.filter((c) => CAMPOS_IA[c]);
+  if (!pedidos.length) return null;
+  if (pedidos.includes('laudo') && !String(produto.laudo || '').trim()) return { erro: 'Escreva antes as anotações da oficina no laudo; a IA só melhora o texto, sem inventar o estado da peça.' };
+  const dados = {
+    tipo: TIPO_TEXTO[produto.tipo] || produto.tipo,
+    nome: produto.titulo,
+    condicao: produto.condicao || undefined,
+    marca: produto.marca || undefined,
+    categoria: produto.categoria || undefined,
+    preco: produto.preco ? `R$ ${Number(produto.preco).toFixed(2)}` : undefined,
+    garantia: produto.garantia || undefined,
+    resumo_atual: produto.subtitulo || undefined,
+    descricao_atual: produto.descricao || undefined,
+    anotacoes_laudo: produto.laudo || undefined,
+    carga_horaria: produto.carga_horaria || undefined,
+    paginas: produto.ebook_paginas || undefined,
+    aulas: aulas.length ? aulas.map((a) => `${a.modulo ? `${a.modulo}: ` : ''}${a.titulo}`).slice(0, 60) : undefined,
+  };
+  const sistema = [
+    'Você escreve textos de venda para a loja online da Serviços Prime Luthieria, oficina de luthieria em Águas Claras, Brasília (DF).',
+    'Escreva em português do Brasil, tom profissional, direto e confiável, como um luthier experiente falando com um músico.',
+    'Regra principal: use apenas os fatos informados nos dados e o que for claramente visível na foto. Nunca invente especificações técnicas, ano, origem, madeiras, captadores, medidas, estado de conservação, garantia, brindes ou prazos.',
+    'Se faltar informação, escreva de forma geral em vez de supor. Não use exageros ("o melhor do mercado"), nem preço no texto.',
+    'Campos pedidos:',
+    ...pedidos.map((c) => `- ${c}: ${CAMPOS_IA[c].regra}`),
+    instrucoes ? `Pedido extra de quem cadastra: ${String(instrucoes).slice(0, 500)}` : '',
+  ].filter(Boolean).join('\n');
+  const schema = {
+    type: 'object',
+    additionalProperties: false,
+    required: pedidos,
+    properties: Object.fromEntries(pedidos.map((c) => [c, { type: 'string' }])),
+  };
+  return { sistema, entrada: JSON.stringify(dados, null, 2), schema, campos: pedidos };
+}
+
+/** Limpa a resposta da IA: só os campos pedidos, sem markdown e dentro do limite de cada coluna. */
+export function limparTextosIA(resposta, campos) {
+  const out = {};
+  for (const c of campos) {
+    let texto = String(resposta?.[c] ?? '').replace(/\*\*|__|^#+\s*/gm, '').replace(/\r/g, '').trim();
+    if (c === 'seo_titulo' || c === 'subtitulo' || c === 'seo_descricao') texto = texto.replace(/\s+/g, ' ').replace(/^["']|["']$/g, '');
+    const max = CAMPOS_IA[c].max;
+    if (texto.length > max) texto = `${texto.slice(0, max - 1).replace(/\s+\S*$/, '')}…`;
+    if (texto) out[c] = texto;
+  }
+  return out;
+}
