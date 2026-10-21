@@ -14,7 +14,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   AlertTriangle, Banknote, Bell, Bookmark, ChevronDown, ChevronsLeft, ClipboardCheck, CreditCard, Landmark,
   FileText, Gauge, LayoutGrid, LogOut, Menu, MessageCircle, Music2, PanelsTopLeft,
-  PenTool, Receipt, Search, Settings, Sparkles, Star, User, Users, Wallet, Wrench, X, Globe, Copy,
+  PenTool, Receipt, Search, Settings, Sparkles, Star, User, Users, Wallet, Wrench, X, Globe, Copy, Store, ShoppingBag,
   type LucideIcon,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -65,6 +65,14 @@ const navigation: NavGroup[] = [
     ],
   },
   {
+    id: 'loja',
+    label: 'Loja do site',
+    items: [
+      { path: '/loja', icon: Store, label: 'Produtos, cursos e ebooks', permission: 'settings.manage' },
+      { path: '/loja/pedidos', icon: ShoppingBag, label: 'Pedidos da loja', permission: 'settings.manage' },
+    ],
+  },
+  {
     id: 'relacionamento',
     label: 'Relacionamento',
     items: [
@@ -100,6 +108,7 @@ const emptyAlerts: AlertSummary = {
 function isItemActive(pathname: string, path: string) {
   if (path === '/dashboard') return pathname === path;
   if (path === '/financeiro') return pathname === path;
+  if (path === '/loja') return pathname === path;
   if (path === '/configuracoes') return pathname === path || (pathname.startsWith(`${path}/`) && !pathname.startsWith('/configuracoes/fiscal'));
   return pathname === path || pathname.startsWith(`${path}/`);
 }

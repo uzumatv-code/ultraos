@@ -32,6 +32,8 @@ const Remarketing = lazy(() => import('./pages/Remarketing').then((module) => ({
 const OrdemHistorico = lazy(() => import('./pages/OrdemHistorico').then((module) => ({ default: module.OrdemHistorico })));
 const Conversas = lazy(() => import('./pages/Conversas').then((module) => ({ default: module.Conversas })));
 const PortalCliente = lazy(() => import('./pages/PortalCliente').then((module) => ({ default: module.PortalCliente })));
+const LojaProdutos = lazy(() => import('./pages/LojaProdutos').then((module) => ({ default: module.LojaProdutos })));
+const LojaPedidos = lazy(() => import('./pages/LojaPedidos').then((module) => ({ default: module.LojaPedidos })));
 const ClientesDuplicados = lazy(() => import('./pages/ClientesDuplicados').then((module) => ({ default: module.ClientesDuplicados })));
 
 function RouteFallback() {
@@ -371,6 +373,26 @@ function App() {
             <ProtectedRoute>
               <RequirePermission permission="settings.manage">
                 <Layout><ClientesDuplicados /></Layout>
+              </RequirePermission>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/loja"
+          element={
+            <ProtectedRoute>
+              <RequirePermission permission="settings.manage">
+                <Layout><LojaProdutos /></Layout>
+              </RequirePermission>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/loja/pedidos"
+          element={
+            <ProtectedRoute>
+              <RequirePermission permission="settings.manage">
+                <Layout><LojaPedidos /></Layout>
               </RequirePermission>
             </ProtectedRoute>
           }
