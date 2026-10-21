@@ -14,7 +14,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   AlertTriangle, Banknote, Bell, Bookmark, ChevronDown, ChevronsLeft, ClipboardCheck, CreditCard, Landmark,
   FileText, Gauge, LayoutGrid, LogOut, Menu, MessageCircle, Music2, PanelsTopLeft,
-  PenTool, Receipt, Search, Settings, Sparkles, Star, User, Users, Wallet, Wrench, X,
+  PenTool, Receipt, Search, Settings, Sparkles, Star, User, Users, Wallet, Wrench, X, Globe, Copy,
   type LucideIcon,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -70,6 +70,8 @@ const navigation: NavGroup[] = [
     items: [
       { path: '/avaliacoes', icon: Star, label: 'Avaliações', permission: 'settings.manage' },
       { path: '/remarketing', icon: CreditCard, label: 'Manutenção preventiva', permission: 'settings.manage' },
+      { path: '/portal-cliente', icon: Globe, label: 'Portal do cliente', permission: 'settings.manage', hint: 'Contas do site e agenda' },
+      { path: '/clientes/duplicados', icon: Copy, label: 'Cadastros duplicados', permission: 'settings.manage' },
     ],
   },
   {

@@ -31,6 +31,8 @@ const AvaliacoesLembretes = lazy(() => import('./pages/AvaliacoesLembretes').the
 const Remarketing = lazy(() => import('./pages/Remarketing').then((module) => ({ default: module.Remarketing })));
 const OrdemHistorico = lazy(() => import('./pages/OrdemHistorico').then((module) => ({ default: module.OrdemHistorico })));
 const Conversas = lazy(() => import('./pages/Conversas').then((module) => ({ default: module.Conversas })));
+const PortalCliente = lazy(() => import('./pages/PortalCliente').then((module) => ({ default: module.PortalCliente })));
+const ClientesDuplicados = lazy(() => import('./pages/ClientesDuplicados').then((module) => ({ default: module.ClientesDuplicados })));
 
 function RouteFallback() {
   return (
@@ -349,6 +351,26 @@ function App() {
             <ProtectedRoute>
               <RequirePermission permission="settings.manage">
                 <Layout><Remarketing /></Layout>
+              </RequirePermission>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/portal-cliente"
+          element={
+            <ProtectedRoute>
+              <RequirePermission permission="settings.manage">
+                <Layout><PortalCliente /></Layout>
+              </RequirePermission>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/clientes/duplicados"
+          element={
+            <ProtectedRoute>
+              <RequirePermission permission="settings.manage">
+                <Layout><ClientesDuplicados /></Layout>
               </RequirePermission>
             </ProtectedRoute>
           }

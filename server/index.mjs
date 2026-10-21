@@ -17,6 +17,7 @@ import { createReceiptStore } from './receipts.mjs';
 import { createOsTools } from './os-agent.mjs';
 import { createRealtimeHub, instrumentDatabase } from './realtime.mjs';
 import { buildDps, cancelNfse, emitDps, parsePfx } from './nfse-nacional.mjs';
+import { createPortal } from './portal.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -227,7 +228,8 @@ app.use(cors({
   origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : false,
   credentials: true,
 }));
-app.use(express.json({ limit: '10mb' }));
+// rawBody: o portal do cliente confere a assinatura HMAC sobre o corpo exato enviado pelo site.
+app.use(express.json({ limit: '10mb', verify: (req, _res, buf) => { if (req.url.startsWith('/api/portal/')) req.rawBody = buf; } }));
 app.use('/uploads/certificados', (_req, res) => res.status(404).end());
 app.use('/uploads', express.static(uploadsDir));
 
@@ -6612,6 +6614,20 @@ const osTools = createOsTools({
   approveQuote: (userId, args) => approveQuote({ auth: { accountId: userId, userId, role: 'admin' }, ...args }),
 });
 
+// Portal do cliente (site luthieriabrasilia.com.br). Desligado sem PORTAL_SHARED_SECRET e PORTAL_TENANT_ID.
+const portal = createPortal({
+  pool,
+  uuid,
+  now,
+  todayDate,
+  sendCustomerMessage,
+  tenantId: process.env.PORTAL_TENANT_ID,
+  secret: process.env.PORTAL_SHARED_SECRET,
+  devCodes: process.env.PORTAL_DEV_CODES === '1' && process.env.NODE_ENV !== 'production',
+});
+app.use('/api/portal/v1', portal.router);
+app.use('/api/portal-admin', requireAuth, requireAdmin, portal.adminRouter);
+
 const agentBrain = createAgentBrain({
   osTools,
   pool,
@@ -7582,6 +7598,13 @@ async function startServer() {
     await receipts.ensureSchema();
   } catch (error) {
     console.error('[startup] Agente financeiro sem esquema atualizado:', error.message);
+  }
+
+  try {
+    await portal.ensureSchema();
+    console.log(`[startup] Portal do cliente ${portal.enabled ? 'ativo' : 'desligado (sem PORTAL_SHARED_SECRET/PORTAL_TENANT_ID)'}.`);
+  } catch (error) {
+    console.error('[startup] Portal do cliente sem esquema:', error.message);
   }
 
   app.listen(PORT, HOST, () => {
