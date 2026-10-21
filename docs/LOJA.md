@@ -9,7 +9,7 @@ pedidos em **Loja do site → Pedidos da loja**. O site conversa com o sistema p
 | Variável | Obrigatória | Para quê |
 | --- | --- | --- |
 | `MERCADOPAGO_ACCESS_TOKEN` | sim, para vender | Access token de produção da conta Mercado Pago que recebe o dinheiro. Sem ele o site mostra os produtos mas não finaliza compras. |
-| `MERCADOPAGO_WEBHOOK_SECRET` | recomendada | Assinatura secreta do webhook (Mercado Pago → Suas integrações → Webhooks, evento **Pagamentos**, URL `https://os.luthieriabrasilia.com.br/api/loja/v1/webhooks/mercadopago`). Sem ela os avisos não são conferidos, mas o pagamento sempre é confirmado consultando a API do Mercado Pago. |
+| `MERCADOPAGO_WEBHOOK_SECRET` | não | Deixe vazia. Não é preciso cadastrar webhook no painel do Mercado Pago (o webhook da aplicação pode continuar apontando para outro sistema): cada cobrança da loja já leva o próprio endereço de aviso (`notification_url` = `https://os.luthieriabrasilia.com.br/api/loja/v1/webhooks/mercadopago`). O aviso nunca é confiado: o sistema sempre consulta o pagamento na API do Mercado Pago, e a cada 15 minutos confere os pedidos pendentes. Só preencha se tiver certeza de que os avisos chegam assinados com essa chave; se ela não bater, os avisos são recusados e a confirmação fica só pela conferência de 15 minutos. |
 | `MELHOR_ENVIO_TOKEN` | para envio | Token da API do Melhor Envio (permissão `shipping-calculate`). Sem ele, produtos físicos só podem ser retirados na loja. |
 | `MELHOR_ENVIO_EMAIL` | não | E-mail técnico no `User-Agent` exigido pelo Melhor Envio. |
 | `PUBLIC_APP_URL` | não | Endereço público deste sistema (padrão `https://os.luthieriabrasilia.com.br`), usado nas fotos e no webhook. |
