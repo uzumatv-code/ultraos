@@ -27,15 +27,24 @@ const GENERIC_MISMATCH = new PortalError(
 );
 
 export function createPortal({ pool, uuid, now, todayDate, sendCustomerMessage, tenantId: tenantIdOption, tenantEmail, secret, devCodes = false, log = console }) {
-  // A empresa do site: PORTAL_TENANT_ID ou, mais simples, o e-mail de login da loja (PORTAL_TENANT_EMAIL).
+  // A empresa do site: PORTAL_TENANT_ID, o e-mail de login da loja (PORTAL_TENANT_EMAIL) ou,
+  // sem nenhum dos dois, a única conta principal do sistema.
   let tenantId = tenantIdOption || null;
   const isEnabled = () => Boolean(secret && secret.length >= 32 && tenantId);
 
   async function resolveTenant() {
-    if (tenantId || !tenantEmail) return;
-    const [[user]] = await pool.query('SELECT id, conta_id FROM usuarios WHERE email = ? LIMIT 1', [String(tenantEmail).trim().toLowerCase()]);
-    if (user) tenantId = user.conta_id || user.id;
-    else log.error(`[portal] PORTAL_TENANT_EMAIL não encontrado: ${tenantEmail}`);
+    if (tenantId) return;
+    if (tenantEmail) {
+      const [[user]] = await pool.query('SELECT id, conta_id FROM usuarios WHERE email = ? LIMIT 1', [String(tenantEmail).trim().toLowerCase()]);
+      if (user) tenantId = user.conta_id || user.id;
+      else log.error(`[portal] PORTAL_TENANT_EMAIL não encontrado: ${tenantEmail}`);
+      return;
+    }
+    const [owners] = await pool.query(
+      "SELECT id FROM usuarios WHERE (conta_id IS NULL OR conta_id = '' OR conta_id = id) AND COALESCE(ativo, 1) = 1 LIMIT 2",
+    );
+    if (owners.length === 1) tenantId = owners[0].id;
+    else if (secret) log.warn('[portal] Mais de uma conta no sistema: defina PORTAL_TENANT_EMAIL para escolher a loja do site.');
   }
 
   async function ensureSchema() {

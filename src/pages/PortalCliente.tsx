@@ -115,7 +115,7 @@ export function PortalCliente() {
         <section className="mb-5 flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50/70 p-4 dark:border-slate-800 dark:bg-slate-900">
           <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
           <p className="text-sm text-slate-700 dark:text-slate-300">
-            O site ainda não está conectado a esta conta. A área do cliente começa a funcionar quando <code>PORTAL_SHARED_SECRET</code> e <code>PORTAL_TENANT_EMAIL</code> (o e-mail de login da loja) estiverem configurados no servidor.
+            O site ainda não está conectado a esta conta. A área do cliente começa a funcionar quando <code>PORTAL_SHARED_SECRET</code> estiver configurado no servidor (com mais de uma conta no sistema, defina também <code>PORTAL_TENANT_EMAIL</code>).
           </p>
         </section>
       )}
