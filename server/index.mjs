@@ -6614,7 +6614,7 @@ const osTools = createOsTools({
   approveQuote: (userId, args) => approveQuote({ auth: { accountId: userId, userId, role: 'admin' }, ...args }),
 });
 
-// Portal do cliente (site luthieriabrasilia.com.br). Desligado sem PORTAL_SHARED_SECRET e PORTAL_TENANT_ID.
+// Portal do cliente (site luthieriabrasilia.com.br). Desligado sem PORTAL_SHARED_SECRET e PORTAL_TENANT_EMAIL (ou PORTAL_TENANT_ID).
 const portal = createPortal({
   pool,
   uuid,
@@ -6622,6 +6622,7 @@ const portal = createPortal({
   todayDate,
   sendCustomerMessage,
   tenantId: process.env.PORTAL_TENANT_ID,
+  tenantEmail: process.env.PORTAL_TENANT_EMAIL,
   secret: process.env.PORTAL_SHARED_SECRET,
   devCodes: process.env.PORTAL_DEV_CODES === '1' && process.env.NODE_ENV !== 'production',
 });
@@ -7602,7 +7603,7 @@ async function startServer() {
 
   try {
     await portal.ensureSchema();
-    console.log(`[startup] Portal do cliente ${portal.enabled ? 'ativo' : 'desligado (sem PORTAL_SHARED_SECRET/PORTAL_TENANT_ID)'}.`);
+    console.log(`[startup] Portal do cliente ${portal.enabled ? 'ativo' : 'desligado (sem PORTAL_SHARED_SECRET de 32+ caracteres ou PORTAL_TENANT_EMAIL)'}.`);
   } catch (error) {
     console.error('[startup] Portal do cliente sem esquema:', error.message);
   }

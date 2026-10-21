@@ -26,10 +26,20 @@ const GENERIC_MISMATCH = new PortalError(
   'Não encontramos um cadastro com esses dados. Confira o CPF e o telefone ou fale com a loja.',
 );
 
-export function createPortal({ pool, uuid, now, todayDate, sendCustomerMessage, tenantId, secret, devCodes = false, log = console }) {
-  const enabled = Boolean(secret && tenantId);
+export function createPortal({ pool, uuid, now, todayDate, sendCustomerMessage, tenantId: tenantIdOption, tenantEmail, secret, devCodes = false, log = console }) {
+  // A empresa do site: PORTAL_TENANT_ID ou, mais simples, o e-mail de login da loja (PORTAL_TENANT_EMAIL).
+  let tenantId = tenantIdOption || null;
+  const isEnabled = () => Boolean(secret && secret.length >= 32 && tenantId);
+
+  async function resolveTenant() {
+    if (tenantId || !tenantEmail) return;
+    const [[user]] = await pool.query('SELECT id, conta_id FROM usuarios WHERE email = ? LIMIT 1', [String(tenantEmail).trim().toLowerCase()]);
+    if (user) tenantId = user.conta_id || user.id;
+    else log.error(`[portal] PORTAL_TENANT_EMAIL não encontrado: ${tenantEmail}`);
+  }
 
   async function ensureSchema() {
+    await resolveTenant();
     await pool.query(`CREATE TABLE IF NOT EXISTS portal_contas (
       id varchar(36) NOT NULL PRIMARY KEY,
       user_id varchar(36) NOT NULL,
@@ -481,7 +491,7 @@ export function createPortal({ pool, uuid, now, todayDate, sendCustomerMessage, 
   const router = express.Router();
 
   router.use((req, res, next) => {
-    if (!enabled) return res.status(503).json({ erro: 'portal_desativado' });
+    if (!isEnabled()) return res.status(503).json({ erro: 'portal_desativado' });
     const ok = verifyPortalRequest({
       secret,
       method: req.method,
@@ -565,7 +575,7 @@ export function createPortal({ pool, uuid, now, todayDate, sendCustomerMessage, 
     }
   };
 
-  adminRouter.get('/config', adminHandle(async (req) => ({ ...(await getConfig(req.auth.accountId)), integrado: enabled && req.auth.accountId === tenantId })));
+  adminRouter.get('/config', adminHandle(async (req) => ({ ...(await getConfig(req.auth.accountId)), integrado: isEnabled() && req.auth.accountId === tenantId })));
 
   adminRouter.put('/config', adminHandle(async (req) => {
     const capacidade = Math.max(1, Math.min(100, Number(req.body.capacidade_diaria) || 4));
@@ -702,5 +712,5 @@ export function createPortal({ pool, uuid, now, todayDate, sendCustomerMessage, 
     }
   }));
 
-  return { enabled, ensureSchema, router, adminRouter, startVerification, confirmVerification };
+  return { get enabled() { return isEnabled(); }, ensureSchema, router, adminRouter, startVerification, confirmVerification };
 }
