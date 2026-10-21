@@ -5,7 +5,7 @@ import path from 'node:path';
 import express from 'express';
 import {
   STATUS_PRODUTO, TIPOS, TRANSICOES_PAINEL, mercadoPagoPreference, mercadoPagoSignatureValid, melhorEnvioPayload,
-  money, normalizeCep, orderStatusFromPayment, parseMelhorEnvio, slugify, validateCart,
+  limparTextosIA, money, normalizeCep, orderStatusFromPayment, parseMelhorEnvio, promptTextosProduto, slugify, validateCart,
 } from './loja-core.mjs';
 import { verifyPortalRequest } from './portal-core.mjs';
 
@@ -33,7 +33,7 @@ function parseJson(value, fallback) {
 }
 
 export function createLoja({
-  pool, uuid, now, getTenantId, secret, uploadsDir, sendCustomerMessage, ensureReceitaCategoria, log = console,
+  pool, uuid, now, getTenantId, secret, uploadsDir, sendCustomerMessage, ensureReceitaCategoria, gerarIA, log = console,
   mpAccessToken, mpWebhookSecret, melhorEnvioToken, melhorEnvioEmail, siteUrl, osPublicUrl,
   mpApiUrl = 'https://api.mercadopago.com', melhorEnvioApiUrl = 'https://melhorenvio.com.br/api/v2',
 }) {
@@ -775,6 +775,7 @@ export function createLoja({
     integrado: Boolean(secret && tenant() === req.auth.accountId),
     mercado_pago: Boolean(mpAccessToken),
     aviso_assinado: Boolean(mpWebhookSecret),
+    ia: Boolean(gerarIA),
     melhor_envio: Boolean(melhorEnvioToken),
     url_aviso_pagamento: `${osUrl}/api/loja/v1/webhooks/mercadopago`,
     config: await getConfig(req.auth.accountId),
@@ -881,6 +882,37 @@ export function createLoja({
     fs.writeFileSync(path.join(privadoDir, nome), req.body);
     await pool.query('UPDATE loja_produtos SET ebook_arquivo = ?, updated_at = ? WHERE id = ?', [nome, now(), p.id]);
     return { ok: true, tamanho: req.body.length };
+  }));
+
+  // Textos com IA: devolve sugestões para o formulário (nada é salvo aqui). Usa o que está no editor, mesmo sem salvar,
+  // e a foto de capa para a IA reconhecer o produto.
+  adminRouter.post('/produtos/:id/ia', adminHandle(async (req) => {
+    if (!gerarIA) throw new LojaError(503, 'ia_indisponivel', 'IA indisponível: falta OPENAI_API_KEY no servidor.');
+    const atual = await ownProduct(req);
+    const rascunho = req.body?.rascunho && typeof req.body.rascunho === 'object' ? req.body.rascunho : {};
+    const produto = { ...atual, ...Object.fromEntries(Object.entries(rascunho).filter(([k]) => CAMPOS.includes(k))) };
+    const [aulas] = await pool.query('SELECT modulo, titulo FROM loja_aulas WHERE produto_id = ? ORDER BY ordem', [atual.id]);
+    const campos = Array.isArray(req.body?.campos) ? req.body.campos.map(String) : [];
+    const pedido = promptTextosProduto(produto, campos, { instrucoes: req.body?.instrucoes, aulas });
+    if (!pedido) throw new LojaError(400, 'campos_invalidos', 'Escolha o que a IA deve escrever.');
+    if (pedido.erro) throw new LojaError(400, 'sem_anotacoes', pedido.erro);
+    let imagem = null;
+    const capa = parseJson(atual.imagens, [])[0];
+    if (capa) {
+      const arquivo = path.join(imagensDir, capa.path);
+      const ext = path.extname(arquivo).slice(1).toLowerCase();
+      const mime = { webp: 'image/webp', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png' }[ext];
+      if (mime && fs.existsSync(arquivo) && fs.statSync(arquivo).size < 4 * 1024 * 1024) {
+        imagem = `data:${mime};base64,${fs.readFileSync(arquivo).toString('base64')}`;
+      }
+    }
+    try {
+      const resposta = await gerarIA({ sistema: pedido.sistema, entrada: pedido.entrada, schema: pedido.schema, imagem });
+      return { textos: limparTextosIA(resposta, pedido.campos) };
+    } catch (error) {
+      log.error('[loja-admin] IA falhou:', error.message);
+      throw new LojaError(502, 'ia_falhou', 'A IA não respondeu agora. Tente de novo em instantes.');
+    }
   }));
 
   adminRouter.post('/produtos/:id/aulas', adminHandle(async (req) => {

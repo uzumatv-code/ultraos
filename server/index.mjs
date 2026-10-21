@@ -3384,6 +3384,29 @@ async function interpretSystemIntentWithOpenAI(message) {
   return normalizeAiIntent(JSON.parse(text || '{}'));
 }
 
+/** Textos da loja (descrição, SEO...) com saída em JSON estrito; a foto de capa vai junto quando existe. */
+async function gerarTextosLojaComOpenAI({ sistema, entrada, schema, imagem }) {
+  const conteudo = [{ type: 'input_text', text: `Dados do produto:\n${entrada}` }];
+  if (imagem) conteudo.push({ type: 'input_image', image_url: imagem });
+  const response = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: process.env.OPENAI_LOJA_MODEL || SYSTEM_AI_MODEL,
+      input: [
+        { role: 'system', content: sistema },
+        { role: 'user', content: conteudo },
+      ],
+      text: { format: { type: 'json_schema', name: 'textos_loja', strict: true, schema } },
+      max_output_tokens: 4000,
+    }),
+    signal: AbortSignal.timeout(90000),
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(json.error?.message || `OpenAI loja HTTP ${response.status}`);
+  return JSON.parse(extractResponsesText(json) || '{}');
+}
+
 async function getSystemIntent(message) {
   const heuristic = parseFinancialIntent(message);
   try {
@@ -6641,6 +6664,7 @@ const loja = createLoja({
   uploadsDir,
   sendCustomerMessage,
   ensureReceitaCategoria: (userId, conn) => ensureDefaultFinancialCategory(userId, 'receita', 'Loja do site', '#8B5CF6', conn),
+  gerarIA: process.env.OPENAI_API_KEY ? gerarTextosLojaComOpenAI : null,
   mpAccessToken: process.env.MERCADOPAGO_ACCESS_TOKEN,
   mpWebhookSecret: process.env.MERCADOPAGO_WEBHOOK_SECRET,
   melhorEnvioToken: process.env.MELHOR_ENVIO_TOKEN,
