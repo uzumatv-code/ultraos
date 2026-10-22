@@ -14,6 +14,7 @@ import { addMonthsClamped, formatDateOnly, installmentNumber, occurrenceDate, oc
 import { createFinanceAgent, inferExpenseCategory, formatBRL } from './finance-agent.mjs';
 import { createAgentBrain } from './agent-brain.mjs';
 import { createReceiptStore } from './receipts.mjs';
+import { createLojaTools } from './loja-agent.mjs';
 import { createOsTools } from './os-agent.mjs';
 import { createRealtimeHub, instrumentDatabase } from './realtime.mjs';
 import { buildDps, cancelNfse, emitDps, parsePfx } from './nfse-nacional.mjs';
@@ -6678,8 +6679,23 @@ app.use('/api/loja/v1/webhooks', loja.webhookRouter);
 app.use('/api/loja/v1', loja.router);
 app.use('/api/loja-admin', requireAuth, requireAdmin, loja.adminRouter);
 
+// Ferramentas da loja para a IA do WhatsApp (cadastrar com fotos, vender, tirar do site, desfazer).
+const lojaTools = createLojaTools({
+  pool,
+  uuid,
+  now,
+  uploadsDir,
+  siteUrl: process.env.PORTAL_SITE_URL,
+  gerarIA: process.env.OPENAI_API_KEY ? gerarTextosLojaComOpenAI : null,
+});
+
+// Fotos sem legenda chegam uma por mensagem; só a primeira de uma sequência recebe resposta da IA.
+const CAPTIONLESS_IMAGE_WINDOW_MS = 60 * 1000;
+const lastCaptionlessImage = new Map();
+
 const agentBrain = createAgentBrain({
   osTools,
+  lojaTools,
   pool,
   now,
   todayDate,
@@ -6826,7 +6842,17 @@ async function handleFinancialAiWebhook(req, res) {
         const saved = await receipts.save(authorized.user_id, { buffer, mime, name: webhookMessage.fileName, origem: 'whatsapp' });
         const readable = !/heic|heif/.test(mime) && buffer.length <= 6 * 1024 * 1024;
         attachment = { id: saved.id, name: saved.nome_arquivo, dataUrl: readable ? `data:${mime};base64,${buffer.toString('base64')}` : null };
-        message = message || '(enviou um comprovante em anexo)';
+        if (!message && webhookMessage.messageType === 'imagem') {
+          // Sequência de fotos sem texto (ex.: fotos de um produto): guarda todas e responde só à primeira.
+          const key = `${authorized.user_id}:${phone}`;
+          const last = lastCaptionlessImage.get(key) || 0;
+          lastCaptionlessImage.set(key, Date.now());
+          if (Date.now() - last < CAPTIONLESS_IMAGE_WINDOW_MS) {
+            await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: '(enviou mais uma foto)', tipo_mensagem: tipoMensagem, status: 'midia_guardada', resposta: null });
+            return res.json({ stored: true, attachment_id: saved.id });
+          }
+        }
+        message = message || (webhookMessage.messageType === 'imagem' ? '(enviou uma foto)' : '(enviou um comprovante em anexo)');
       } catch (error) {
         const failed = `Recebi o arquivo, mas não consegui guardar: ${error.message}. Envie de novo como foto ou PDF (até 8 MB).`;
         console.error('[financeiro-ia:comprovante]', error.message);
@@ -7659,6 +7685,7 @@ async function startServer() {
 
   try {
     await loja.ensureSchema();
+    await lojaTools.ensureSchema();
     loja.startJobs();
     console.log(`[startup] Loja do site ${process.env.MERCADOPAGO_ACCESS_TOKEN ? 'com' : 'sem'} Mercado Pago, ${process.env.MELHOR_ENVIO_TOKEN ? 'com' : 'sem'} Melhor Envio.`);
   } catch (error) {

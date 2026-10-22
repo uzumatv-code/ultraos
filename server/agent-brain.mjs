@@ -9,6 +9,7 @@
 
 import { OS_TOOLS, OS_TOOL_NAMES, OS_WRITE_TOOLS } from './os-agent.mjs';
 import { FINANCE_QUERY_TOOL, createFinanceQueries } from './finance-queries.mjs';
+import { LOJA_TOOLS, LOJA_TOOL_NAMES, LOJA_WRITE_TOOLS } from './loja-agent.mjs';
 
 const WRITE_TOOLS = new Set(['criar_conta_pagar', 'pagar_conta', 'cancelar_conta', 'registrar_despesa', 'registrar_receita', 'desfazer_ultimo_lancamento', 'anexar_comprovante', 'corrigir_categoria', 'lembrar_categoria', 'editar_parcelas']);
 
@@ -199,10 +200,10 @@ const TOOLS = [
   },
 ];
 
-/** Monta a mensagem do usuário; comprovantes vão como imagem/PDF para o modelo ler valor, data e favorecido. */
+/** Monta a mensagem do usuário; o arquivo vai como imagem/PDF para o modelo ler (comprovante ou foto de produto). */
 export function userContent(message, attachment) {
   if (!attachment) return String(message);
-  const note = `[Comprovante recebido e salvo: id=${attachment.id}, arquivo ${attachment.name}. Ainda não está vinculado a nenhuma conta.]`;
+  const note = `[Arquivo recebido e salvo: id=${attachment.id}, ${attachment.name}. Pode ser comprovante (ainda sem conta vinculada) ou foto de produto para a loja do site; decida pelo conteúdo e pela conversa.]`;
   const parts = [{ type: 'input_text', text: `${String(message || '').trim()}
 
 ${note}`.trim() }];
@@ -213,11 +214,11 @@ ${note}`.trim() }];
   return parts;
 }
 
-const ALL_TOOLS = [...TOOLS, FINANCE_QUERY_TOOL, ...OS_TOOLS];
+const ALL_TOOLS = [...TOOLS, FINANCE_QUERY_TOOL, ...OS_TOOLS, ...LOJA_TOOLS];
 
 export function buildSystemPrompt({ nome, hojeIso, diaSemana, timezone, canWrite, categorias = [], regras = [] }) {
   return [
-    `Você é a assistente financeira da oficina (luthieria) do ${nome || 'proprietário'}, conversando pelo WhatsApp. Aja como uma funcionária de confiança do financeiro: proativa, objetiva e cordial, sem formalidade excessiva.`,
+    `Você é a assistente da oficina (luthieria) do ${nome || 'proprietário'}, conversando pelo WhatsApp: cuida do financeiro, das ordens de serviço e da loja do site. Aja como uma funcionária de confiança: proativa, objetiva e cordial, sem formalidade excessiva.`,
     `Hoje é ${diaSemana}, ${hojeIso} (${timezone}).`,
     '',
     'ESTILO: mensagens curtas de WhatsApp, português do Brasil, *negrito* só para valores/nomes importantes, no máximo 2 emojis. Trate por "você". Nada de listas enormes; resuma e ofereça detalhes.',
@@ -249,6 +250,11 @@ export function buildSystemPrompt({ nome, hojeIso, diaSemana, timezone, canWrite
     '  • Ao finalizar uma OS, informe se ficou saldo a receber (saldo_a_receber).',
     '  • ORÇAMENTOS: "orçamento"/"orçar"/"passar valor" = criar_orcamento (não abre OS). Colete cliente, equipamento, problema/serviço e valor como na OS e crie. Quando o cliente fechar ("o Oto aprovou", "fechou", "pode abrir a OS"), use listar_orcamentos para achar o orçamento certo (pergunte se houver mais de um do mesmo cliente), peça a DATA DE ENTREGA se não foi dita e use aprovar_orcamento (opcional: sinal já recebido). Se o cliente recusou, recusar_orcamento com o motivo. Se a pessoa disser que uma OS aberta era na verdade um orçamento, localize-a com buscar_os e use transformar_os_em_orcamento (só vale para OS aguardando, sem pagamento nem nota).',
     '- DINHEIRO (SEMPRE consulte, nunca estime nem responda de memória): use consultar_financeiro. "Quanto entrou/recebi/faturei hoje, na semana, no mês" = consulta entradas (soma pagamentos de OS recebidos NO período + entradas lançadas à mão ou por voz; NÃO é a lista de OS do dia, e OS em execução/aberta sem pagamento não é dinheiro que entrou). Responda com o total, quanto veio de OS e quanto de entradas avulsas, e liste cada item (descrição, valor, forma). Se a pessoa falar de "ordens novas/abertas hoje já pagas", use também os_abertas_pagas. "Quem está me devendo", "quanto tenho a receber", "quanto fulano deve" = a_receber (por cliente, com as OS). "Quanto gastei", "liste meus gastos" = gastos (liste TODOS os itens e o total por categoria). "Contas que faltam pagar", "contas atrasadas", "contas já pagas/quitadas" = contas_pagar com status abertas/atrasadas/pagas. "Quanto sobrou", "lucro", "como estou no mês", "balanço" = balanco. Períodos: hoje, ontem, semana, mes, mes_passado, ano; datas específicas = personalizado com de/ate. Se o pedido misturar assuntos (ex.: "quanto entrou e quanto gastei"), chame as consultas necessárias e responda tudo numa só mensagem. Dados de uma consulta nunca vêm de outra: se não houver lançamentos, diga "nada entrou ainda" em vez de inventar.',
+    '- LOJA DO SITE (produtos à venda no site): "cadastra/anuncia/coloca no site esse produto…" → loja_cadastrar_produto. Fotos mandadas antes (até 30 min) entram no produto sozinhas; não peça para reenviar. Preço é obrigatório: se faltar, pergunte só o preço. Nome de vitrine bem escrito (ex.: "Violão Tagima AC34 Preto"), condição novo/seminovo quando dita, destaque quando pedirem. Publique direto, a não ser que peçam rascunho. Nunca invente estado, especificações ou medidas; o que a pessoa disser sobre o estado vai em "estado".',
+    '  • FOTO SEM TEXTO: se for claramente produto (instrumento, equipamento, acessório) e não comprovante, não trate como pagamento; responda curto: "Bela peça! Quer que eu anuncie na loja? Me diga nome e preço." Várias fotos seguidas chegam juntas: responda uma vez só.',
+    '  • Alterar, vender ou tirar do site: ache o produto com loja_buscar_produto; se ambiguo=true ou mais de um parecido, PERGUNTE qual citando as opções; se for um só, aja direto. "vendi", "já foi", "tira do site" → loja_marcar_vendido. Mudar preço, destaque, nome, voltar ao site, adicionar fotos → loja_atualizar_produto. Excluir de vez: só depois de confirmação explícita (loja_excluir_produto com confirmado=true); prefira tirar do site.',
+    '  • Confirme em uma linha com nome, preço e o link do produto quando houver; diga quantas fotos entraram e avise se ficou sem foto. Se usou medidas padrão de frete, mencione em poucas palavras que dá para ajustar no painel.',
+    '  • Depois de loja_marcar_vendido por venda feita fora do site, pergunte se quer registrar a entrada (registrar_receita com o valor da venda). "Desfaz" logo após uma ação da loja → loja_desfazer_ultima_acao.',
     '- Quando a pessoa disser que recebeu ou fez um serviço avulso ("fiz um serviço de 50", "vendi uma palheta por 20", "recebi 80 de um conserto") sem citar uma OS existente, registre com registrar_receita (descrição curta + valor) e confirme; esse valor passa a contar em "quanto entrou". Se citar uma OS, use o fluxo de ordens.',
     '- NÃO pergunte a forma de pagamento: ela é opcional. Preencha forma_pagamento SOMENTE se a pessoa disser ou o comprovante mostrar (ex.: Pix); nunca presuma nem invente. Evite perguntas desnecessárias; só pergunte o que realmente impede a ação.',
     '- Mensagem com vários itens (ex.: "paguei 37 de dízimo e comprei 95 de encordoamento") = um lançamento separado por item, cada um com seu valor e descrição. Nunca some. Confirme listando cada lançamento e o total só no final.',
@@ -258,7 +264,7 @@ export function buildSystemPrompt({ nome, hojeIso, diaSemana, timezone, canWrite
   ].filter(Boolean).join('\n');
 }
 
-export function createAgentBrain({ pool, now, todayDate, timezone, apiKey, model, actions, formatBRL, osTools = null, baseUrl = 'https://api.openai.com/v1', log = console }) {
+export function createAgentBrain({ pool, now, todayDate, timezone, apiKey, model, actions, formatBRL, osTools = null, lojaTools = null, baseUrl = 'https://api.openai.com/v1', log = console }) {
   const financeQueries = createFinanceQueries({ pool, todayDate });
   const reasoning = /^(gpt-5|o\d)/.test(String(model || '')) ? { effort: 'low' } : undefined;
 
@@ -284,7 +290,11 @@ export function createAgentBrain({ pool, now, todayDate, timezone, apiKey, model
   /* ----------------------------------------------------------- ferramentas */
 
   async function runTool(name, args, ctx) {
-    if ((WRITE_TOOLS.has(name) || OS_WRITE_TOOLS.has(name)) && !ctx.canWrite) return { erro: 'Número sem permissão de escrita.' };
+    if ((WRITE_TOOLS.has(name) || OS_WRITE_TOOLS.has(name) || LOJA_WRITE_TOOLS.has(name)) && !ctx.canWrite) return { erro: 'Número sem permissão de escrita.' };
+    if (LOJA_TOOL_NAMES.has(name)) {
+      if (!lojaTools) return { erro: 'Ferramentas da loja indisponíveis.' };
+      return lojaTools.run(name, args, ctx);
+    }
     if (OS_TOOL_NAMES.has(name)) {
       if (!osTools) return { erro: 'Ferramentas de OS indisponíveis.' };
       return osTools.run(name, args, ctx);
