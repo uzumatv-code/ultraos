@@ -51,3 +51,41 @@ test('emite uma garantia por serviço da OS concluída, com mínimo legal', asyn
   assert.equal(colagem[8], 180);
   assert.equal(colagem[12], 'cuidados-colagens-restauracoes');
 });
+
+test('mensagens de garantia', async () => {
+  const { mensagemGarantia } = await import('./garantias-core.mjs');
+  const entrega = mensagemGarantia('entrega', {
+    nome: 'Oto Tertuliano', instrumento: 'Violão Tagima', numero: 188, portalUrl: 'https://site/minha-conta?aba=garantias',
+    garantias: [{ servico_nome: 'Regulagem', fim: '2027-01-20' }, { servico_nome: 'Instalar Encordoamento', fim: '2027-01-20' }],
+  });
+  assert.match(entrega, /^Olá, Oto!/);
+  assert.match(entrega, /OS #188/);
+  assert.match(entrega, /• Regulagem: até 20\/01\/2027/);
+  assert.match(entrega, /aba=garantias/);
+  const vence = mensagemGarantia('vencimento', { nome: '', instrumento: '', numero: 9, portalUrl: 'x', garantias: [{ servico_nome: 'Colagem', fim: '2026-11-01' }] });
+  assert.match(vence, /^Olá! A garantia de Colagem no seu instrumento \(OS #9\) vai até 01\/11\/2026/);
+});
+
+test('avisos agrupam por OS e marcam o envio', async () => {
+  const { enviarAvisosDeGarantia } = await import('./garantias-core.mjs');
+  const enviados = [];
+  const marcados = [];
+  const db = {
+    query: async (sql, params) => {
+      if (sql.includes('FROM os_garantias g')) {
+        return [[
+          { id: 'g1', user_id: 'u', ordem_servico_id: 'o1', servico_nome: 'Regulagem', fim: '2027-01-20', dias: 90, tipo: 'entrega', numero: 1, nome: 'Ana', telefone: '61999990000', instrumento: 'Violão', marca: '', modelo: '' },
+          { id: 'g2', user_id: 'u', ordem_servico_id: 'o1', servico_nome: 'Encordoamento', fim: '2027-01-20', dias: 90, tipo: 'entrega', numero: 1, nome: 'Ana', telefone: '61999990000', instrumento: 'Violão', marca: '', modelo: '' },
+          { id: 'g3', user_id: 'u', ordem_servico_id: 'o2', servico_nome: 'Colagem', fim: '2026-10-28', dias: 180, tipo: 'vencimento', numero: 2, nome: 'Bia', telefone: null, instrumento: '', marca: '', modelo: '' },
+        ]];
+      }
+      if (sql.startsWith('UPDATE os_garantias')) { marcados.push([sql.match(/SET (\w+)/)[1], params[1]]); return [{}]; }
+      throw new Error('sql');
+    },
+  };
+  const n = await enviarAvisosDeGarantia(db, { hoje: '2026-10-22', now: () => 'agora', portalUrl: 'p', send: async (...a) => enviados.push(a) });
+  assert.equal(n, 1, 'sem telefone não envia');
+  assert.equal(enviados.length, 1);
+  assert.match(enviados[0][2], /Regulagem.*\n.*Encordoamento/s);
+  assert.deepEqual(marcados, [['aviso_entrega_em', ['g1', 'g2']], ['aviso_vencimento_em', ['g3']]]);
+});

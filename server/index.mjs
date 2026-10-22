@@ -15,7 +15,7 @@ import { createFinanceAgent, inferExpenseCategory, formatBRL } from './finance-a
 import { createAgentBrain } from './agent-brain.mjs';
 import { createReceiptStore } from './receipts.mjs';
 import { createLojaTools } from './loja-agent.mjs';
-import { emitirGarantiasPendentes } from './garantias-core.mjs';
+import { emitirGarantiasPendentes, enviarAvisosDeGarantia } from './garantias-core.mjs';
 import { createOsTools } from './os-agent.mjs';
 import { createRealtimeHub, instrumentDatabase } from './realtime.mjs';
 import { buildDps, cancelNfse, emitDps, parsePfx } from './nfse-nacional.mjs';
@@ -7704,6 +7704,18 @@ async function startServer() {
     .catch((error) => console.warn('[garantias] emissao falhou:', error.message));
   void emitirGarantias();
   setInterval(emitirGarantias, 5 * 60 * 1000).unref?.();
+
+  // Avisos de garantia pelo WhatsApp (entrega e 7 dias antes de vencer), só em horário comercial.
+  const portalGarantiasUrl = `${String(process.env.PORTAL_SITE_URL || 'https://luthieriabrasilia.com.br').replace(/\/+$/, '')}/minha-conta?aba=garantias`;
+  const avisarGarantias = () => {
+    const hora = Number(new Intl.DateTimeFormat('pt-BR', { timeZone: EVALUATION_TIMEZONE, hour: '2-digit', hourCycle: 'h23' }).format(new Date()));
+    if (hora < 9 || hora >= 19 || process.env.WARRANTY_NOTICES_ENABLED === 'false') return;
+    enviarAvisosDeGarantia(pool, { hoje: todayDate(), now, portalUrl: portalGarantiasUrl, send: sendCustomerMessage })
+      .then((n) => { if (n) console.log(`[garantias] ${n} aviso(s) enviado(s) pelo WhatsApp.`); })
+      .catch((error) => console.warn('[garantias] avisos falharam:', error.message));
+  };
+  setTimeout(avisarGarantias, 60 * 1000).unref?.();
+  setInterval(avisarGarantias, 2 * 60 * 60 * 1000).unref?.();
 
   app.listen(PORT, HOST, () => {
     console.log(`Sistema OS API rodando em ${HOST}:${PORT}`);

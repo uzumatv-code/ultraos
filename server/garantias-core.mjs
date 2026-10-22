@@ -177,3 +177,74 @@ export async function emitirGarantiasPendentes(db, { uuid, now, userId = null, o
   }
   return criadas;
 }
+
+// ---------- Avisos pelo WhatsApp ----------
+
+const dataBr = (iso) => String(iso).slice(0, 10).split('-').reverse().join('/');
+
+/** Texto do aviso de garantia: "entrega" (OS entregue) ou "vencimento" (faltam poucos dias). */
+export function mensagemGarantia(tipo, { nome, instrumento, numero, garantias, portalUrl }) {
+  const primeiro = String(nome || '').trim().split(/\s+/)[0] || '';
+  const ola = primeiro ? `Olá, ${primeiro}!` : 'Olá!';
+  const equipamento = instrumento ? `seu ${instrumento}` : 'seu instrumento';
+  if (tipo === 'entrega') {
+    const linhas = garantias.map((g) => `• ${g.servico_nome}: até ${dataBr(g.fim)}`).join('\n');
+    return `${ola} A garantia dos serviços no ${equipamento} (OS #${numero}) já está valendo:\n${linhas}\n\n` +
+      `No portal você vê o que cada garantia cobre e baixa o guia de cuidados, cortesia enquanto durar a garantia: ${portalUrl}`;
+  }
+  const servicos = garantias.map((g) => g.servico_nome).join(', ');
+  const fim = garantias.reduce((max, g) => (g.fim > max ? g.fim : max), garantias[0].fim);
+  return `${ola} A garantia de ${servicos} no ${equipamento} (OS #${numero}) vai até ${dataBr(fim)}. ` +
+    'Se notou algo diferente (trastejamento, cordas mais altas, algo descolando), fale com a gente antes dessa data: avaliamos sem custo. ' +
+    `Detalhes no portal: ${portalUrl}`;
+}
+
+/**
+ * Envia os avisos pendentes: entrega (OS entregue ontem ou hoje) e vencimento (garantias de 30+ dias que vencem
+ * nos próximos 7 dias). Uma mensagem por OS. Marca como enviado mesmo sem telefone, para não tentar de novo.
+ */
+export async function enviarAvisosDeGarantia(db, { hoje, now, send, portalUrl, log = console }) {
+  const ontem = somarDias(hoje, -1);
+  const limite = somarDias(hoje, 7);
+  const [rows] = await db.query(
+    `SELECT g.id, g.user_id, g.ordem_servico_id, g.servico_nome, g.inicio, g.fim, g.dias,
+            CASE WHEN g.aviso_entrega_em IS NULL AND g.inicio >= ? THEN 'entrega' ELSE 'vencimento' END AS tipo,
+            o.numero, o.modelo, c.nome, c.telefone, COALESCE(i.nome, '') AS instrumento, COALESCE(m.nome, '') AS marca
+       FROM os_garantias g
+       JOIN ordens_servico o ON o.id = g.ordem_servico_id
+       LEFT JOIN clientes c ON c.id = g.cliente_id
+       LEFT JOIN instrumentos i ON i.id = o.instrumento_id
+       LEFT JOIN marcas m ON m.id = o.marca_id
+      WHERE (g.aviso_entrega_em IS NULL AND g.inicio >= ?)
+         OR (g.aviso_vencimento_em IS NULL AND g.dias >= 30 AND g.fim >= ? AND g.fim <= ? AND g.inicio < ?)
+      ORDER BY g.ordem_servico_id
+      LIMIT 200`,
+    [ontem, ontem, hoje, limite, ontem],
+  );
+  const grupos = new Map();
+  for (const r of rows) {
+    const chave = `${r.tipo}:${r.ordem_servico_id}`;
+    if (!grupos.has(chave)) grupos.set(chave, []);
+    grupos.get(chave).push(r);
+  }
+  let enviados = 0;
+  for (const [chave, garantias] of grupos) {
+    const tipo = chave.split(':')[0];
+    const g = garantias[0];
+    const coluna = tipo === 'entrega' ? 'aviso_entrega_em' : 'aviso_vencimento_em';
+    const texto = mensagemGarantia(tipo, {
+      nome: g.nome, numero: g.numero, garantias, portalUrl,
+      instrumento: [g.instrumento, g.marca, g.modelo].filter(Boolean).join(' '),
+    });
+    try {
+      if (g.telefone) {
+        await send(g.user_id, g.telefone, texto, { orderId: g.ordem_servico_id, templateType: `garantia_${tipo}` });
+        enviados += 1;
+      }
+      await db.query(`UPDATE os_garantias SET ${coluna} = ? WHERE id IN (?)`, [now(), garantias.map((x) => x.id)]);
+    } catch (error) {
+      log.warn?.(`[garantias] aviso de ${tipo} da OS #${g.numero} falhou:`, error.message);
+    }
+  }
+  return enviados;
+}
