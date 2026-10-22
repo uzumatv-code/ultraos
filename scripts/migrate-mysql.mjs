@@ -1,5 +1,7 @@
 import 'dotenv/config';
+import { randomUUID } from 'node:crypto';
 import { connectMysqlWithRetry } from './mysql-connection.mjs';
+import { OS_GARANTIAS_TABLE, SERVICO_GARANTIA_COLUNAS, emitirGarantiasPendentes, preencherGarantiasDosServicos } from '../server/garantias-core.mjs';
 
 const DATABASE_URL = process.env.DATABASE_URL || process.env.MYSQL_URL;
 
@@ -812,7 +814,7 @@ const requiredColumns = {
   },
   marcas: { updated_at: 'varchar(50) DEFAULT NULL' },
   instrumentos: { updated_at: 'varchar(50) DEFAULT NULL' },
-  servicos: { updated_at: 'varchar(50) DEFAULT NULL' },
+  servicos: { updated_at: 'varchar(50) DEFAULT NULL', ...SERVICO_GARANTIA_COLUNAS },
   problemas: { updated_at: 'varchar(50) DEFAULT NULL' },
   categorias_financeiras: {
     updated_at: 'varchar(50) DEFAULT NULL',
@@ -1408,6 +1410,17 @@ try {
   await backfillPayments(conn);
   await backfillPaymentConditions(conn);
   await syncFinancialStatus(conn);
+
+  // Garantias: tabela das garantias emitidas, padrão por serviço e emissão das OS já concluídas.
+  await safeStep('criar tabela os_garantias', () => conn.query(OS_GARANTIAS_TABLE));
+  await safeStep('garantia padrão dos serviços', async () => {
+    const n = await preencherGarantiasDosServicos(conn);
+    if (n) console.log(`OK  garantia padrao em ${n} servico(s)`);
+  });
+  await safeStep('emitir garantias das OS concluídas', async () => {
+    const n = await emitirGarantiasPendentes(conn, { uuid: randomUUID, now: () => new Date().toISOString() });
+    if (n) console.log(`OK  ${n} garantia(s) emitida(s)`);
+  });
 
   console.log('Migracao MySQL concluida com sucesso.');
 } finally {

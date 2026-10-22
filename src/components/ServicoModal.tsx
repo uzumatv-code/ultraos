@@ -6,6 +6,8 @@ import { toast } from './ToastCustom';
 import { capitalize } from '../utils/formatters';
 import type { Servico } from '../types/database';
 
+const GARANTIA_LEGAL_DIAS = 90;
+
 interface ServicoModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -17,6 +19,10 @@ export function ServicoModal({ isOpen, onClose, servicoParaEditar, onSuccess }: 
   const [nome, setNome] = useState('');
   const [descricao, setDescricao] = useState('');
   const [valor, setValor] = useState('');
+  const [garantiaDias, setGarantiaDias] = useState('');
+  const [garantiaCobertura, setGarantiaCobertura] = useState('');
+  const [garantiaExclusoes, setGarantiaExclusoes] = useState('');
+  const [garantiaCuidados, setGarantiaCuidados] = useState('');
   const [loading, setLoading] = useState(false);
 
   function formatarNomeAoDigitar(value: string) {
@@ -35,6 +41,10 @@ export function ServicoModal({ isOpen, onClose, servicoParaEditar, onSuccess }: 
       setNome(servicoParaEditar.nome);
       setDescricao(servicoParaEditar.descricao || '');
       setValor(servicoParaEditar.valor.toFixed(2).replace('.', ','));
+      setGarantiaDias(servicoParaEditar.garantia_dias ? String(servicoParaEditar.garantia_dias) : '');
+      setGarantiaCobertura(servicoParaEditar.garantia_cobertura || '');
+      setGarantiaExclusoes(servicoParaEditar.garantia_exclusoes || '');
+      setGarantiaCuidados(servicoParaEditar.garantia_cuidados || '');
     }
   }, [servicoParaEditar]);
 
@@ -48,6 +58,18 @@ export function ServicoModal({ isOpen, onClose, servicoParaEditar, onSuccess }: 
 
       const nomeFormatado = formatarNomeAoDigitar(nome);
       const valorNumerico = parseFloat(valor.replace('.', '').replace(',', '.'));
+      const dias = garantiaDias.trim() ? Math.round(Number(garantiaDias)) : null;
+      if (dias !== null && (!Number.isFinite(dias) || dias < GARANTIA_LEGAL_DIAS)) {
+        toast.error(`A garantia mínima de serviço é de ${GARANTIA_LEGAL_DIAS} dias (garantia legal). ⚠️`);
+        setLoading(false);
+        return;
+      }
+      const garantia = {
+        garantia_dias: dias,
+        garantia_cobertura: garantiaCobertura.trim() || null,
+        garantia_exclusoes: garantiaExclusoes.trim() || null,
+        garantia_cuidados: garantiaCuidados.trim() || null,
+      };
 
       if (servicoParaEditar) {
         const { error } = await supabase
@@ -55,7 +77,8 @@ export function ServicoModal({ isOpen, onClose, servicoParaEditar, onSuccess }: 
           .update({
             nome: nomeFormatado,
             descricao,
-            valor: valorNumerico
+            valor: valorNumerico,
+            ...garantia,
           })
           .eq('id', servicoParaEditar.id)
           .eq('user_id', user.id);
@@ -69,6 +92,7 @@ export function ServicoModal({ isOpen, onClose, servicoParaEditar, onSuccess }: 
             nome: nomeFormatado,
             descricao,
             valor: valorNumerico,
+            ...garantia,
             user_id: user.id,
           }]);
 
@@ -91,6 +115,10 @@ export function ServicoModal({ isOpen, onClose, servicoParaEditar, onSuccess }: 
     setNome('');
     setDescricao('');
     setValor('');
+    setGarantiaDias('');
+    setGarantiaCobertura('');
+    setGarantiaExclusoes('');
+    setGarantiaCuidados('');
   }
 
   return (
@@ -162,6 +190,55 @@ export function ServicoModal({ isOpen, onClose, servicoParaEditar, onSuccess }: 
                     />
                   </div>
                 </div>
+
+                <fieldset className="border border-gray-200 rounded-lg p-3 space-y-3">
+                  <legend className="px-1 text-sm font-semibold text-gray-700">Garantia</legend>
+                  <p className="text-xs text-gray-500">
+                    Aparece para o cliente no portal quando a OS é concluída. Em branco, usa o padrão do tipo de serviço
+                    (mínimo legal de {GARANTIA_LEGAL_DIAS} dias).
+                  </p>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Prazo (dias)</label>
+                    <input
+                      type="number"
+                      min={GARANTIA_LEGAL_DIAS}
+                      value={garantiaDias}
+                      onChange={(e) => setGarantiaDias(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 transition-all"
+                      placeholder={`${GARANTIA_LEGAL_DIAS} (padrão)`}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">O que a garantia cobre</label>
+                    <textarea
+                      value={garantiaCobertura}
+                      onChange={(e) => setGarantiaCobertura(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 transition-all"
+                      placeholder="Ex.: reajuste se o instrumento sair do ponto sem causa externa"
+                      rows={2}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">O que não cobre</label>
+                    <textarea
+                      value={garantiaExclusoes}
+                      onChange={(e) => setGarantiaExclusoes(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 transition-all"
+                      placeholder="Ex.: quedas, troca de calibre, umidade extrema"
+                      rows={2}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Cuidados recomendados</label>
+                    <textarea
+                      value={garantiaCuidados}
+                      onChange={(e) => setGarantiaCuidados(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 transition-all"
+                      placeholder="Como o cliente deve cuidar do instrumento"
+                      rows={2}
+                    />
+                  </div>
+                </fieldset>
 
                 <div className="flex justify-end space-x-3 pt-4">
                   <button

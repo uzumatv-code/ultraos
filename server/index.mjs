@@ -15,6 +15,7 @@ import { createFinanceAgent, inferExpenseCategory, formatBRL } from './finance-a
 import { createAgentBrain } from './agent-brain.mjs';
 import { createReceiptStore } from './receipts.mjs';
 import { createLojaTools } from './loja-agent.mjs';
+import { emitirGarantiasPendentes } from './garantias-core.mjs';
 import { createOsTools } from './os-agent.mjs';
 import { createRealtimeHub, instrumentDatabase } from './realtime.mjs';
 import { buildDps, cancelNfse, emitDps, parsePfx } from './nfse-nacional.mjs';
@@ -2605,6 +2606,9 @@ app.post('/api/query', requireAuth, async (req, res) => {
       );
       for (const ordemId of affectedOrderIds) {
         await syncReceivableForOrder(pool, req.user.id, ordemId);
+        if (data.status === 'concluido') {
+          await emitirGarantiasPendentes(pool, { uuid, now, userId: req.user.id, ordemId }).catch((error) => console.warn('[garantias] emissao falhou:', error.message));
+        }
       }
       await writeAudit(req, { action: 'registro.atualizar', resource: physicalTable, details: { filters, fields: Object.keys(data), affected: Number(result.affectedRows || 0) } });
       return res.json({ data: null, count: Number(result.affectedRows || 0), error: null });
@@ -6650,6 +6654,7 @@ const portal = createPortal({
   tenantId: process.env.PORTAL_TENANT_ID,
   tenantEmail: process.env.PORTAL_TENANT_EMAIL,
   secret: process.env.PORTAL_SHARED_SECRET,
+  reviewUrl: process.env.GOOGLE_REVIEW_URL || 'https://g.page/r/Cd8CHsL7KDxCEBM/review',
   devCodes: process.env.PORTAL_DEV_CODES === '1' && process.env.NODE_ENV !== 'production',
 });
 app.use('/api/portal/v1', portal.router);
@@ -6666,6 +6671,7 @@ const loja = createLoja({
   sendCustomerMessage,
   ensureReceitaCategoria: (userId, conn) => ensureDefaultFinancialCategory(userId, 'receita', 'Loja do site', '#8B5CF6', conn),
   gerarIA: process.env.OPENAI_API_KEY ? gerarTextosLojaComOpenAI : null,
+  onLibrary: (contaId) => portal.syncWarrantyAccess(contaId),
   mpAccessToken: process.env.MERCADOPAGO_ACCESS_TOKEN,
   mpWebhookSecret: process.env.MERCADOPAGO_WEBHOOK_SECRET,
   melhorEnvioToken: process.env.MELHOR_ENVIO_TOKEN,
@@ -7691,6 +7697,13 @@ async function startServer() {
   } catch (error) {
     console.error('[startup] Loja do site sem esquema:', error.message);
   }
+
+  // Garantias de OS concluídas por qualquer caminho (painel, IA do WhatsApp, portal): confere a cada 5 minutos.
+  const emitirGarantias = () => emitirGarantiasPendentes(pool, { uuid, now })
+    .then((n) => { if (n) console.log(`[garantias] ${n} garantia(s) emitida(s).`); })
+    .catch((error) => console.warn('[garantias] emissao falhou:', error.message));
+  void emitirGarantias();
+  setInterval(emitirGarantias, 5 * 60 * 1000).unref?.();
 
   app.listen(PORT, HOST, () => {
     console.log(`Sistema OS API rodando em ${HOST}:${PORT}`);

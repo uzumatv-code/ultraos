@@ -29,6 +29,11 @@ export interface Servico {
   valor: number;
   created_at: string;
   user_id: string;
+  garantia_dias?: number | null;
+  garantia_cobertura?: string | null;
+  garantia_exclusoes?: string | null;
+  garantia_cuidados?: string | null;
+  garantia_ebook_slug?: string | null;
 }
 
 export interface Problema {

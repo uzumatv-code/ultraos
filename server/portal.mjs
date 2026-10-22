@@ -5,6 +5,7 @@ import {
   agendaTemperature, findDuplicateGroups, formatCpf, generateCode, hashCode, hashCpf, isValidCpf, maskCpf, maskPhone,
   nextWorkingDays, onlyDigits, phoneKey, phonesMatch, pickPrimaryClient, verifyPortalRequest, whatsappNumber,
 } from './portal-core.mjs';
+import { situacaoGarantia, somarDias } from './garantias-core.mjs';
 
 const CODE_TTL_MS = 10 * 60 * 1000;
 const MAX_CODE_ATTEMPTS = 5;
@@ -26,7 +27,7 @@ const GENERIC_MISMATCH = new PortalError(
   'Não encontramos um cadastro com esses dados. Confira o CPF e o telefone ou fale com a loja.',
 );
 
-export function createPortal({ pool, uuid, now, todayDate, sendCustomerMessage, tenantId: tenantIdOption, tenantEmail, secret, devCodes = false, log = console }) {
+export function createPortal({ pool, uuid, now, todayDate, sendCustomerMessage, tenantId: tenantIdOption, tenantEmail, secret, reviewUrl = null, devCodes = false, log = console }) {
   // A empresa do site: PORTAL_TENANT_ID, o e-mail de login da loja (PORTAL_TENANT_EMAIL) ou,
   // sem nenhum dos dois, a única conta principal do sistema.
   let tenantId = tenantIdOption || null;
@@ -372,6 +373,100 @@ export function createPortal({ pool, uuid, now, todayDate, sendCustomerMessage, 
     return rows.map(shapeOrder);
   }
 
+  // ---------- Garantias ----------
+
+  /** Fim do último dia de garantia (23h59 de Brasília) em ISO UTC, para comparar com now(). */
+  const fimDoDia = (dataIso) => `${somarDias(dataIso, 1)}T02:59:59.000Z`;
+
+  /**
+   * Libera, como cortesia, o ebook de cuidados de cada garantia ativa até o último dia dela.
+   * Acesso comprado (pedido_id) nunca é encurtado; cortesia só é estendida, nunca reduzida.
+   */
+  async function syncWarrantyAccess(contaId) {
+    if (!isEnabled()) return;
+    const ids = await linkedClientIds(contaId).catch(() => []);
+    if (!ids.length) return;
+    const [rows] = await pool.query(
+      `SELECT g.ebook_slug, MAX(g.fim) AS fim, p.id AS produto_id
+         FROM os_garantias g
+         JOIN loja_produtos p ON p.user_id = g.user_id AND p.slug = g.ebook_slug AND p.tipo = 'ebook' AND p.status = 'publicado'
+        WHERE g.user_id = ? AND g.cliente_id IN (?) AND g.ebook_slug IS NOT NULL AND g.fim >= ?
+        GROUP BY g.ebook_slug, p.id`,
+      [tenantId, ids, todayDate()],
+    );
+    for (const row of rows) {
+      await pool.query(
+        `INSERT INTO loja_acessos (id, user_id, conta_id, produto_id, pedido_id, concedido_em, expira_em) VALUES (?, ?, ?, ?, NULL, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           expira_em = IF(pedido_id IS NULL, GREATEST(COALESCE(expira_em, ''), VALUES(expira_em)), expira_em),
+           revogado_em = IF(pedido_id IS NULL, NULL, revogado_em)`,
+        [uuid(), tenantId, contaId, row.produto_id, now(), fimDoDia(row.fim)],
+      );
+    }
+  }
+
+  async function listWarranties(contaId) {
+    const { ids } = await requireLinked(contaId);
+    await syncWarrantyAccess(contaId);
+    const hoje = todayDate();
+    const [rows] = await pool.query(
+      `SELECT g.*, o.numero, o.modelo, COALESCE(i.nome, '') AS instrumento, COALESCE(m.nome, '') AS marca
+         FROM os_garantias g
+         JOIN ordens_servico o ON o.id = g.ordem_servico_id
+         LEFT JOIN instrumentos i ON i.id = o.instrumento_id
+         LEFT JOIN marcas m ON m.id = o.marca_id
+        WHERE g.user_id = ? AND g.cliente_id IN (?)
+        ORDER BY g.fim DESC, o.numero DESC LIMIT 300`,
+      [tenantId, ids],
+    );
+    const slugs = [...new Set(rows.map((r) => r.ebook_slug).filter(Boolean))];
+    const ebooks = {};
+    if (slugs.length) {
+      const [produtos] = await pool.query(
+        `SELECT p.id, p.slug, p.titulo, p.subtitulo, p.preco, a.pedido_id, a.expira_em, a.revogado_em
+           FROM loja_produtos p
+           LEFT JOIN loja_acessos a ON a.produto_id = p.id AND a.conta_id = ?
+          WHERE p.user_id = ? AND p.tipo = 'ebook' AND p.status = 'publicado' AND p.slug IN (?)`,
+        [contaId, tenantId, slugs],
+      );
+      for (const p of produtos) {
+        const ativo = p.revogado_em == null && (p.expira_em == null ? Boolean(p.pedido_id) : p.expira_em > now());
+        ebooks[p.slug] = {
+          produto_id: p.id,
+          slug: p.slug,
+          titulo: p.titulo,
+          subtitulo: p.subtitulo,
+          preco: Number(p.preco),
+          acesso: ativo ? (p.pedido_id ? 'comprado' : 'cortesia') : null,
+          acesso_ate: ativo && !p.pedido_id ? p.expira_em : null,
+        };
+      }
+    }
+    const ativas = [];
+    const expiradas = [];
+    for (const r of rows) {
+      const situacao = situacaoGarantia(r.fim, hoje);
+      const item = {
+        id: r.id,
+        os_numero: r.numero,
+        instrumento: [r.instrumento, r.marca, r.modelo].filter(Boolean).join(' '),
+        servico: r.servico_nome,
+        inicio: r.inicio,
+        fim: r.fim,
+        dias: Number(r.dias),
+        dias_restantes: situacao.dias_restantes,
+        vence_em_breve: situacao.vence_em_breve,
+        cobertura: r.cobertura,
+        exclusoes: r.exclusoes,
+        cuidados: r.cuidados,
+        ebook: r.ebook_slug ? ebooks[r.ebook_slug] || null : null,
+      };
+      (situacao.ativa ? ativas : expiradas).push(item);
+    }
+    ativas.sort((a, b) => a.fim.localeCompare(b.fim));
+    return { ativas, expiradas, avaliacao_url: reviewUrl || null, tem_os_concluida: rows.length > 0 };
+  }
+
   async function orderDetail(contaId, orderId) {
     const { ids } = await requireLinked(contaId);
     const [[o]] = await pool.query(
@@ -567,6 +662,7 @@ export function createPortal({ pool, uuid, now, todayDate, sendCustomerMessage, 
   router.get('/contas/:id/ordens', handle(async (req) => ({ ordens: await listOrders(req.params.id) })));
   router.get('/contas/:id/ordens/:ordemId', handle((req) => orderDetail(req.params.id, req.params.ordemId)));
   router.get('/contas/:id/orcamentos', handle(async (req) => ({ orcamentos: await listQuotes(req.params.id) })));
+  router.get('/contas/:id/garantias', handle((req) => listWarranties(req.params.id)));
   router.get('/contas/:id/preferencias', handle((req) => preferences(req.params.id)));
   router.put('/contas/:id/preferencias', handle((req) => updatePreferences(req.params.id, req.body || {}, clientIp(req))));
   router.get('/agenda', handle(() => agenda()));
@@ -721,5 +817,5 @@ export function createPortal({ pool, uuid, now, todayDate, sendCustomerMessage, 
     }
   }));
 
-  return { get enabled() { return isEnabled(); }, get tenantId() { return tenantId; }, ensureSchema, router, adminRouter, startVerification, confirmVerification };
+  return { get enabled() { return isEnabled(); }, get tenantId() { return tenantId; }, ensureSchema, router, adminRouter, startVerification, confirmVerification, syncWarrantyAccess };
 }

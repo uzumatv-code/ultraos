@@ -33,7 +33,7 @@ function parseJson(value, fallback) {
 }
 
 export function createLoja({
-  pool, uuid, now, getTenantId, secret, uploadsDir, sendCustomerMessage, ensureReceitaCategoria, gerarIA, log = console,
+  pool, uuid, now, getTenantId, secret, uploadsDir, sendCustomerMessage, ensureReceitaCategoria, gerarIA, onLibrary = null, log = console,
   mpAccessToken, mpWebhookSecret, melhorEnvioToken, melhorEnvioEmail, siteUrl, osPublicUrl,
   mpApiUrl = 'https://api.mercadopago.com', melhorEnvioApiUrl = 'https://melhorenvio.com.br/api/v2',
 }) {
@@ -151,6 +151,11 @@ export function createLoja({
       revogado_em varchar(50) DEFAULT NULL,
       UNIQUE KEY unique_loja_acesso (conta_id, produto_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+    // Acesso com validade: cortesia do ebook de cuidados enquanto durar a garantia do serviço (NULL = para sempre).
+    const [[expira]] = await pool.query(
+      "SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'loja_acessos' AND COLUMN_NAME = 'expira_em'",
+    );
+    if (!Number(expira.n)) await pool.query('ALTER TABLE loja_acessos ADD COLUMN expira_em varchar(50) DEFAULT NULL');
     await pool.query(`CREATE TABLE IF NOT EXISTS loja_progresso (
       conta_id varchar(36) NOT NULL,
       aula_id varchar(36) NOT NULL,
@@ -488,7 +493,7 @@ export function createLoja({
         for (const item of itens.filter((i) => i.tipo !== 'fisico')) {
           await conn.query(
             `INSERT INTO loja_acessos (id, user_id, conta_id, produto_id, pedido_id, concedido_em) VALUES (?, ?, ?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE revogado_em = NULL, pedido_id = VALUES(pedido_id), concedido_em = VALUES(concedido_em)`,
+             ON DUPLICATE KEY UPDATE revogado_em = NULL, expira_em = NULL, pedido_id = VALUES(pedido_id), concedido_em = VALUES(concedido_em)`,
             [uuid(), pedido.user_id, pedido.conta_id, item.produto_id, pedidoId, now()],
           );
         }
@@ -581,16 +586,22 @@ export function createLoja({
   }
 
   async function library(contaId) {
+    if (onLibrary) await onLibrary(contaId).catch((error) => log.warn?.('[loja] cortesias de garantia:', error.message));
     const [rows] = await pool.query(
-      `SELECT p.* FROM loja_acessos a JOIN loja_produtos p ON p.id = a.produto_id
-        WHERE a.conta_id = ? AND a.user_id = ? AND a.revogado_em IS NULL ORDER BY a.concedido_em DESC`,
-      [contaId, tenant()],
+      `SELECT p.*, a.expira_em AS acesso_expira_em FROM loja_acessos a JOIN loja_produtos p ON p.id = a.produto_id
+        WHERE a.conta_id = ? AND a.user_id = ? AND a.revogado_em IS NULL AND (a.expira_em IS NULL OR a.expira_em > ?)
+        ORDER BY a.concedido_em DESC`,
+      [contaId, tenant(), now()],
     );
     const [progresso] = await pool.query('SELECT aula_id FROM loja_progresso WHERE conta_id = ?', [contaId]);
     const feitas = new Set(progresso.map((r) => r.aula_id));
     const out = [];
     for (const p of rows) {
       const item = publicProduct(p);
+      if (p.acesso_expira_em) {
+        item.acesso = 'cortesia_garantia';
+        item.acesso_ate = p.acesso_expira_em;
+      }
       if (p.tipo === 'curso') {
         const [aulas] = await pool.query('SELECT id FROM loja_aulas WHERE produto_id = ?', [p.id]);
         item.aulas_total = aulas.length;
@@ -602,7 +613,10 @@ export function createLoja({
   }
 
   async function hasAccess(contaId, produtoId) {
-    const [[row]] = await pool.query('SELECT id FROM loja_acessos WHERE conta_id = ? AND produto_id = ? AND revogado_em IS NULL', [contaId, produtoId]);
+    const [[row]] = await pool.query(
+      'SELECT id FROM loja_acessos WHERE conta_id = ? AND produto_id = ? AND revogado_em IS NULL AND (expira_em IS NULL OR expira_em > ?)',
+      [contaId, produtoId, now()],
+    );
     return Boolean(row);
   }
 
