@@ -6705,6 +6705,7 @@ const recomendados = createRecomendados({
   uploadsDir,
   osPublicUrl: process.env.PUBLIC_APP_URL,
   mlAuth: mercadoLivreAuth,
+  gerarIA: process.env.OPENAI_API_KEY ? gerarTextosLojaComOpenAI : null,
   mlApiUrl: process.env.MERCADOLIVRE_API_URL || undefined,
 });
 app.use('/api/loja/v1/webhooks', loja.webhookRouter);

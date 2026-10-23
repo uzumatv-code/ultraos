@@ -71,6 +71,9 @@ function fakePool() {
       return [{ affectedRows: 1 }];
     }
     if (s.startsWith('SELECT * FROM loja_recomendados WHERE user_id = ?')) return [[...recs.values()].filter((r) => r.user_id === params[0])];
+    if (s.startsWith('SELECT DISTINCT categoria FROM loja_recomendados')) {
+      return [[...new Set([...recs.values()].filter((r) => r.user_id === params[0] && r.categoria && r.id !== params[1]).map((r) => r.categoria))].map((categoria) => ({ categoria }))];
+    }
     throw new Error(`SQL não simulado: ${s}`);
   };
   return { query, recs, cliques };
@@ -95,7 +98,7 @@ function abrirPaginaFalsa(paginas) {
   };
 }
 
-async function iniciar(t, { mlAuth = null, exigirToken = null, paginas = {} } = {}) {
+async function iniciar(t, { mlAuth = null, exigirToken = null, paginas = {}, gerarIA = null } = {}) {
   // API do Mercado Livre falsa: um anúncio ativo, sem foto (nada é baixado da internet).
   const ml = express();
   ml.get('/items/MLB123456789', (req, res) => {
@@ -108,7 +111,7 @@ async function iniciar(t, { mlAuth = null, exigirToken = null, paginas = {} } = 
   const rec = createRecomendados({
     pool, uuid: () => `id-${++n}`, now: () => new Date().toISOString(), getTenantId: () => TENANT, secret: SECRET,
     uploadsDir: fs.mkdtempSync(path.join(os.tmpdir(), 'rec-')), osPublicUrl: 'https://os.exemplo.com', log: { error() {}, info() {} },
-    mlApiUrl: `http://127.0.0.1:${mlServer.address().port}`, mlAuth, abrirPagina: abrirPaginaFalsa(paginas),
+    mlApiUrl: `http://127.0.0.1:${mlServer.address().port}`, mlAuth, gerarIA, abrirPagina: abrirPaginaFalsa(paginas),
   });
   await rec.ensureSchema();
   const app = express();
@@ -220,6 +223,50 @@ test('link meli.la: segue até a página social e lê o produto em destaque, sem
   assert.equal(r.url_anuncio, 'https://www.mercadolivre.com.br/ferro-de-solda/p/MLB61104409');
   assert.match(r.imagem_url, /\/uploads\/loja\/recomendados\/.+\.webp$/);
   assert.equal(pool.recs.get(r.id).link_afiliado, 'https://meli.la/2AKmWB8', 'o link de afiliado continua o que o cliente usa');
+});
+
+test('IA: usa o rascunho do editor, a foto e as categorias já usadas; devolve sugestões sem salvar', async (t) => {
+  const chamadas = [];
+  const gerarIA = async (pedido) => {
+    chamadas.push(pedido);
+    return { motivo: 'Indicamos para quem faz pequenos reparos em casa.', categoria: 'Ferramentas', marca: 'Sugon' };
+  };
+  const social = 'https://www.mercadolivre.com.br/social/luthieria?ref=abc';
+  const { painel, pool } = await iniciar(t, {
+    gerarIA,
+    paginas: {
+      'https://meli.la/2AKmWB8': { location: social },
+      [social]: { html: PAGINA_SOCIAL },
+      'https://http2.mlstatic.com/D_NQ_NP_650835-MLA99930195767_112025-O.webp': { imagem: true },
+    },
+  });
+  const outra = (await painel('POST', '/', { link_afiliado: 'https://meli.la/outra', titulo: 'Escova' })).body.data;
+  await painel('PUT', `/${outra.id}`, { categoria: 'Ferramentas' });
+  const r = (await painel('POST', '/', { link_afiliado: 'https://meli.la/2AKmWB8' })).body.data;
+  assert.equal((await painel('GET', '/')).body.data.ia, true);
+
+  const resp = await painel('POST', `/${r.id}/ia`, {
+    campos: ['motivo', 'categoria', 'marca'], instrucoes: 'usamos na bancada', rascunho: { titulo: 'Ferro de Solda Sugon A9 (editado)', link_afiliado: 'https://golpe.com' },
+  });
+  assert.equal(resp.status, 200);
+  assert.deepEqual(resp.body.data.textos, { motivo: 'Indicamos para quem faz pequenos reparos em casa.', categoria: 'Ferramentas', marca: 'Sugon' });
+  const entrada = JSON.parse(chamadas[0].entrada);
+  assert.equal(entrada.nome_no_anuncio, 'Ferro de Solda Sugon A9 (editado)', 'usa o que está no editor, mesmo sem salvar');
+  assert.equal(entrada.anotacoes_de_quem_cadastra, 'usamos na bancada');
+  assert.deepEqual(entrada.categorias_ja_usadas, ['Ferramentas']);
+  assert.match(chamadas[0].imagem, /^data:image\/webp;base64,/);
+  assert.equal(pool.recs.get(r.id).motivo, null, 'nada é salvo pela IA');
+
+  assert.equal((await painel('POST', `/${r.id}/ia`, { campos: ['nada'] })).status, 400);
+});
+
+test('IA desligada (sem OPENAI_API_KEY) avisa no painel', async (t) => {
+  const { painel } = await iniciar(t);
+  const r = (await painel('POST', '/', { link_afiliado: 'https://meli.la/x', titulo: 'Corda' })).body.data;
+  const resp = await painel('POST', `/${r.id}/ia`, { campos: ['motivo'] });
+  assert.equal(resp.status, 503);
+  assert.match(resp.body.error.message, /OPENAI_API_KEY/);
+  assert.equal((await painel('GET', '/')).body.data.ia, false);
 });
 
 test('link que abre o perfil sem produto em destaque explica como gerar o link certo', async (t) => {

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  dadosDaPagina, dadosDaPaginaSocial, dadosDoItem, dadosDoProduto, idAnuncio, imagemMercadoLivre, origemClique, paginaSocial, urlMercadoLivre,
+  dadosDaPagina, dadosDaPaginaSocial, dadosDoItem, dadosDoProduto, idAnuncio, imagemMercadoLivre, limparTextosRecomendado, origemClique, paginaSocial,
+  promptRecomendado, urlMercadoLivre,
 } from './recomendados-core.mjs';
 
 test('links: só https em domínios do Mercado Livre', () => {
@@ -72,6 +73,29 @@ test('página social: só /social/<apelido> do Mercado Livre', () => {
   assert.equal(so.dados.titulo, 'Capotraste');
   assert.equal(so.ml, null);
   assert.equal(dadosDaPaginaSocial('<html></html>'), null);
+});
+
+test('IA: só campos conhecidos, exige saber o produto e não deixa inventar uso na oficina', () => {
+  assert.equal(promptRecomendado({ titulo: 'X' }, ['nada']), null);
+  assert.match(promptRecomendado({ titulo: '' }, ['motivo']).erro, /nome do produto/);
+  const p = promptRecomendado(
+    { titulo: 'Ferro de Solda Sugon A9 Pro 120W', preco: 578.3, link_afiliado: 'https://meli.la/x' },
+    ['motivo', 'categoria', 'invalido'],
+    { instrucoes: 'usamos na troca de trastes', categorias: ['Ferramentas', 'Cordas'] },
+  );
+  assert.deepEqual(p.campos, ['motivo', 'categoria']);
+  assert.deepEqual(p.schema.required, ['motivo', 'categoria']);
+  assert.match(p.sistema, /Só afirme que a oficina usa o produto/);
+  assert.match(p.sistema, /Nunca invente/);
+  const entrada = JSON.parse(p.entrada);
+  assert.equal(entrada.anotacoes_de_quem_cadastra, 'usamos na troca de trastes');
+  assert.deepEqual(entrada.categorias_ja_usadas, ['Ferramentas', 'Cordas']);
+  assert.equal(entrada.preco, 'R$ 578.30');
+  assert.equal(entrada.link_afiliado, undefined, 'o link não vai para a IA');
+
+  const limpo = limparTextosRecomendado({ motivo: '"**Indicamos** para\n quem solda em casa."', categoria: 'Ferramentas', marca: '', extra: 'x' }, ['motivo', 'categoria', 'marca']);
+  assert.deepEqual(limpo, { motivo: 'Indicamos para quem solda em casa.', categoria: 'Ferramentas' });
+  assert.ok(limparTextosRecomendado({ motivo: 'palavra '.repeat(100) }, ['motivo']).motivo.length <= 400);
 });
 
 test('origem do clique', () => {

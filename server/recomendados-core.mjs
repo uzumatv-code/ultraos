@@ -143,6 +143,60 @@ export function dadosDaPaginaSocial(html) {
   };
 }
 
+// ---------- Textos com IA ----------
+
+/** Campos da indicação que a IA pode escrever, com o limite de cada um (o mesmo das colunas). */
+export const CAMPOS_IA_RECOMENDADO = {
+  titulo: { max: 200, regra: 'Nome curto e claro para o cartão da vitrine, com até 70 caracteres: tipo do produto, marca e modelo. Tire excesso de palavras-chave do anúncio; mantenha voltagem, medida ou cor só se mudarem a escolha.' },
+  motivo: { max: 400, regra: 'Por que a oficina recomenda: 1 ou 2 frases, até 220 caracteres, na primeira pessoa do plural ("indicamos", "usamos"), como um luthier falando com um músico. Diga para que serve e para quem é indicado. Só afirme que a oficina usa o produto na bancada, ou qualquer experiência própria, se as anotações de quem cadastra disserem isso.' },
+  categoria: { max: 100, regra: 'Uma categoria curta, no plural e com inicial maiúscula (ex.: Cordas, Afinadores, Ferramentas, Limpeza, Acessórios, Cabos). Se uma das categorias já usadas servir, use exatamente ela.' },
+  marca: { max: 100, regra: 'Só o nome da marca do produto, se aparecer no nome do anúncio ou na foto. Se não der para saber, devolva texto vazio.' },
+};
+
+/** Monta as instruções e os dados enviados à IA para escrever os campos de uma indicação. */
+export function promptRecomendado(item, campos, { instrucoes = '', categorias = [] } = {}) {
+  const pedidos = campos.filter((c) => CAMPOS_IA_RECOMENDADO[c]);
+  if (!pedidos.length) return null;
+  if (!String(item.titulo || '').trim() && !item.imagem) return { erro: 'Busque os dados no Mercado Livre ou escreva o nome do produto antes: a IA precisa saber o que é.' };
+  const dados = {
+    nome_no_anuncio: item.titulo || undefined,
+    marca: item.marca || undefined,
+    categoria: item.categoria || undefined,
+    preco: item.preco ? `R$ ${Number(item.preco).toFixed(2)}` : undefined,
+    motivo_atual: item.motivo || undefined,
+    anotacoes_de_quem_cadastra: String(instrucoes || '').trim().slice(0, 500) || undefined,
+    categorias_ja_usadas: categorias.length ? categorias.slice(0, 30) : undefined,
+  };
+  const sistema = [
+    'Você escreve as indicações da página "Recomendamos" da Serviços Prime Luthieria, oficina de luthieria em Águas Claras, Brasília (DF).',
+    'São produtos vendidos no Mercado Livre que a oficina indica para músicos cuidarem do instrumento (cordas, ferramentas, limpeza, acessórios).',
+    'Escreva em português do Brasil, tom direto e confiável. Sem emojis, sem markdown, sem exageros ("o melhor do mercado"), sem preço no texto.',
+    'Regra principal: use apenas o que está nos dados e o que for claramente visível na foto. Nunca invente especificações, garantias ou que a oficina já usou o produto.',
+    'Campos pedidos:',
+    ...pedidos.map((c) => `- ${c}: ${CAMPOS_IA_RECOMENDADO[c].regra}`),
+  ].join('\n');
+  const schema = {
+    type: 'object',
+    additionalProperties: false,
+    required: pedidos,
+    properties: Object.fromEntries(pedidos.map((c) => [c, { type: 'string' }])),
+  };
+  return { sistema, entrada: JSON.stringify(dados, null, 2), schema, campos: pedidos };
+}
+
+/** Limpa a resposta da IA: só os campos pedidos, em uma linha, sem markdown e dentro do limite de cada coluna. */
+export function limparTextosRecomendado(resposta, campos) {
+  const out = {};
+  for (const c of campos) {
+    if (!CAMPOS_IA_RECOMENDADO[c]) continue;
+    let texto = String(resposta?.[c] ?? '').replace(/\*\*|__|^#+\s*/gm, '').replace(/\s+/g, ' ').trim().replace(/^["']|["']$/g, '');
+    const max = CAMPOS_IA_RECOMENDADO[c].max;
+    if (texto.length > max) texto = `${texto.slice(0, max - 1).replace(/\s+\S*$/, '')}…`;
+    if (texto) out[c] = texto;
+  }
+  return out;
+}
+
 /** Origem do clique (vitrine, os, whatsapp…): curta e sem caracteres estranhos, para os relatórios. */
 export function origemClique(valor) {
   const origem = String(valor || '').toLowerCase().trim();

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
-  AlertCircle, ArrowDown, ArrowUp, CheckCircle2, ExternalLink, ImagePlus, Link2, Loader2, MousePointerClick, Plug, Plus, RefreshCw, Save, Store, ThumbsUp, Trash2, X,
+  AlertCircle, ArrowDown, ArrowUp, CheckCircle2, ExternalLink, ImagePlus, Link2, Loader2, MousePointerClick, Plug, Plus, RefreshCw, Save, Sparkles, Store, ThumbsUp, Trash2, X,
 } from 'lucide-react';
 import { PageContainer } from '../components/PageContainer';
 import { Card } from '../components/Card';
@@ -19,7 +19,7 @@ interface Recomendado {
 interface ContaML {
   configurado: boolean; conectado: boolean; apelido?: string | null; conectado_em?: string | null; erro?: string | null; token_fixo?: boolean; redirect_uri?: string;
 }
-interface Lista { recomendados: Recomendado[]; integrado: boolean; mercado_livre: ContaML }
+interface Lista { recomendados: Recomendado[]; integrado: boolean; ia?: boolean; mercado_livre: ContaML }
 
 const SITE = 'https://luthieriabrasilia.com.br';
 const input = 'mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white';
@@ -37,13 +37,28 @@ async function prepararImagem(file: File): Promise<Blob> {
   return new Promise((ok, falha) => canvas.toBlob((b) => (b ? ok(b) : falha(new Error('Não foi possível ler a imagem'))), 'image/webp', 0.85));
 }
 
-function Campo({ label, children, ajuda }: { label: string; children: React.ReactNode; ajuda?: string }) {
+function Campo({ label, children, ajuda, acao }: { label: string; children: React.ReactNode; ajuda?: string; acao?: React.ReactNode }) {
   return (
-    <label className="block">
-      <span className="text-sm font-semibold text-slate-900 dark:text-white">{label}</span>
-      {children}
+    <div className="block">
+      <div className="flex items-center justify-between gap-2">
+        <label className="text-sm font-semibold text-slate-900 dark:text-white">{label}</label>
+        {acao}
+      </div>
+      <label className="block">{children}</label>
       {ajuda && <span className="mt-1 block text-xs text-slate-500">{ajuda}</span>}
-    </label>
+    </div>
+  );
+}
+
+type CampoIA = 'titulo' | 'motivo' | 'categoria' | 'marca';
+
+/** Botão pequeno que pede à IA o texto de um campo. */
+function BotaoIA({ ocupado, onClick }: { ocupado: boolean; onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick} disabled={ocupado}
+      className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-semibold text-violet-600 hover:bg-violet-500/10 disabled:opacity-50">
+      {ocupado ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} Gerar com IA
+    </button>
   );
 }
 
@@ -54,10 +69,31 @@ function Situacao({ r }: { r: Recomendado }) {
     : <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-semibold text-slate-600">Rascunho</span>;
 }
 
-function Editor({ inicial, onFechar, onSalvo }: { inicial: Recomendado; onFechar: () => void; onSalvo: () => void }) {
+function Editor({ inicial, onFechar, onSalvo, iaAtiva }: { inicial: Recomendado; onFechar: () => void; onSalvo: () => void; iaAtiva: boolean }) {
   const [r, setR] = useState<Recomendado>(inicial);
   const [salvando, setSalvando] = useState(false);
   const [buscando, setBuscando] = useState(false);
+  const [gerando, setGerando] = useState<CampoIA[]>([]);
+  const [pedidoIA, setPedidoIA] = useState('');
+
+  // A IA usa o que está no formulário (mesmo sem salvar), a foto e as suas anotações; o texto volta para revisão, nada é salvo sozinho.
+  async function gerarIA(campos: CampoIA[]) {
+    if (!r.titulo.trim() && !r.imagem_url) return toast.error('Busque os dados no Mercado Livre ou escreva o nome antes');
+    setGerando(campos);
+    try {
+      const resp = await apiRequest<{ textos: Partial<Record<CampoIA, string>> }>(`/api/loja-admin/recomendados/${r.id}/ia`, {
+        method: 'POST',
+        body: JSON.stringify({ campos, instrucoes: pedidoIA.trim() || undefined, rascunho: r }),
+      });
+      setR((atual) => ({ ...atual, ...resp.textos }));
+      toast.success('Texto gerado. Revise antes de salvar.');
+    } catch (error: any) {
+      toast.error(error.message || 'A IA não respondeu agora');
+    } finally {
+      setGerando([]);
+    }
+  }
+  const ia = (campo: CampoIA) => (iaAtiva ? <BotaoIA ocupado={gerando.includes(campo)} onClick={() => void gerarIA([campo])} /> : undefined);
   const [enviando, setEnviando] = useState(false);
   const set = <K extends keyof Recomendado>(k: K, v: Recomendado[K]) => setR((atual) => ({ ...atual, [k]: v }));
   const num = (v: string) => (v === '' ? null : Number(v));
@@ -151,15 +187,28 @@ function Editor({ inicial, onFechar, onSalvo }: { inicial: Recomendado; onFechar
             </Campo>
           </section>
 
+          {iaAtiva && (
+            <section className="rounded-xl border border-violet-200 bg-violet-50/60 p-4 dark:border-slate-700 dark:bg-slate-900">
+              <p className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white"><Sparkles className="h-4 w-4 text-violet-600" /> Escrever com IA</p>
+              <p className="mt-1 text-xs text-slate-500">A IA usa o nome do anúncio, a foto e as suas anotações para escrever nome curto, motivo, categoria e marca. Ela só diz que a oficina usa o produto se você escrever isso aqui. Revise e salve.</p>
+              <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                <input className={`${input} mt-0`} placeholder="Opcional: sua experiência (ex.: usamos na troca de trastes, boa para iniciantes)" value={pedidoIA} onChange={(e) => setPedidoIA(e.target.value)} />
+                <Button size="sm" icon={gerando.length > 1 ? Loader2 : Sparkles} disabled={gerando.length > 0} onClick={() => void gerarIA(['titulo', 'motivo', 'categoria', 'marca'])}>
+                  {gerando.length > 1 ? 'Escrevendo…' : 'Preencher tudo'}
+                </Button>
+              </div>
+            </section>
+          )}
+
           <section className="grid gap-4 sm:grid-cols-2">
-            <div className="sm:col-span-2"><Campo label="Nome"><input className={input} value={r.titulo} onChange={(e) => set('titulo', e.target.value)} /></Campo></div>
+            <div className="sm:col-span-2"><Campo label="Nome" acao={ia('titulo')}><input className={input} value={r.titulo} onChange={(e) => set('titulo', e.target.value)} /></Campo></div>
             <div className="sm:col-span-2">
-              <Campo label="Por que a oficina recomenda" ajuda={`${(r.motivo || '').length}/400. Obrigatório para publicar. Ex.: "É a corda que usamos nas regulagens de guitarra: dura mais e segura a afinação."`}>
+              <Campo label="Por que a oficina recomenda" acao={ia('motivo')} ajuda={`${(r.motivo || '').length}/400. Obrigatório para publicar. Ex.: "É a corda que usamos nas regulagens de guitarra: dura mais e segura a afinação."`}>
                 <textarea rows={3} maxLength={400} className={input} value={r.motivo || ''} onChange={(e) => set('motivo', e.target.value)} />
               </Campo>
             </div>
-            <Campo label="Categoria"><input className={input} placeholder="Cordas, Afinadores, Limpeza…" value={r.categoria || ''} onChange={(e) => set('categoria', e.target.value)} /></Campo>
-            <Campo label="Marca"><input className={input} value={r.marca || ''} onChange={(e) => set('marca', e.target.value)} /></Campo>
+            <Campo label="Categoria" acao={ia('categoria')}><input className={input} placeholder="Cordas, Afinadores, Limpeza…" value={r.categoria || ''} onChange={(e) => set('categoria', e.target.value)} /></Campo>
+            <Campo label="Marca" acao={ia('marca')}><input className={input} value={r.marca || ''} onChange={(e) => set('marca', e.target.value)} /></Campo>
             <Campo label="Preço no Mercado Livre (R$)" ajuda={`Consultado em ${data(r.preco_em)}. Atualizado sozinho uma vez por dia.`}>
               <input type="number" min={0} step="0.01" className={input} value={r.preco ?? ''} onChange={(e) => set('preco', num(e.target.value))} />
             </Campo>
@@ -413,7 +462,7 @@ export function LojaRecomendados() {
         </Card>
       </div>
 
-      {editando && <Editor key={editando.id} inicial={editando} onFechar={() => setEditando(null)} onSalvo={() => void load()} />}
+      {editando && <Editor key={editando.id} inicial={editando} iaAtiva={Boolean(lista?.ia)} onFechar={() => setEditando(null)} onSalvo={() => void load()} />}
     </PageContainer>
   );
 }

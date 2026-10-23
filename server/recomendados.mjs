@@ -5,7 +5,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import express from 'express';
 import {
-  dadosDaPagina, dadosDaPaginaSocial, dadosDoItem, dadosDoProduto, idAnuncio, origemClique, paginaSocial, urlMercadoLivre,
+  dadosDaPagina, dadosDaPaginaSocial, dadosDoItem, dadosDoProduto, idAnuncio, limparTextosRecomendado, origemClique, paginaSocial,
+  promptRecomendado, urlMercadoLivre,
 } from './recomendados-core.mjs';
 import { verifyPortalRequest } from './portal-core.mjs';
 
@@ -23,7 +24,7 @@ class RecomendadoError extends Error {
 }
 
 export function createRecomendados({
-  pool, uuid, now, getTenantId, secret, uploadsDir, osPublicUrl, mlAuth = null, log = console,
+  pool, uuid, now, getTenantId, secret, uploadsDir, osPublicUrl, mlAuth = null, gerarIA = null, log = console,
   mlApiUrl = 'https://api.mercadolibre.com', abrirPagina = (url, opcoes) => fetch(url, opcoes),
 }) {
   const osUrl = (osPublicUrl || 'https://os.luthieriabrasilia.com.br').replace(/\/+$/, '');
@@ -357,6 +358,7 @@ export function createRecomendados({
     return {
       recomendados: rows.map((r) => admin(r, cliques)),
       integrado: Boolean(secret && tenant() === req.auth.accountId),
+      ia: Boolean(gerarIA),
       mercado_livre: mlAuth ? await mlAuth.status(req.auth.accountId) : { configurado: false, conectado: false },
     };
   }));
@@ -409,6 +411,38 @@ export function createRecomendados({
         precoMudou && dados.preco ? 1 : 0, now(), ml ? 1 : 0, ml?.tipo ?? null, ml ? 1 : 0, ml?.id ?? null, now(), atual.id],
     );
     return lerAdmin(atual.id, req.auth.accountId);
+  }));
+
+  // Textos com IA: devolve sugestões para o formulário (nada é salvo aqui). Usa o que está no editor, mesmo sem salvar,
+  // a foto da indicação e as categorias já usadas, para a vitrine não ganhar "Corda" e "Cordas" ao mesmo tempo.
+  adminRouter.post('/:id/ia', adminHandle(async (req) => {
+    if (!gerarIA) throw new RecomendadoError(503, 'ia_indisponivel', 'IA indisponível: falta OPENAI_API_KEY no servidor.');
+    const atual = await proprio(req);
+    const rascunho = req.body?.rascunho && typeof req.body.rascunho === 'object' ? req.body.rascunho : {};
+    const item = { ...atual, ...Object.fromEntries(Object.entries(rascunho).filter(([k]) => ['titulo', 'categoria', 'marca', 'motivo', 'preco'].includes(k))) };
+    const [cats] = await pool.query(
+      "SELECT DISTINCT categoria FROM loja_recomendados WHERE user_id = ? AND categoria IS NOT NULL AND categoria <> '' AND id <> ?",
+      [req.auth.accountId, atual.id],
+    );
+    const campos = Array.isArray(req.body?.campos) ? req.body.campos.map(String) : [];
+    const pedido = promptRecomendado(item, campos, { instrucoes: req.body?.instrucoes, categorias: cats.map((c) => c.categoria) });
+    if (!pedido) throw new RecomendadoError(400, 'campos_invalidos', 'Escolha o que a IA deve escrever.');
+    if (pedido.erro) throw new RecomendadoError(400, 'sem_produto', pedido.erro);
+    let imagem = null;
+    if (atual.imagem) {
+      const arquivo = path.join(imagensDir, path.basename(atual.imagem));
+      const mime = { webp: 'image/webp', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png' }[path.extname(arquivo).slice(1).toLowerCase()];
+      if (mime && fs.existsSync(arquivo) && fs.statSync(arquivo).size < 4 * 1024 * 1024) {
+        imagem = `data:${mime};base64,${fs.readFileSync(arquivo).toString('base64')}`;
+      }
+    }
+    try {
+      const resposta = await gerarIA({ sistema: pedido.sistema, entrada: pedido.entrada, schema: pedido.schema, imagem });
+      return { textos: limparTextosRecomendado(resposta, pedido.campos) };
+    } catch (error) {
+      log.error('[recomendados-admin] IA falhou:', error.message);
+      throw new RecomendadoError(502, 'ia_falhou', 'A IA não respondeu agora. Tente de novo em instantes.');
+    }
   }));
 
   adminRouter.post('/:id/sincronizar', adminHandle(async (req) => {
