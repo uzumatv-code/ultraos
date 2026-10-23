@@ -17,6 +17,7 @@ const FOTO_EXT = { 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 
 const FOTOS_JANELA_MS = 30 * 60 * 1000;
 const DESFAZER_JANELA_MS = 12 * 3600 * 1000;
 const MAX_FOTOS = 12;
+const DUPLICADO_JANELA_MS = 30 * 60 * 1000;
 
 /** Embalagem típica por tipo de peça (peso em g, medidas em cm), usada no frete quando ninguém informou. */
 const MEDIDAS = [
@@ -34,6 +35,20 @@ export function medidasPadrao(...textos) {
   const tokens = normalize(textos.filter(Boolean).join(' ')).split(' ');
   const achado = MEDIDAS.find((item) => item.termos.some((termo) => tokens.includes(termo)));
   return { ...(achado ? achado.medidas : MEDIDAS_ACESSORIO) };
+}
+
+/** Mesmo produto falado de jeitos parecidos ("Violão Vogga VCA204" x "Violão Clássico Vogga VCA204 Preto"). */
+export function mesmoProduto(a, b) {
+  const ta = new Set(normalize(a).split(' ').filter((t) => t.length >= 2));
+  const tb = new Set(normalize(b).split(' ').filter((t) => t.length >= 2));
+  if (!ta.size || !tb.size) return false;
+  const modelo = (set) => [...set].filter((t) => /\d/.test(t));
+  const ma = modelo(ta);
+  const mb = modelo(tb);
+  if (ma.length && mb.length && !ma.some((t) => tb.has(t))) return false;
+  const comuns = [...ta].filter((t) => tb.has(t)).length;
+  // Um nome contido no outro ("Violão Vogga VCA204" ⊂ "Violão Clássico Vogga VCA204 Preto"); cor ou modelo diferente não casa.
+  return comuns === Math.min(ta.size, tb.size);
 }
 
 /** Ordena produtos pela parecença com o que foi dito; ambiguo quando os dois primeiros empatam. */
@@ -270,6 +285,18 @@ export function createLojaTools({ pool, uuid, now, uploadsDir, siteUrl, gerarIA 
     const preco = money(args.preco);
     if (!titulo) throw new Error('Diga o nome do produto.');
     if (!(preco > 0)) throw new Error('Diga o preço de venda.');
+    // Trava: o mesmo produto cadastrado há pouco (pedido repetido, mensagens em paralelo) é atualizado, não duplicado.
+    const desdeDuplicado = new Date(Date.now() - DUPLICADO_JANELA_MS).toISOString();
+    const [recentes] = await pool.query(
+      "SELECT * FROM loja_produtos WHERE user_id = ? AND tipo = 'fisico' AND created_at >= ? ORDER BY created_at DESC LIMIT 20",
+      [ctx.userId, desdeDuplicado],
+    );
+    const mesmo = recentes.find((p) => mesmoProduto(p.titulo, titulo));
+    if (mesmo) {
+      const fotosExtras = args.usar_fotos_recentes === false ? { anexadas: 0 } : await anexarFotosRecentes(ctx.userId, mesmo);
+      return { ok: true, ja_estava_cadastrado: true, ...resumo(await produto(ctx.userId, mesmo.id)), fotos_anexadas_agora: fotosExtras.anexadas,
+        aviso: 'Este produto já tinha sido cadastrado há pouco; não criei outro. Use loja_atualizar_produto para mudar preço ou dados.' };
+    }
     const id = uuid();
     const medidas = medidasPadrao(titulo, args.categoria);
     const dados = {

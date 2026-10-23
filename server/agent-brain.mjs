@@ -201,15 +201,19 @@ const TOOLS = [
 ];
 
 /** Monta a mensagem do usuário; o arquivo vai como imagem/PDF para o modelo ler (comprovante ou foto de produto). */
-export function userContent(message, attachment) {
-  if (!attachment) return String(message);
-  const note = `[Arquivo recebido e salvo: id=${attachment.id}, ${attachment.name}. Pode ser comprovante (ainda sem conta vinculada) ou foto de produto para a loja do site; decida pelo conteúdo e pela conversa.]`;
+export function userContent(message, attachment, attachments = null) {
+  const files = (attachments && attachments.length ? attachments : attachment ? [attachment] : []).filter(Boolean);
+  if (!files.length) return String(message);
+  const note = files.length > 1
+    ? `[${files.length} arquivos recebidos juntos e salvos (ids ${files.map((f) => f.id).join(', ')}). São fotos de um mesmo envio: pode ser um produto para a loja do site (o cadastro junta todas) ou comprovante; decida pelo texto e pelo conteúdo.]`
+    : `[Arquivo recebido e salvo: id=${files[0].id}, ${files[0].name}. Pode ser comprovante (ainda sem conta vinculada) ou foto de produto para a loja do site; decida pelo conteúdo e pela conversa.]`;
   const parts = [{ type: 'input_text', text: `${String(message || '').trim()}
 
 ${note}`.trim() }];
-  if (attachment.dataUrl) {
-    if (/^data:application\/pdf/i.test(attachment.dataUrl)) parts.push({ type: 'input_file', filename: attachment.name, file_data: attachment.dataUrl });
-    else parts.push({ type: 'input_image', image_url: attachment.dataUrl });
+  for (const file of files.slice(0, 4)) {
+    if (!file.dataUrl) continue;
+    if (/^data:application\/pdf/i.test(file.dataUrl)) parts.push({ type: 'input_file', filename: file.name, file_data: file.dataUrl });
+    else parts.push({ type: 'input_image', image_url: file.dataUrl });
   }
   return parts;
 }
@@ -254,6 +258,7 @@ export function buildSystemPrompt({ nome, hojeIso, diaSemana, timezone, canWrite
     '  • FOTO SEM TEXTO: se for claramente produto (instrumento, equipamento, acessório) e não comprovante, não trate como pagamento; responda curto: "Bela peça! Quer que eu anuncie na loja? Me diga nome e preço." Várias fotos seguidas chegam juntas: responda uma vez só.',
     '  • Alterar, vender ou tirar do site: ache o produto com loja_buscar_produto; se ambiguo=true ou mais de um parecido, PERGUNTE qual citando as opções; se for um só, aja direto. "vendi", "já foi", "tira do site" → loja_marcar_vendido. Mudar preço, destaque, nome, voltar ao site, adicionar fotos → loja_atualizar_produto. Excluir de vez: só depois de confirmação explícita (loja_excluir_produto com confirmado=true); prefira tirar do site.',
     '  • Confirme em uma linha com nome, preço e o link do produto quando houver; diga quantas fotos entraram e avise se ficou sem foto. Se usou medidas padrão de frete, mencione em poucas palavras que dá para ajustar no painel.',
+    '  • NUNCA cadastre o mesmo produto duas vezes: se o histórico mostrar falha, demora ou dúvida, procure antes com loja_buscar_produto e, se já existir, use loja_atualizar_produto (ex.: adicionar_fotos_recentes). "Valor de X por Y" = preco_de X e preco Y.',
     '  • Depois de loja_marcar_vendido por venda feita fora do site, pergunte se quer registrar a entrada (registrar_receita com o valor da venda). "Desfaz" logo após uma ação da loja → loja_desfazer_ultima_acao.',
     '- Quando a pessoa disser que recebeu ou fez um serviço avulso ("fiz um serviço de 50", "vendi uma palheta por 20", "recebi 80 de um conserto") sem citar uma OS existente, registre com registrar_receita (descrição curta + valor) e confirme; esse valor passa a contar em "quanto entrou". Se citar uma OS, use o fluxo de ordens.',
     '- NÃO pergunte a forma de pagamento: ela é opcional. Preencha forma_pagamento SOMENTE se a pessoa disser ou o comprovante mostrar (ex.: Pix); nunca presuma nem invente. Evite perguntas desnecessárias; só pergunte o que realmente impede a ação.',
@@ -427,7 +432,7 @@ export function createAgentBrain({ pool, now, todayDate, timezone, apiKey, model
    * Conversa com o modelo e executa as ferramentas pedidas.
    * Retorna { reply, actions } ou lança erro (o chamador cai no fluxo antigo).
    */
-  async function converse({ authorized, phone, message, canWrite, attachment = null }) {
+  async function converse({ authorized, phone, message, canWrite, attachment = null, attachments = null }) {
     if (!apiKey) throw new Error('OPENAI_API_KEY ausente');
     const userId = authorized.user_id;
     const ctx = { userId, phone, canWrite, attachment, actions: [] };
@@ -453,7 +458,7 @@ export function createAgentBrain({ pool, now, todayDate, timezone, apiKey, model
 
     let body = {
       model,
-      input: [{ role: 'system', content: system }, ...history, { role: 'user', content: userContent(message, attachment) }],
+      input: [{ role: 'system', content: system }, ...history, { role: 'user', content: userContent(message, attachment, attachments) }],
       tools: ALL_TOOLS,
       max_output_tokens: 1800,
       ...(reasoning ? { reasoning } : {}),

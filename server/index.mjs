@@ -6695,9 +6695,57 @@ const lojaTools = createLojaTools({
   gerarIA: process.env.OPENAI_API_KEY ? gerarTextosLojaComOpenAI : null,
 });
 
-// Fotos sem legenda chegam uma por mensagem; só a primeira de uma sequência recebe resposta da IA.
-const CAPTIONLESS_IMAGE_WINDOW_MS = 60 * 1000;
-const lastCaptionlessImage = new Map();
+// Álbuns do WhatsApp chegam como várias mensagens (uma por foto, a legenda numa delas, às vezes o texto logo depois).
+// Fotos e textos de um mesmo número que chegam em sequência viram UM pedido à IA, e cada número é atendido
+// um pedido por vez: sem isso, chamadas paralelas cadastravam o mesmo produto duas vezes.
+const MEDIA_BATCH_QUIET_MS = 10 * 1000;
+const mediaBatches = new Map();
+const phoneQueues = new Map();
+
+function serialByPhone(key, fn) {
+  const previous = phoneQueues.get(key) || Promise.resolve();
+  const next = previous.catch(() => {}).then(fn);
+  phoneQueues.set(key, next);
+  next.finally(() => { if (phoneQueues.get(key) === next) phoneQueues.delete(key); }).catch(() => {});
+  return next;
+}
+
+function addToMediaBatch(key, base, { caption = '', attachment = null } = {}) {
+  let batch = mediaBatches.get(key);
+  if (!batch) {
+    batch = { ...base, captions: [], attachments: [], timer: null };
+    mediaBatches.set(key, batch);
+  }
+  if (caption) batch.captions.push(caption);
+  if (attachment) batch.attachments.push(attachment);
+  clearTimeout(batch.timer);
+  batch.timer = setTimeout(() => {
+    mediaBatches.delete(key);
+    void serialByPhone(key, () => processMediaBatch(batch)).catch((error) => console.error('[financeiro-ia:lote]', error.message));
+  }, MEDIA_BATCH_QUIET_MS);
+  batch.timer.unref?.();
+}
+
+async function processMediaBatch(batch) {
+  const { authorized, phone, tipoMensagem } = batch;
+  const fotos = batch.attachments.length;
+  const message = batch.captions.join('\n').trim()
+    || (fotos > 1 ? `(enviou ${fotos} fotos)` : fotos === 1 ? '(enviou uma foto)' : '(mensagem vazia)');
+  try {
+    const brain = await agentBrain.converse({
+      authorized, phone, message, canWrite: canWriteSystem(authorized.permissao), attachment: batch.attachments[0] || null, attachments: batch.attachments,
+    });
+    await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, intencao: 'agente', entidades: { acoes: brain.actions, arquivos: fotos }, status: 'agente', resposta: brain.reply });
+    await sendFinancialAiReply(authorized.user_id, phone, brain.reply);
+  } catch (error) {
+    console.error('[financeiro-ia:lote] agente falhou:', error.message);
+    const kept = fotos > 1
+      ? `Recebi as ${fotos} fotos e guardei, mas não consegui processar agora. Me diga o que fazer com elas (ex.: "cadastra na loja" ou "é o comprovante da conta X").`
+      : 'Recebi o arquivo e guardei, mas não consegui processar agora. Me diga o que fazer com ele (ex.: "cadastra na loja" ou "é o comprovante da conta X").';
+    await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, status: 'agente', resposta: kept, erro: String(error.message).slice(0, 500) }).catch(() => {});
+    await sendFinancialAiReply(authorized.user_id, phone, kept).catch(() => {});
+  }
+}
 
 const agentBrain = createAgentBrain({
   osTools,
@@ -6831,6 +6879,12 @@ async function handleFinancialAiWebhook(req, res) {
     // Marca como lida (tique azul) assim que o número é reconhecido como autorizado.
     void markFinancialAiRead(authorized.user_id, webhookMessage);
 
+    const batchKey = `${authorized.user_id}:${phone}`;
+    if (message && !['imagem', 'documento'].includes(webhookMessage.messageType) && mediaBatches.has(batchKey) && process.env.OPENAI_API_KEY) {
+      addToMediaBatch(batchKey, {}, { caption: message });
+      return res.json({ batched: true });
+    }
+
     let attachment = null;
     if (['imagem', 'documento'].includes(webhookMessage.messageType)) {
       if (!canWriteSystem(authorized.permissao)) {
@@ -6848,15 +6902,11 @@ async function handleFinancialAiWebhook(req, res) {
         const saved = await receipts.save(authorized.user_id, { buffer, mime, name: webhookMessage.fileName, origem: 'whatsapp' });
         const readable = !/heic|heif/.test(mime) && buffer.length <= 6 * 1024 * 1024;
         attachment = { id: saved.id, name: saved.nome_arquivo, dataUrl: readable ? `data:${mime};base64,${buffer.toString('base64')}` : null };
-        if (!message && webhookMessage.messageType === 'imagem') {
-          // Sequência de fotos sem texto (ex.: fotos de um produto): guarda todas e responde só à primeira.
-          const key = `${authorized.user_id}:${phone}`;
-          const last = lastCaptionlessImage.get(key) || 0;
-          lastCaptionlessImage.set(key, Date.now());
-          if (Date.now() - last < CAPTIONLESS_IMAGE_WINDOW_MS) {
-            await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: '(enviou mais uma foto)', tipo_mensagem: tipoMensagem, status: 'midia_guardada', resposta: null });
-            return res.json({ stored: true, attachment_id: saved.id });
-          }
+        if (webhookMessage.messageType === 'imagem' && process.env.OPENAI_API_KEY) {
+          // Fotos (com ou sem legenda) esperam alguns segundos pelas outras do álbum e pelo texto: um pedido só à IA.
+          addToMediaBatch(batchKey, { authorized, phone, tipoMensagem }, { caption: message || '', attachment });
+          await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message || '(foto recebida)', tipo_mensagem: tipoMensagem, status: 'midia_guardada', resposta: null });
+          return res.json({ batched: true, attachment_id: saved.id });
         }
         message = message || (webhookMessage.messageType === 'imagem' ? '(enviou uma foto)' : '(enviou um comprovante em anexo)');
       } catch (error) {
@@ -6890,6 +6940,10 @@ async function handleFinancialAiWebhook(req, res) {
         return '';
       });
     }
+    if (!message && !attachment && !(audioUrl || audioBase64 || webhookMessage.hasAudioMessage)) {
+      // Eventos sem conteúdo (ex.: o aviso de "álbum" que o WhatsApp manda antes das fotos): ignora em silêncio.
+      return res.json({ ignored: true, reason: 'Mensagem sem conteudo' });
+    }
     if (!message) {
       const reply = 'Nao consegui ler a mensagem. Envie texto ou audio com arquivo acessivel.';
       await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: null, tipo_mensagem: tipoMensagem, status: 'erro', resposta: reply, erro: 'Mensagem vazia' });
@@ -6914,7 +6968,7 @@ async function handleFinancialAiWebhook(req, res) {
     const classicTopic = /^\s*confirmar\b/i.test(message);
     if ((!classicTopic || attachment) && process.env.OPENAI_API_KEY) {
       try {
-        const brain = await agentBrain.converse({ authorized, phone, message, canWrite: canWriteSystem(authorized.permissao), attachment });
+        const brain = await serialByPhone(batchKey, () => agentBrain.converse({ authorized, phone, message, canWrite: canWriteSystem(authorized.permissao), attachment }));
         const expenses = brain.actions.filter((item) => item.type === 'despesa');
         const expense = expenses[expenses.length - 1];
         await logFinancialAi({
@@ -6927,7 +6981,7 @@ async function handleFinancialAiWebhook(req, res) {
       } catch (brainError) {
         console.error('[financeiro-ia:agente] caindo no fluxo classico:', brainError.message);
         if (attachment) {
-          const kept = 'Guardei o comprovante como pendente, mas não consegui processar agora. Me diga de qual conta ele é e tento de novo.';
+          const kept = 'Recebi o arquivo e guardei, mas não consegui processar agora. Me diga o que fazer com ele (ex.: "é o comprovante da conta X").';
           await logFinancialAi({ user_id: authorized.user_id, autorizado_id: authorized.id, telefone: phone, mensagem: message, tipo_mensagem: tipoMensagem, status: 'agente', resposta: kept, erro: String(brainError.message).slice(0, 500) });
           await sendFinancialAiReply(authorized.user_id, phone, kept);
           return res.json({ reply: kept, whatsapp_sent: true });

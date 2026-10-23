@@ -15,7 +15,7 @@ function fakePool({ fotos = [] } = {}) {
     if (s.startsWith('INSERT INTO loja_produtos')) {
       const cols = s.match(/\(id, user_id, slug, (.*?), created_at, updated_at\)/)[1].split(', ');
       const [id, userId, slug, ...rest] = params;
-      const row = { id, user_id: userId, slug, imagens: null, publicado_em: null };
+      const row = { id, user_id: userId, slug, imagens: null, publicado_em: null, created_at: new Date().toISOString() };
       cols.forEach((c, i) => { row[c] = rest[i]; });
       produtos.set(id, row);
       return [{ affectedRows: 1 }];
@@ -26,6 +26,9 @@ function fakePool({ fotos = [] } = {}) {
     }
     if (s.startsWith('SELECT id FROM loja_produtos WHERE user_id = ? AND slug = ?')) {
       return [[...produtos.values()].filter((p) => p.slug === params[1] && p.id !== params[2])];
+    }
+    if (s.includes("tipo = 'fisico' AND created_at >= ?")) {
+      return [[...produtos.values()].filter((p) => p.user_id === params[0] && p.created_at >= params[1])];
     }
     if (s.startsWith('SELECT * FROM loja_produtos WHERE user_id = ? AND tipo')) {
       const status = params.slice(1);
@@ -161,4 +164,21 @@ test('desfazer o cadastro remove o produto', async () => {
   const r = await tools.run('loja_desfazer_ultima_acao', {}, ctx);
   assert.equal(r.produto_removido, true);
   assert.equal(pool.produtos.has(novo.produto_id), false);
+});
+
+test('mesmo produto: nome contido no outro casa, cor ou modelo diferente não', async () => {
+  const { mesmoProduto } = await import('./loja-agent.mjs');
+  assert.equal(mesmoProduto('Violão Clássico Vogga VCA204 Preto', 'Violão Clássico Vogga VCA204'), true);
+  assert.equal(mesmoProduto('Violão Vogga VCA204', 'Violão Clássico para iniciantes Vogga VCA204'), true);
+  assert.equal(mesmoProduto('Violão Tagima AC34 Preto', 'Violão Tagima AC34 Natural'), false);
+  assert.equal(mesmoProduto('Violão Vogga VCA204', 'Violão Vogga VCA203'), false);
+});
+
+test('cadastro repetido em seguida não duplica o produto', async () => {
+  const { pool, tools, ctx } = setup();
+  const primeiro = await tools.run('loja_cadastrar_produto', { titulo: 'Violão Clássico Vogga VCA204 Preto', preco: 250, preco_de: 350 }, ctx);
+  const segundo = await tools.run('loja_cadastrar_produto', { titulo: 'Violão Clássico Vogga VCA204', preco: 250 }, ctx);
+  assert.equal(segundo.ja_estava_cadastrado, true);
+  assert.equal(segundo.produto_id, primeiro.produto_id);
+  assert.equal(pool.produtos.size, 1);
 });
