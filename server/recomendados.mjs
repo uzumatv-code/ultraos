@@ -21,7 +21,7 @@ class RecomendadoError extends Error {
 }
 
 export function createRecomendados({
-  pool, uuid, now, getTenantId, secret, uploadsDir, osPublicUrl, mlAccessToken, log = console,
+  pool, uuid, now, getTenantId, secret, uploadsDir, osPublicUrl, mlAuth = null, log = console,
   mlApiUrl = 'https://api.mercadolibre.com',
 }) {
   const osUrl = (osPublicUrl || 'https://os.luthieriabrasilia.com.br').replace(/\/+$/, '');
@@ -116,12 +116,18 @@ export function createRecomendados({
     return null;
   }
 
-  async function lerApi(ml) {
-    const res = await fetch(`${ML_API}/${ml.tipo === 'produto' ? 'products' : 'items'}/${ml.id}`, {
-      headers: { Accept: 'application/json', ...(mlAccessToken ? { Authorization: `Bearer ${mlAccessToken}` } : {}) },
+  // Com a conta conectada, a consulta vai com o token dela; se ele tiver vencido no caminho, renova e tenta uma vez mais.
+  async function lerApi(ml, userId) {
+    const consultar = (token) => fetch(`${ML_API}/${ml.tipo === 'produto' ? 'products' : 'items'}/${ml.id}`, {
+      headers: { Accept: 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       signal: AbortSignal.timeout(12000),
     });
-    if (!res.ok) throw new Error(`API do Mercado Livre respondeu ${res.status}`);
+    const token = mlAuth ? await mlAuth.token(userId) : null;
+    let res = await consultar(token);
+    if (res.status === 401 && token && mlAuth) res = await consultar(await mlAuth.token(userId, { forcar: true }));
+    if (!res.ok) {
+      throw new Error(token ? `API do Mercado Livre respondeu ${res.status}` : 'o Mercado Livre exige login: conecte a conta em Recomendados');
+    }
     const json = await res.json();
     return ml.tipo === 'produto' ? dadosDoProduto(json) : dadosDoItem(json);
   }
@@ -133,13 +139,13 @@ export function createRecomendados({
   }
 
   /** Dados do anúncio: API primeiro, página como plano B. Devolve também o endereço e o id descobertos. */
-  async function buscarAnuncio({ link_afiliado, url_anuncio }) {
+  async function buscarAnuncio({ link_afiliado, url_anuncio, user_id: userId }) {
     const endereco = (urlMercadoLivre(url_anuncio) && url_anuncio) || (await resolverLink(link_afiliado).catch(() => null));
     const ml = endereco ? idAnuncio(endereco) : null;
     if (!ml) throw new RecomendadoError(422, 'anuncio_nao_identificado', 'Não deu para identificar o anúncio pelo link. Cole também o endereço do anúncio ou preencha os dados à mão.');
     let dados = null;
     const falhas = [];
-    try { dados = await lerApi(ml); } catch (error) { falhas.push(error.message); }
+    try { dados = await lerApi(ml, userId); } catch (error) { falhas.push(error.message); }
     if (!dados?.titulo) {
       try { dados = { ...(await lerPagina(endereco)), ...Object.fromEntries(Object.entries(dados || {}).filter(([, v]) => v != null)) }; } catch (error) { falhas.push(error.message); }
     }
@@ -307,13 +313,28 @@ export function createRecomendados({
   };
   const valor = (v) => (v === '' || v == null || !(Number(v) > 0) ? null : Math.round(Number(v) * 100) / 100);
 
+  // Conexão com o Mercado Livre (antes das rotas /:id, que também casariam com "mercadolivre").
+  adminRouter.get('/mercadolivre', adminHandle((req) => mlAuth?.status(req.auth.accountId) ?? { configurado: false, conectado: false }));
+  adminRouter.post('/mercadolivre/conectar', adminHandle((req) => {
+    if (!mlAuth) throw new RecomendadoError(503, 'ml_indisponivel', 'Conexão com o Mercado Livre indisponível.');
+    try {
+      return mlAuth.iniciar(req.auth.accountId);
+    } catch (error) {
+      throw new RecomendadoError(error.status || 500, 'ml_nao_configurado', error.message);
+    }
+  }));
+  adminRouter.delete('/mercadolivre', adminHandle(async (req) => {
+    await mlAuth?.desconectar(req.auth.accountId);
+    return { desconectado: true };
+  }));
+
   adminRouter.get('/', adminHandle(async (req) => {
     const [rows] = await pool.query('SELECT * FROM loja_recomendados WHERE user_id = ? ORDER BY ordem, created_at DESC', [req.auth.accountId]);
     const cliques = await cliquesPorItem(req.auth.accountId);
     return {
       recomendados: rows.map((r) => admin(r, cliques)),
       integrado: Boolean(secret && tenant() === req.auth.accountId),
-      api_com_token: Boolean(mlAccessToken),
+      mercado_livre: mlAuth ? await mlAuth.status(req.auth.accountId) : { configurado: false, conectado: false },
     };
   }));
 

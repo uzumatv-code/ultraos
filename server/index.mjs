@@ -22,6 +22,7 @@ import { buildDps, cancelNfse, emitDps, parsePfx } from './nfse-nacional.mjs';
 import { createPortal } from './portal.mjs';
 import { createLoja } from './loja.mjs';
 import { createRecomendados } from './recomendados.mjs';
+import { createMercadoLivreAuth } from './mercadolivre-auth.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -6682,6 +6683,18 @@ const loja = createLoja({
   mpApiUrl: process.env.MERCADOPAGO_API_URL || undefined,
   melhorEnvioApiUrl: process.env.MELHOR_ENVIO_API_URL || undefined,
 });
+// Conta do Mercado Livre conectada pelo painel (a API do ML só responde com login). Renova o acesso sozinha.
+const mercadoLivreAuth = createMercadoLivreAuth({
+  pool,
+  now,
+  clientId: process.env.MERCADOLIVRE_CLIENT_ID,
+  clientSecret: process.env.MERCADOLIVRE_CLIENT_SECRET,
+  osPublicUrl: process.env.PUBLIC_APP_URL,
+  envToken: process.env.MERCADOLIVRE_ACCESS_TOKEN || '',
+  apiUrl: process.env.MERCADOLIVRE_API_URL || undefined,
+});
+app.use('/api/mercadolivre', mercadoLivreAuth.callbackRouter);
+
 // Recomendados: indicações do Mercado Livre com link de afiliado (vitrine "Recomendamos" do site, sem carrinho).
 const recomendados = createRecomendados({
   pool,
@@ -6691,7 +6704,7 @@ const recomendados = createRecomendados({
   secret: process.env.PORTAL_SHARED_SECRET,
   uploadsDir,
   osPublicUrl: process.env.PUBLIC_APP_URL,
-  mlAccessToken: process.env.MERCADOLIVRE_ACCESS_TOKEN,
+  mlAuth: mercadoLivreAuth,
   mlApiUrl: process.env.MERCADOLIVRE_API_URL || undefined,
 });
 app.use('/api/loja/v1/webhooks', loja.webhookRouter);
@@ -7768,8 +7781,11 @@ async function startServer() {
   }
 
   try {
+    await mercadoLivreAuth.ensureSchema();
     await recomendados.ensureSchema();
     recomendados.startJobs();
+    mercadoLivreAuth.startJobs(() => (portal.enabled ? portal.tenantId : null));
+    console.log(`[startup] Recomendados: Mercado Livre ${mercadoLivreAuth.configurado ? `pronto para conectar (retorno em ${mercadoLivreAuth.redirectUri})` : 'sem MERCADOLIVRE_CLIENT_ID/SECRET'}.`);
   } catch (error) {
     console.error('[startup] Recomendados sem esquema:', error.message);
   }

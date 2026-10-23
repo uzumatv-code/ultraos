@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
-  AlertCircle, ArrowDown, ArrowUp, ExternalLink, ImagePlus, Link2, Loader2, MousePointerClick, Plus, RefreshCw, Save, Store, ThumbsUp, Trash2, X,
+  AlertCircle, ArrowDown, ArrowUp, CheckCircle2, ExternalLink, ImagePlus, Link2, Loader2, MousePointerClick, Plug, Plus, RefreshCw, Save, Store, ThumbsUp, Trash2, X,
 } from 'lucide-react';
 import { PageContainer } from '../components/PageContainer';
 import { Card } from '../components/Card';
@@ -15,7 +16,10 @@ interface Recomendado {
   ativo: boolean; ordem: number; sincronizado_em: string | null; sincronia_erro: string | null; cliques_30d: number; cliques_total: number;
   aviso?: string | null;
 }
-interface Lista { recomendados: Recomendado[]; integrado: boolean; api_com_token: boolean }
+interface ContaML {
+  configurado: boolean; conectado: boolean; apelido?: string | null; conectado_em?: string | null; erro?: string | null; token_fixo?: boolean; redirect_uri?: string;
+}
+interface Lista { recomendados: Recomendado[]; integrado: boolean; mercado_livre: ContaML }
 
 const SITE = 'https://luthieriabrasilia.com.br';
 const input = 'mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white';
@@ -198,7 +202,71 @@ function Editor({ inicial, onFechar, onSalvo }: { inicial: Recomendado; onFechar
   );
 }
 
+/** Conta do Mercado Livre: sem ela a API do ML não devolve nome, foto e preço dos anúncios. */
+function ContaMercadoLivre({ conta, onMudou }: { conta: ContaML; onMudou: () => void }) {
+  const [ocupado, setOcupado] = useState(false);
+
+  async function conectar() {
+    setOcupado(true);
+    try {
+      const { url } = await apiRequest<{ url: string }>('/api/loja-admin/recomendados/mercadolivre/conectar', { method: 'POST' });
+      // Vai para o Mercado Livre autorizar; ele devolve para esta página com ?ml=conectado.
+      window.location.href = url;
+    } catch (error: any) {
+      toast.error(error.message || 'Não foi possível iniciar a conexão');
+      setOcupado(false);
+    }
+  }
+
+  async function desconectar() {
+    const ok = await alerts.confirm({
+      title: 'Desconectar o Mercado Livre?', text: 'As indicações continuam no site, mas preço e disponibilidade param de ser atualizados.',
+      icon: 'warning', confirmButtonText: 'Desconectar', cancelButtonText: 'Manter',
+    });
+    if (!ok.isConfirmed) return;
+    try {
+      await apiRequest('/api/loja-admin/recomendados/mercadolivre', { method: 'DELETE' });
+      toast.success('Mercado Livre desconectado');
+      onMudou();
+    } catch (error: any) {
+      toast.error(error.message || 'Não foi possível desconectar');
+    }
+  }
+
+  return (
+    <div className="mt-4 rounded-xl border border-slate-200 p-4 dark:border-slate-700">
+      <p className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white"><Plug className="h-4 w-4 text-violet-600" /> Conta do Mercado Livre</p>
+      {!conta.configurado ? (
+        <div className="mt-2 space-y-2 text-xs text-slate-600 dark:text-slate-300">
+          <p>Falta configurar <code>MERCADOLIVRE_CLIENT_ID</code> e <code>MERCADOLIVRE_CLIENT_SECRET</code> no servidor (aplicativo criado no painel de desenvolvedores do Mercado Livre).</p>
+          {conta.redirect_uri && (
+            <p>Endereço de retorno (redirect URI) para cadastrar no aplicativo:
+              <button type="button" className="mt-1 block w-full break-all rounded-lg bg-slate-100 px-2 py-1.5 text-left font-mono text-slate-800 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200"
+                onClick={() => { void navigator.clipboard?.writeText(conta.redirect_uri!); toast.success('Endereço copiado'); }}>
+                {conta.redirect_uri}
+              </button>
+            </p>
+          )}
+        </div>
+      ) : conta.conectado ? (
+        <div className="mt-2 space-y-3 text-sm">
+          <p className="flex items-center gap-2 text-emerald-700 dark:text-emerald-400"><CheckCircle2 className="h-4 w-4" /> Conectado{conta.apelido ? ` como ${conta.apelido}` : ''}{conta.conectado_em ? ` desde ${data(conta.conectado_em)}` : ''}</p>
+          <p className="text-xs text-slate-500">O acesso é renovado sozinho. Nome, foto e preço passam a vir do anúncio.</p>
+          <Button size="sm" variant="secondary" onClick={() => void desconectar()}>Desconectar</Button>
+        </div>
+      ) : (
+        <div className="mt-2 space-y-3 text-sm">
+          {conta.erro && <p className="text-xs text-amber-700">{conta.erro}</p>}
+          <p className="text-xs text-slate-500">O Mercado Livre só mostra os dados dos anúncios para contas conectadas. Entre com a conta de afiliado e autorize.</p>
+          <Button size="sm" icon={ocupado ? Loader2 : Plug} disabled={ocupado} onClick={() => void conectar()}>Conectar Mercado Livre</Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function LojaRecomendados() {
+  const [params, setParams] = useSearchParams();
   const [lista, setLista] = useState<Lista | null>(null);
   const [loading, setLoading] = useState(true);
   const [editando, setEditando] = useState<Recomendado | null>(null);
@@ -217,6 +285,15 @@ export function LojaRecomendados() {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  // Volta do Mercado Livre depois de autorizar (?ml=conectado ou ?ml=erro&motivo=…).
+  useEffect(() => {
+    const ml = params.get('ml');
+    if (!ml) return;
+    if (ml === 'conectado') toast.success('Mercado Livre conectado. Use "Buscar no Mercado Livre" nas indicações já cadastradas.');
+    else toast.error(params.get('motivo') || 'Não foi possível conectar o Mercado Livre');
+    setParams({}, { replace: true });
+  }, [params, setParams]);
 
   async function criar(e: React.FormEvent) {
     e.preventDefault();
@@ -325,15 +402,14 @@ export function LojaRecomendados() {
         <Card hover={false} className="self-start p-5">
           <h2 className="font-bold text-slate-950 dark:text-white">Como funciona</h2>
           <ol className="mt-3 list-decimal space-y-2 pl-4 text-sm text-slate-600 dark:text-slate-300">
+            <li>Conecte a conta do Mercado Livre (abaixo), uma vez só.</li>
             <li>Gere o link do produto no painel de afiliados do Mercado Livre e cole aqui.</li>
             <li>O sistema busca nome, foto e preço. Escreva por que a oficina recomenda e publique.</li>
             <li>No site, o botão leva o cliente ao Mercado Livre pelo seu link. A compra e a entrega são do Mercado Livre.</li>
             <li>Uma vez por dia o preço é conferido. Anúncio pausado sai do site sozinho.</li>
           </ol>
           <p className="mt-4 rounded-xl bg-violet-500/5 p-3 text-sm font-semibold text-slate-900 dark:text-white">{cliques30} clique(s) nos últimos 30 dias</p>
-          {lista && !lista.api_com_token && (
-            <p className="mt-3 text-xs text-slate-500">Se a busca de preço falhar com frequência, configure MERCADOLIVRE_ACCESS_TOKEN no servidor. Sem ele, o sistema tenta ler a página do anúncio.</p>
-          )}
+          {lista && <ContaMercadoLivre conta={lista.mercado_livre} onMudou={() => void load()} />}
         </Card>
       </div>
 

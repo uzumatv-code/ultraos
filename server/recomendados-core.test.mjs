@@ -21,6 +21,11 @@ test('id do anúncio: item, catálogo e item escolhido dentro do catálogo', () 
     { tipo: 'item', id: 'MLB4111222333' },
   );
   assert.deepEqual(idAnuncio('https://www.mercadolivre.com.br/x/p/MLB6085321?wid=MLB998877665'), { tipo: 'item', id: 'MLB998877665' });
+  assert.deepEqual(
+    idAnuncio(`https://www.mercadolivre.com.br/gz/account-verification?go=${encodeURIComponent('https://produto.mercadolivre.com.br/MLB-3456789012-x')}`),
+    { tipo: 'item', id: 'MLB3456789012' },
+  );
+  assert.equal(idAnuncio('https://www.mercadolivre.com.br/gz/account-verification?go=https%3A%2F%2Fgolpe.com%2FMLB-3456789012'), null);
   assert.equal(idAnuncio('https://mercadolivre.com/sec/1AbCdEf'), null);
   assert.equal(idAnuncio('https://outro.com/MLB-3456789012'), null);
 });

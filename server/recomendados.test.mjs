@@ -76,17 +76,20 @@ function fakePool() {
   return { query, recs, cliques };
 }
 
-async function iniciar(t) {
+async function iniciar(t, { mlAuth = null, exigirToken = null } = {}) {
   // API do Mercado Livre falsa: um anúncio ativo, sem foto (nada é baixado da internet).
   const ml = express();
-  ml.get('/items/MLB123456789', (_req, res) => res.json({ id: 'MLB123456789', title: 'Encordoamento EXL110', price: 49.9, status: 'active' }));
+  ml.get('/items/MLB123456789', (req, res) => {
+    if (exigirToken && req.get('authorization') !== `Bearer ${exigirToken}`) return res.status(401).json({ message: 'invalid_token' });
+    res.json({ id: 'MLB123456789', title: 'Encordoamento EXL110', price: 49.9, status: 'active' });
+  });
   const mlServer = ml.listen(0);
   const pool = fakePool();
   let n = 0;
   const rec = createRecomendados({
     pool, uuid: () => `id-${++n}`, now: () => new Date().toISOString(), getTenantId: () => TENANT, secret: SECRET,
     uploadsDir: fs.mkdtempSync(path.join(os.tmpdir(), 'rec-')), osPublicUrl: 'https://os.exemplo.com', log: { error() {}, info() {} },
-    mlApiUrl: `http://127.0.0.1:${mlServer.address().port}`,
+    mlApiUrl: `http://127.0.0.1:${mlServer.address().port}`, mlAuth,
   });
   await rec.ensureSchema();
   const app = express();
@@ -168,6 +171,16 @@ test('clique: exige assinatura, conta só gente e devolve o link de afiliado', a
   assert.deepEqual((await site('GET', '/')).body.recomendados, []);
   assert.equal((await site('POST', `/${r.id}/clique`, { origem: 'os' })).status, 404);
   assert.equal(pool.cliques.length, 1);
+});
+
+test('conta conectada: consulta com o token e, se ele venceu no caminho, renova e tenta de novo', async (t) => {
+  const pedidos = [];
+  const mlAuth = { token: async (userId, { forcar = false } = {}) => { pedidos.push({ userId, forcar }); return forcar ? 'tok-novo' : 'tok-velho'; } };
+  const { painel } = await iniciar(t, { mlAuth, exigirToken: 'tok-novo' });
+  const r = (await painel('POST', '/', { link_afiliado: 'https://meli.la/2xYz', url_anuncio: 'https://produto.mercadolivre.com.br/MLB-123456789-x' })).body.data;
+  assert.equal(r.titulo, 'Encordoamento EXL110');
+  assert.equal(r.aviso, null);
+  assert.deepEqual(pedidos, [{ userId: TENANT, forcar: false }, { userId: TENANT, forcar: true }]);
 });
 
 test('anúncio que não dá para identificar vira aviso, e o cadastro continua para preencher à mão', async (t) => {

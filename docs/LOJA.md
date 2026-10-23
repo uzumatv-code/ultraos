@@ -36,7 +36,22 @@ Cadastro em **Loja do site → Recomendados (afiliados)**. Aparecem em `luthieri
 
 | Variável | Obrigatória | Para quê |
 | --- | --- | --- |
-| `MERCADOLIVRE_ACCESS_TOKEN` | não | Token da API do Mercado Livre. Sem ele o sistema tenta a API pública e, se ela recusar, lê a página do anúncio. Se a busca de preço falhar com frequência, configure. |
+| `MERCADOLIVRE_CLIENT_ID` | para buscar dados | "App ID" do aplicativo criado em developers.mercadolivre.com.br. |
+| `MERCADOLIVRE_CLIENT_SECRET` | para buscar dados | "Secret Key" do mesmo aplicativo. |
+| `MERCADOLIVRE_ACCESS_TOKEN` | não | Token fixo, só para testes: vence em ~6 horas. Use a conexão pelo painel. |
+
+A API do Mercado Livre só devolve nome, foto e preço para contas conectadas (sem login ela responde 403 e a página
+do anúncio pede verificação de conta). Para conectar:
+
+1. Em developers.mercadolivre.com.br, crie um aplicativo com a conta do Mercado Livre (a mesma do programa de afiliados).
+2. Em **Redirect URI**, cadastre exatamente `https://os.luthieriabrasilia.com.br/api/mercadolivre/callback`
+   (o painel mostra o endereço certo, a partir de `PUBLIC_APP_URL`). Escopos: leitura basta; `offline_access`
+   é necessário para o acesso ser renovado sozinho.
+3. Copie App ID e Secret Key para as variáveis acima e reinicie o sistema.
+4. No painel, em Recomendados, clique em **Conectar Mercado Livre** e autorize.
+
+O acesso (~6 h) é renovado sozinho antes de vencer, com PKCE e `state` de uso único. Se a autorização for revogada
+no Mercado Livre, o painel avisa e pede para conectar de novo.
 
 - Não passam pelo carrinho nem pelo Mercado Pago: quem vende e entrega é o Mercado Livre; a comissão aparece no painel de afiliados de lá.
 - Cadastro: cole o link de afiliado (e, se o link curto não for reconhecido, o endereço do anúncio). O sistema busca nome, foto e preço. Para publicar é preciso escrever **por que a oficina recomenda**.

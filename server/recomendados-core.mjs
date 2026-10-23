@@ -35,6 +35,9 @@ export function imagemMercadoLivre(valor) {
 export function idAnuncio(valor) {
   const url = urlMercadoLivre(valor);
   if (!url) return null;
+  // Tela de verificação do ML (…/account-verification?go=<anúncio>): o anúncio está no parâmetro "go".
+  const destino = url.searchParams.get('go');
+  if (destino && urlMercadoLivre(destino)) return idAnuncio(destino);
   const doFiltro = `${url.searchParams.get('pdp_filters') || ''} ${url.searchParams.get('item_id') || ''} ${url.searchParams.get('wid') || ''}`
     .match(/MLB-?(\d{6,})/i);
   if (doFiltro) return { tipo: 'item', id: `MLB${doFiltro[1]}` };
