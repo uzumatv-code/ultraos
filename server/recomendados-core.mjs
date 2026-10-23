@@ -99,6 +99,50 @@ export function dadosDaPagina(html) {
   return dados.titulo || dados.imagem_url ? dados : null;
 }
 
+/** Página social de afiliado (/social/<apelido>?ref=…): é para onde os links meli.la levam. */
+export function paginaSocial(valor) {
+  const url = urlMercadoLivre(valor);
+  return Boolean(url && /^\/social\/[^/]+\/?$/i.test(url.pathname));
+}
+
+const textoJson = (bruto) => {
+  try { return JSON.parse(`"${bruto}"`); } catch { return bruto; }
+};
+
+/**
+ * Produto compartilhado pelo link de afiliado. A página social abre sem login e traz o produto em destaque
+ * no cartão "card-featured" (anúncio, catálogo, título, preço e foto); as metatags og:* servem de reserva.
+ */
+export function dadosDaPaginaSocial(html) {
+  const texto = String(html || '');
+  // Só o primeiro cartão do destaque: os seguintes são outras recomendações, com outros preços.
+  const destaque = texto.indexOf('"id":"card-featured"');
+  const inicio = destaque >= 0 ? texto.indexOf('"metadata":{"id"', destaque) : -1;
+  const fim = inicio >= 0 ? texto.indexOf('"unique_id"', inicio) : -1;
+  const bloco = inicio >= 0 ? texto.slice(inicio, fim > inicio ? fim : inicio + 8000) : '';
+  const item = bloco.match(/"metadata":\{"id":"(MLB\d{6,})"/)?.[1];
+  const produto = bloco.match(/"product_id":"(MLB\d{6,})"/)?.[1];
+  const titulo = bloco.match(/"title":\{"text":"((?:[^"\\]|\\.)*)"/)?.[1];
+  const foto = bloco.match(/"pictures":\[\{"id":"([\w-]+)"/)?.[1];
+  const caminho = bloco.match(/"url":"((?:www\.)?mercadolivre\.com\.br(?:[^"\\]|\\.)*)"/)?.[1];
+  const dados = {
+    titulo: (titulo ? textoJson(titulo) : meta(texto, 'og:title'))?.slice(0, 200) || null,
+    preco: preco(bloco.match(/"current_price":\{"value":([\d.]+)/)?.[1]),
+    preco_de: null,
+    imagem_url: imagemMercadoLivre(foto ? `https://http2.mlstatic.com/D_NQ_NP_${foto}-O.webp` : meta(texto, 'og:image')),
+    disponivel: null,
+  };
+  const anterior = preco(bloco.match(/"previous_price":\{"value":([\d.]+)/)?.[1]);
+  if (anterior && dados.preco && anterior > dados.preco) dados.preco_de = anterior;
+  if (!item && !dados.titulo) return null;
+  const urlAnuncio = caminho ? urlMercadoLivre(`https://${textoJson(caminho).split(/[?#]/)[0]}`)?.toString() || null : null;
+  return {
+    dados,
+    ml: item ? { tipo: 'item', id: item } : produto ? { tipo: 'produto', id: produto } : null,
+    url_anuncio: urlAnuncio,
+  };
+}
+
 /** Origem do clique (vitrine, os, whatsapp…): curta e sem caracteres estranhos, para os relatórios. */
 export function origemClique(valor) {
   const origem = String(valor || '').toLowerCase().trim();

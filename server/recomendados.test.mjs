@@ -76,7 +76,26 @@ function fakePool() {
   return { query, recs, cliques };
 }
 
-async function iniciar(t, { mlAuth = null, exigirToken = null } = {}) {
+// Página social de afiliado reduzida ao que o sistema lê (o cartão em destaque e as metatags).
+const PAGINA_SOCIAL = `<html><head><meta property="og:title" content="Ferro de Solda Sugon A9"/>
+  <meta property="og:image" content="https://http2.mlstatic.com/D_NQ_NP_1-O.webp"/></head><body><script>{"id":"card-featured","type":"recommendations",
+  "polycards":[{"metadata":{"id":"MLB5453870215","product_id":"MLB61104409","url":"www.mercadolivre.com.br\\u002Fferro-de-solda\\u002Fp\\u002FMLB61104409"},
+  "pictures":{"pictures":[{"id":"650835-MLA99930195767_112025"}]},"components":[{"type":"title","id":"title","title":{"text":"Ferro de Solda Sugon Aifen A9 Pro 120W"}},
+  {"type":"price","id":"price","price":{"current_price":{"value":578.3,"currency":"BRL"},"previous_price":{"value":649.9},"installments":{"text":"10x","value":57.83}}}]},
+  {"unique_id":"outro","metadata":{"id":"MLB999999999"},"components":[{"type":"price","id":"price","price":{"current_price":{"value":10},"previous_price":{"value":900.88}}}]}]}</script></body></html>`;
+
+/** Internet falsa para links e fotos: meli.la → página social; o resto não existe (nada sai da máquina). */
+function abrirPaginaFalsa(paginas) {
+  return async (url) => {
+    const destino = paginas[url];
+    if (destino?.location) return new Response(null, { status: 301, headers: { location: destino.location } });
+    if (destino?.html) return new Response(destino.html, { status: 200, headers: { 'content-type': 'text/html' } });
+    if (destino?.imagem) return new Response(Buffer.from('RIFF0000WEBP'), { status: 200, headers: { 'content-type': 'image/webp' } });
+    return new Response('não encontrado', { status: 404 });
+  };
+}
+
+async function iniciar(t, { mlAuth = null, exigirToken = null, paginas = {} } = {}) {
   // API do Mercado Livre falsa: um anúncio ativo, sem foto (nada é baixado da internet).
   const ml = express();
   ml.get('/items/MLB123456789', (req, res) => {
@@ -89,7 +108,7 @@ async function iniciar(t, { mlAuth = null, exigirToken = null } = {}) {
   const rec = createRecomendados({
     pool, uuid: () => `id-${++n}`, now: () => new Date().toISOString(), getTenantId: () => TENANT, secret: SECRET,
     uploadsDir: fs.mkdtempSync(path.join(os.tmpdir(), 'rec-')), osPublicUrl: 'https://os.exemplo.com', log: { error() {}, info() {} },
-    mlApiUrl: `http://127.0.0.1:${mlServer.address().port}`, mlAuth,
+    mlApiUrl: `http://127.0.0.1:${mlServer.address().port}`, mlAuth, abrirPagina: abrirPaginaFalsa(paginas),
   });
   await rec.ensureSchema();
   const app = express();
@@ -181,6 +200,33 @@ test('conta conectada: consulta com o token e, se ele venceu no caminho, renova 
   assert.equal(r.titulo, 'Encordoamento EXL110');
   assert.equal(r.aviso, null);
   assert.deepEqual(pedidos, [{ userId: TENANT, forcar: false }, { userId: TENANT, forcar: true }]);
+});
+
+test('link meli.la: segue até a página social e lê o produto em destaque, sem token', async (t) => {
+  const social = 'https://www.mercadolivre.com.br/social/luthieria?matt_word=luthieria&ref=abc';
+  const { painel, pool } = await iniciar(t, {
+    paginas: {
+      'https://meli.la/2AKmWB8': { location: social },
+      [social]: { html: PAGINA_SOCIAL },
+      'https://http2.mlstatic.com/D_NQ_NP_650835-MLA99930195767_112025-O.webp': { imagem: true },
+    },
+  });
+  const r = (await painel('POST', '/', { link_afiliado: 'https://meli.la/2AKmWB8' })).body.data;
+  assert.equal(r.aviso, null);
+  assert.equal(r.titulo, 'Ferro de Solda Sugon Aifen A9 Pro 120W');
+  assert.equal(r.preco, 578.3);
+  assert.equal(r.preco_de, 649.9);
+  assert.equal(r.ml_id, 'MLB5453870215');
+  assert.equal(r.url_anuncio, 'https://www.mercadolivre.com.br/ferro-de-solda/p/MLB61104409');
+  assert.match(r.imagem_url, /\/uploads\/loja\/recomendados\/.+\.webp$/);
+  assert.equal(pool.recs.get(r.id).link_afiliado, 'https://meli.la/2AKmWB8', 'o link de afiliado continua o que o cliente usa');
+});
+
+test('link que abre o perfil sem produto em destaque explica como gerar o link certo', async (t) => {
+  const social = 'https://www.mercadolivre.com.br/social/luthieria';
+  const { painel } = await iniciar(t, { paginas: { 'https://meli.la/perfil': { location: social }, [social]: { html: '<html>sem cartão</html>' } } });
+  const r = (await painel('POST', '/', { link_afiliado: 'https://meli.la/perfil', titulo: 'Corda' })).body.data;
+  assert.match(r.aviso, /página de perfil/);
 });
 
 test('anúncio que não dá para identificar vira aviso, e o cadastro continua para preencher à mão', async (t) => {

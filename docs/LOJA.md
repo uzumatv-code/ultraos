@@ -40,8 +40,12 @@ Cadastro em **Loja do site → Recomendados (afiliados)**. Aparecem em `luthieri
 | `MERCADOLIVRE_CLIENT_SECRET` | para buscar dados | "Secret Key" do mesmo aplicativo. |
 | `MERCADOLIVRE_ACCESS_TOKEN` | não | Token fixo, só para testes: vence em ~6 horas. Use a conexão pelo painel. |
 
-A API do Mercado Livre só devolve nome, foto e preço para contas conectadas (sem login ela responde 403 e a página
-do anúncio pede verificação de conta). Para conectar:
+Links `meli.la` gerados pelo botão **Compartilhar** do produto levam à página social do afiliado
+(`/social/<apelido>?ref=…`), que abre sem login e traz o produto compartilhado em destaque: o sistema lê nome, foto e
+preço de lá, sem precisar de conta conectada. Um link do perfil (sem produto) não serve; o painel avisa.
+
+Para links que levam direto ao anúncio, a API do Mercado Livre só devolve os dados para contas conectadas (sem login
+ela responde 403 e a página do anúncio pede verificação de conta). Para conectar:
 
 1. Em developers.mercadolivre.com.br, crie um aplicativo com a conta do Mercado Livre (a mesma do programa de afiliados).
 2. Em **Redirect URI**, cadastre exatamente `https://os.luthieriabrasilia.com.br/api/mercadolivre/callback`

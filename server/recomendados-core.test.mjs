@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { dadosDaPagina, dadosDoItem, dadosDoProduto, idAnuncio, imagemMercadoLivre, origemClique, urlMercadoLivre } from './recomendados-core.mjs';
+import {
+  dadosDaPagina, dadosDaPaginaSocial, dadosDoItem, dadosDoProduto, idAnuncio, imagemMercadoLivre, origemClique, paginaSocial, urlMercadoLivre,
+} from './recomendados-core.mjs';
 
 test('links: só https em domínios do Mercado Livre', () => {
   assert.ok(urlMercadoLivre('https://mercadolivre.com/sec/1AbCdEf'));
@@ -59,6 +61,17 @@ test('página do anúncio: metatags como plano B', () => {
   assert.deepEqual(dadosDaPagina(html), { titulo: 'Capotraste Dunlop & Cia', preco: 39.9, preco_de: null, imagem_url: 'https://http2.mlstatic.com/D_9.jpg', disponivel: null });
   assert.equal(dadosDaPagina('<html>captcha</html>'), null);
   assert.equal(imagemMercadoLivre('https://mlstatic.com.golpe.com/x.jpg'), null);
+});
+
+test('página social: só /social/<apelido> do Mercado Livre', () => {
+  assert.equal(paginaSocial('https://www.mercadolivre.com.br/social/samuel?ref=x'), true);
+  assert.equal(paginaSocial('https://www.mercadolivre.com.br/social/samuel/outra'), false);
+  assert.equal(paginaSocial('https://golpe.com/social/samuel'), false);
+  // Sem o cartão em destaque, as metatags bastam para o nome e a foto (mas sem id do anúncio).
+  const so = dadosDaPaginaSocial('<meta property="og:title" content="Capotraste"><meta property="og:image" content="https://http2.mlstatic.com/a.webp">');
+  assert.equal(so.dados.titulo, 'Capotraste');
+  assert.equal(so.ml, null);
+  assert.equal(dadosDaPaginaSocial('<html></html>'), null);
 });
 
 test('origem do clique', () => {

@@ -4,7 +4,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import express from 'express';
-import { dadosDaPagina, dadosDoItem, dadosDoProduto, idAnuncio, origemClique, urlMercadoLivre } from './recomendados-core.mjs';
+import {
+  dadosDaPagina, dadosDaPaginaSocial, dadosDoItem, dadosDoProduto, idAnuncio, origemClique, paginaSocial, urlMercadoLivre,
+} from './recomendados-core.mjs';
 import { verifyPortalRequest } from './portal-core.mjs';
 
 const IMAGE_TYPES = { 'image/webp': 'webp', 'image/jpeg': 'jpg', 'image/png': 'png' };
@@ -22,7 +24,7 @@ class RecomendadoError extends Error {
 
 export function createRecomendados({
   pool, uuid, now, getTenantId, secret, uploadsDir, osPublicUrl, mlAuth = null, log = console,
-  mlApiUrl = 'https://api.mercadolibre.com',
+  mlApiUrl = 'https://api.mercadolibre.com', abrirPagina = (url, opcoes) => fetch(url, opcoes),
 }) {
   const osUrl = (osPublicUrl || 'https://os.luthieriabrasilia.com.br').replace(/\/+$/, '');
   const imagensDir = path.join(uploadsDir, 'loja', 'recomendados');
@@ -103,17 +105,26 @@ export function createRecomendados({
 
   // ---------- Mercado Livre ----------
 
-  /** Link curto de afiliado (mercadolivre.com/sec/…, meli.la/…) → endereço do anúncio, seguindo só redirecionamentos do Mercado Livre. */
-  async function resolverLink(link) {
+  /**
+   * Abre o link de afiliado seguindo só redirecionamentos do Mercado Livre. Termina num endereço de anúncio
+   * ({ url }) ou na página social do afiliado, que é para onde os meli.la levam ({ url, social }).
+   */
+  async function abrirLink(link) {
     let atual = urlMercadoLivre(link);
-    for (let i = 0; atual && i < 5; i += 1) {
-      if (idAnuncio(atual.toString())) return atual.toString();
-      const res = await fetch(atual, { redirect: 'manual', headers: { 'User-Agent': UA_NAVEGADOR }, signal: AbortSignal.timeout(10000) });
+    for (let i = 0; atual && i < 6; i += 1) {
+      if (idAnuncio(atual.toString())) return { url: atual.toString() };
+      const res = await abrirPagina(atual.toString(), { redirect: 'manual', headers: { 'User-Agent': UA_NAVEGADOR, Accept: 'text/html' }, signal: AbortSignal.timeout(12000) });
       const proximo = res.headers.get('location');
-      if (!proximo) return null;
-      atual = urlMercadoLivre(new URL(proximo, atual).toString());
+      if (proximo) {
+        atual = urlMercadoLivre(new URL(proximo, atual).toString());
+        continue;
+      }
+      if (res.ok && paginaSocial(atual.toString())) {
+        return { url: atual.toString(), social: dadosDaPaginaSocial((await res.text()).slice(0, 3_000_000)) };
+      }
+      return {};
     }
-    return null;
+    return {};
   }
 
   // Com a conta conectada, a consulta vai com o token dela; se ele tiver vencido no caminho, renova e tenta uma vez mais.
@@ -133,18 +144,30 @@ export function createRecomendados({
   }
 
   async function lerPagina(url) {
-    const res = await fetch(url, { headers: { 'User-Agent': UA_NAVEGADOR, Accept: 'text/html' }, signal: AbortSignal.timeout(12000) });
+    const res = await abrirPagina(url, { headers: { 'User-Agent': UA_NAVEGADOR, Accept: 'text/html' }, signal: AbortSignal.timeout(12000) });
     if (!res.ok) throw new Error(`página do anúncio respondeu ${res.status}`);
     return dadosDaPagina((await res.text()).slice(0, 2_000_000));
   }
 
-  /** Dados do anúncio: API primeiro, página como plano B. Devolve também o endereço e o id descobertos. */
+  /**
+   * Dados do anúncio. Link meli.la: lê o produto em destaque na página social (abre sem login). Senão: API
+   * (com a conta conectada) e a página do anúncio como plano B. Devolve também o endereço e o id descobertos.
+   */
   async function buscarAnuncio({ link_afiliado, url_anuncio, user_id: userId }) {
-    const endereco = (urlMercadoLivre(url_anuncio) && url_anuncio) || (await resolverLink(link_afiliado).catch(() => null));
-    const ml = endereco ? idAnuncio(endereco) : null;
-    if (!ml) throw new RecomendadoError(422, 'anuncio_nao_identificado', 'Não deu para identificar o anúncio pelo link. Cole também o endereço do anúncio ou preencha os dados à mão.');
-    let dados = null;
     const falhas = [];
+    let aberto = {};
+    try { aberto = await abrirLink(link_afiliado); } catch (error) { falhas.push(`link de afiliado: ${error.message}`); }
+    if (aberto.social?.ml && (aberto.social.dados.titulo || aberto.social.dados.preco)) {
+      return { dados: aberto.social.dados, url_anuncio: aberto.social.url_anuncio || url_anuncio || null, ml: aberto.social.ml };
+    }
+    const endereco = (urlMercadoLivre(url_anuncio) && url_anuncio) || aberto.url || null;
+    const ml = endereco ? idAnuncio(endereco) : null;
+    if (!ml) {
+      throw new RecomendadoError(422, 'anuncio_nao_identificado', aberto.url && paginaSocial(aberto.url)
+        ? 'O link de afiliado abriu a sua página de perfil no Mercado Livre, sem um produto em destaque. Gere o link pelo botão "Compartilhar" na página do produto ou cole o endereço do anúncio.'
+        : 'Não deu para identificar o anúncio pelo link. Cole também o endereço do anúncio ou preencha os dados à mão.');
+    }
+    let dados = null;
     try { dados = await lerApi(ml, userId); } catch (error) { falhas.push(error.message); }
     if (!dados?.titulo) {
       try { dados = { ...(await lerPagina(endereco)), ...Object.fromEntries(Object.entries(dados || {}).filter(([, v]) => v != null)) }; } catch (error) { falhas.push(error.message); }
@@ -156,7 +179,7 @@ export function createRecomendados({
   }
 
   async function baixarImagem(url, recomendadoId) {
-    const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+    const res = await abrirPagina(url, { signal: AbortSignal.timeout(15000) });
     const ext = IMAGE_TYPES[String(res.headers.get('content-type') || '').split(';')[0]];
     if (!res.ok || !ext) return null;
     const buffer = Buffer.from(await res.arrayBuffer());
