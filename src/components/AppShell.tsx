@@ -14,7 +14,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   AlertTriangle, Banknote, Bell, Bookmark, ChevronDown, ChevronsLeft, ClipboardCheck, CreditCard, Landmark,
   FileText, Gauge, LayoutGrid, LogOut, Menu, MessageCircle, Music2, PanelsTopLeft,
-  PenTool, Receipt, Search, Settings, Sparkles, Star, User, Users, Wallet, Wrench, X, Globe, Copy, Store, ShoppingBag,
+  PenTool, Receipt, Search, Settings, Sparkles, Star, User, Users, Wallet, Wrench, X, Globe, Copy, Store, ShoppingBag, ThumbsUp,
   type LucideIcon,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -70,6 +70,7 @@ const navigation: NavGroup[] = [
     items: [
       { path: '/loja', icon: Store, label: 'Produtos, cursos e ebooks', permission: 'settings.manage' },
       { path: '/loja/pedidos', icon: ShoppingBag, label: 'Pedidos da loja', permission: 'settings.manage' },
+      { path: '/loja/recomendados', icon: ThumbsUp, label: 'Recomendados (afiliados)', permission: 'settings.manage' },
     ],
   },
   {

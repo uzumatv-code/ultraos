@@ -34,6 +34,7 @@ const Conversas = lazy(() => import('./pages/Conversas').then((module) => ({ def
 const PortalCliente = lazy(() => import('./pages/PortalCliente').then((module) => ({ default: module.PortalCliente })));
 const LojaProdutos = lazy(() => import('./pages/LojaProdutos').then((module) => ({ default: module.LojaProdutos })));
 const LojaPedidos = lazy(() => import('./pages/LojaPedidos').then((module) => ({ default: module.LojaPedidos })));
+const LojaRecomendados = lazy(() => import('./pages/LojaRecomendados').then((module) => ({ default: module.LojaRecomendados })));
 const ClientesDuplicados = lazy(() => import('./pages/ClientesDuplicados').then((module) => ({ default: module.ClientesDuplicados })));
 
 function RouteFallback() {
@@ -393,6 +394,16 @@ function App() {
             <ProtectedRoute>
               <RequirePermission permission="settings.manage">
                 <Layout><LojaPedidos /></Layout>
+              </RequirePermission>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/loja/recomendados"
+          element={
+            <ProtectedRoute>
+              <RequirePermission permission="settings.manage">
+                <Layout><LojaRecomendados /></Layout>
               </RequirePermission>
             </ProtectedRoute>
           }

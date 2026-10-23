@@ -28,3 +28,19 @@ Fotos ficam em `uploads/loja/` (públicas) e PDFs de ebooks em `uploads/privado/
 - Reembolso ou estorno no Mercado Pago tira o acesso e devolve o estoque (se ainda não foi enviado).
 - A cada 15 minutos o sistema confere no Mercado Pago os pedidos pendentes (caso algum aviso tenha se perdido).
 - Nota fiscal não é emitida automaticamente para as vendas da loja.
+
+## Recomendados (afiliados do Mercado Livre)
+
+Cadastro em **Loja do site → Recomendados (afiliados)**. Aparecem em `luthieriabrasilia.com.br/recomendamos`
+(o link "Recomendamos" do menu só aparece quando há pelo menos uma indicação publicada).
+
+| Variável | Obrigatória | Para quê |
+| --- | --- | --- |
+| `MERCADOLIVRE_ACCESS_TOKEN` | não | Token da API do Mercado Livre. Sem ele o sistema tenta a API pública e, se ela recusar, lê a página do anúncio. Se a busca de preço falhar com frequência, configure. |
+
+- Não passam pelo carrinho nem pelo Mercado Pago: quem vende e entrega é o Mercado Livre; a comissão aparece no painel de afiliados de lá.
+- Cadastro: cole o link de afiliado (e, se o link curto não for reconhecido, o endereço do anúncio). O sistema busca nome, foto e preço. Para publicar é preciso escrever **por que a oficina recomenda**.
+- O botão do site aponta para `/r/<id>`: o site pede o link a este sistema (rota assinada), que conta o clique e devolve o link de afiliado. Robôs são redirecionados, mas não contam. O link só é aceito se for `https` de um domínio do Mercado Livre.
+- A cada 6 horas o sistema confere os anúncios publicados (no máximo uma vez por dia cada): atualiza preço e disponibilidade. Anúncio pausado sai do site sozinho e o link antigo leva de volta à vitrine. Nome e foto que você editou nunca são trocados.
+- Fotos ficam em `uploads/loja/recomendados/` (mesmo volume persistente da loja).
+- Publique o sistema antes do site: o site novo pede `/api/loja/v1/recomendados` e, sem a rota, mostra a vitrine como "fora do ar".

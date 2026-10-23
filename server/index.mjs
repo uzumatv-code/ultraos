@@ -21,6 +21,7 @@ import { createRealtimeHub, instrumentDatabase } from './realtime.mjs';
 import { buildDps, cancelNfse, emitDps, parsePfx } from './nfse-nacional.mjs';
 import { createPortal } from './portal.mjs';
 import { createLoja } from './loja.mjs';
+import { createRecomendados } from './recomendados.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -6681,8 +6682,22 @@ const loja = createLoja({
   mpApiUrl: process.env.MERCADOPAGO_API_URL || undefined,
   melhorEnvioApiUrl: process.env.MELHOR_ENVIO_API_URL || undefined,
 });
+// Recomendados: indicações do Mercado Livre com link de afiliado (vitrine "Recomendamos" do site, sem carrinho).
+const recomendados = createRecomendados({
+  pool,
+  uuid,
+  now,
+  getTenantId: () => (portal.enabled ? portal.tenantId : null),
+  secret: process.env.PORTAL_SHARED_SECRET,
+  uploadsDir,
+  osPublicUrl: process.env.PUBLIC_APP_URL,
+  mlAccessToken: process.env.MERCADOLIVRE_ACCESS_TOKEN,
+  mlApiUrl: process.env.MERCADOLIVRE_API_URL || undefined,
+});
 app.use('/api/loja/v1/webhooks', loja.webhookRouter);
+app.use('/api/loja/v1/recomendados', recomendados.router);
 app.use('/api/loja/v1', loja.router);
+app.use('/api/loja-admin/recomendados', requireAuth, requireAdmin, recomendados.adminRouter);
 app.use('/api/loja-admin', requireAuth, requireAdmin, loja.adminRouter);
 
 // Ferramentas da loja para a IA do WhatsApp (cadastrar com fotos, vender, tirar do site, desfazer).
@@ -7750,6 +7765,13 @@ async function startServer() {
     console.log(`[startup] Loja do site ${process.env.MERCADOPAGO_ACCESS_TOKEN ? 'com' : 'sem'} Mercado Pago, ${process.env.MELHOR_ENVIO_TOKEN ? 'com' : 'sem'} Melhor Envio.`);
   } catch (error) {
     console.error('[startup] Loja do site sem esquema:', error.message);
+  }
+
+  try {
+    await recomendados.ensureSchema();
+    recomendados.startJobs();
+  } catch (error) {
+    console.error('[startup] Recomendados sem esquema:', error.message);
   }
 
   // Garantias de OS concluídas por qualquer caminho (painel, IA do WhatsApp, portal): confere a cada 5 minutos.
