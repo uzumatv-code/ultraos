@@ -684,6 +684,449 @@ html.dark {
 }
 
 /* ==========================================================================
+   PAINEL — layout, agenda e assistente
+   Abaixo de 1280px tudo vira uma coluna na ordem de decisão (status →
+   pendências → agenda → IA → operação). A partir dela, a coluna principal
+   fica com a agenda e a IA ocupa um trilho fixo à direita.
+   ========================================================================== */
+
+/* Tom semântico como variável: um só seletor serve cartão, pílula e ponto. */
+[data-tone='brand'] { --tone: var(--ui-brand-soft); }
+[data-tone='success'] { --tone: var(--ui-success); }
+[data-tone='warning'] { --tone: var(--ui-warning); }
+[data-tone='danger'] { --tone: var(--ui-danger); }
+[data-tone='info'] { --tone: var(--ui-info); }
+[data-tone='neutral'] { --tone: var(--ui-text-subtle); }
+
+@keyframes ui-ai-typing {
+  0%, 80%, 100% { opacity: 0.35; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-3px); }
+}
+
+@layer components {
+  .dash-layout {
+    @apply flex flex-col gap-5;
+  }
+
+  .dash-main,
+  .dash-rail {
+    display: contents;
+  }
+
+  @media (min-width: 1280px) {
+    .dash-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 22rem;
+      align-items: start;
+      gap: 1.5rem;
+    }
+
+    .dash-main {
+      @apply flex min-w-0 flex-col gap-6;
+    }
+
+    /* Começa na altura do título e fica parado: 4rem do topo do app + 1.75rem do respiro da página. */
+    .dash-rail {
+      @apply sticky flex flex-col gap-4;
+      top: 5.75rem;
+      height: calc(100vh - 7.5rem);
+      min-height: 36rem;
+    }
+
+    .dash-rail[data-compact] {
+      height: auto;
+      min-height: 0;
+    }
+  }
+
+  @media (min-width: 1536px) {
+    .dash-layout { grid-template-columns: minmax(0, 1fr) 26rem; }
+  }
+
+  .dash-section-title {
+    @apply font-display text-[0.9375rem] font-semibold leading-tight tracking-[-0.015em];
+    color: rgb(var(--ui-text));
+  }
+
+  .dash-eyebrow {
+    @apply text-2xs font-semibold uppercase tracking-[0.14em];
+    color: rgb(var(--ui-text-subtle));
+  }
+
+  /*
+   * Cabeçalho e faixa de status reagem à largura da coluna (não da janela):
+   * com o trilho da IA aberto, a coluna principal fica estreita mesmo em telas largas.
+   */
+  .dash-head,
+  .dash-pulse-wrap {
+    container-type: inline-size;
+  }
+
+  .dash-head > header {
+    @apply flex flex-col gap-4;
+  }
+
+  @container (min-width: 40rem) {
+    .dash-head > header {
+      flex-direction: row;
+      align-items: flex-end;
+      justify-content: space-between;
+    }
+  }
+
+  /* Faixa de status — quatro leituras numa superfície só. */
+  .dash-pulse {
+    @apply grid grid-cols-2 overflow-hidden;
+    border: 1px solid rgb(var(--ui-border));
+    border-radius: var(--ui-radius-lg);
+    background: rgb(var(--ui-surface-2));
+    box-shadow: var(--ui-shadow-sm);
+  }
+
+  .dash-pulse-item {
+    @apply relative flex min-w-0 flex-col gap-1 px-4 py-3.5 text-left sm:px-5;
+    transition: background-color var(--ui-fast);
+  }
+
+  .dash-pulse-item:nth-child(even) {
+    border-left: 1px solid rgb(var(--ui-border));
+  }
+
+  .dash-pulse-item:nth-child(n + 3) {
+    border-top: 1px solid rgb(var(--ui-border));
+  }
+
+  @container (min-width: 44rem) {
+    .dash-pulse { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .dash-pulse-item + .dash-pulse-item { border-left: 1px solid rgb(var(--ui-border)); }
+    .dash-pulse-item:nth-child(n + 3) { border-top: 0; }
+  }
+
+  .dash-pulse-item:hover {
+    background: rgb(var(--ui-brand) / 0.05);
+  }
+
+  .dash-pulse-item[data-alert]::before {
+    content: '';
+    position: absolute;
+    inset-block: 0;
+    left: 0;
+    width: 3px;
+    background: rgb(var(--tone));
+  }
+
+  .dash-pulse-value {
+    @apply font-display font-semibold leading-none tracking-[-0.03em];
+    font-size: clamp(1.25rem, 2.9cqi, 1.65rem);
+    color: rgb(var(--ui-text));
+    font-variant-numeric: tabular-nums;
+  }
+
+  .dash-pulse-item[data-alert] .dash-pulse-value {
+    color: rgb(var(--tone));
+  }
+
+  /* Agenda — planejador de 7 dias */
+  .dash-day {
+    @apply grid gap-x-4 gap-y-2 px-4 py-3 sm:px-5;
+    grid-template-columns: 1fr;
+    transition: background-color var(--ui-fast), box-shadow var(--ui-fast);
+  }
+
+  @media (min-width: 640px) {
+    .dash-day { grid-template-columns: 6.5rem minmax(0, 1fr); }
+  }
+
+  .dash-day-label {
+    @apply flex items-baseline gap-2 sm:flex-col sm:gap-0.5 sm:pt-1;
+  }
+
+  .dash-day-title {
+    @apply text-[0.8125rem] font-semibold capitalize;
+    color: rgb(var(--ui-text-muted));
+  }
+
+  .dash-day[data-today] {
+    background: rgb(var(--ui-brand) / 0.05);
+    box-shadow: inset 3px 0 0 rgb(var(--ui-brand));
+  }
+
+  .dash-day[data-today] .dash-day-title {
+    color: rgb(var(--ui-text));
+  }
+
+  .dash-day[data-tone='danger'] {
+    background: rgb(var(--ui-danger) / 0.05);
+    box-shadow: inset 3px 0 0 rgb(var(--ui-danger));
+  }
+
+  .dash-day[data-tone='danger'] .dash-day-title {
+    color: rgb(var(--ui-danger));
+  }
+
+  .dash-day[data-drop] {
+    background: rgb(var(--ui-brand) / 0.1);
+    box-shadow: inset 0 0 0 2px rgb(var(--ui-brand) / 0.55);
+  }
+
+  .dash-day-orders {
+    @apply grid gap-2;
+    grid-template-columns: repeat(auto-fill, minmax(12.5rem, 1fr));
+  }
+
+  .dash-order {
+    @apply block min-w-0 px-3 py-2 text-left;
+    border: 1px solid rgb(var(--ui-border));
+    border-radius: var(--ui-radius-md);
+    background: rgb(var(--ui-surface));
+    box-shadow: inset 3px 0 0 rgb(var(--tone, var(--ui-border-strong)));
+    transition: border-color var(--ui-fast), transform var(--ui-fast), box-shadow var(--ui-fast);
+  }
+
+  .dash-order:hover {
+    border-color: rgb(var(--tone, var(--ui-brand)) / 0.6);
+    box-shadow: inset 3px 0 0 rgb(var(--tone, var(--ui-border-strong))), var(--ui-shadow-sm);
+  }
+
+  .dash-order[draggable='true'] {
+    cursor: grab;
+  }
+
+  .dash-order[draggable='true']:active {
+    cursor: grabbing;
+  }
+
+  .dash-order-status {
+    color: rgb(var(--tone));
+  }
+
+  /* No celular o cartão mostra só OS e cliente; o equipamento fica no detalhe. */
+  @media (max-width: 639px) {
+    .dash-order { @apply py-1.5; }
+    .dash-order > span:last-child:not(:first-child) { display: none; }
+  }
+
+  .dash-order-more {
+    @apply flex items-center justify-center text-xs font-semibold;
+    border-style: dashed;
+    background: transparent;
+    box-shadow: none;
+    color: rgb(var(--ui-text-muted));
+  }
+
+  /* Agenda — grade mensal */
+  .dash-cell {
+    @apply relative min-h-[5.5rem] min-w-0 p-1 sm:min-h-[6.5rem] sm:p-1.5;
+    background: rgb(var(--ui-surface-2));
+    transition: background-color var(--ui-fast), box-shadow var(--ui-fast);
+  }
+
+  .dash-cell[data-outside] {
+    background: rgb(var(--ui-canvas) / 0.7);
+  }
+
+  .dash-cell[data-outside] .dash-cell-day {
+    color: rgb(var(--ui-text-subtle) / 0.7);
+  }
+
+  .dash-cell[data-past]:not([data-outside]) .dash-cell-day {
+    color: rgb(var(--ui-text-subtle));
+  }
+
+  .dash-cell[data-drop] {
+    background: rgb(var(--ui-brand) / 0.12);
+    box-shadow: inset 0 0 0 2px rgb(var(--ui-brand) / 0.6);
+  }
+
+  .dash-cell-day {
+    @apply inline-flex h-6 min-w-6 items-center justify-center rounded-full px-1 text-xs font-semibold tabular-nums;
+    color: rgb(var(--ui-text-muted));
+  }
+
+  .dash-cell[data-today] .dash-cell-day {
+    background: rgb(var(--ui-brand));
+    color: rgb(var(--ui-brand-contrast));
+  }
+
+  .dash-pill {
+    @apply flex w-full min-w-0 items-center gap-1.5 rounded-[0.375rem] px-1.5 py-[3px] text-left text-[0.6875rem] font-medium leading-tight;
+    background: rgb(var(--tone) / 0.12);
+    color: rgb(var(--ui-text));
+    transition: background-color var(--ui-fast);
+  }
+
+  .dash-pill:hover {
+    background: rgb(var(--tone) / 0.22);
+  }
+
+  .dash-pill-dot {
+    @apply h-1.5 w-1.5 shrink-0 rounded-full;
+    background: rgb(var(--tone));
+  }
+
+  .dash-more {
+    @apply w-full rounded-[0.375rem] px-1.5 py-0.5 text-left text-[0.6875rem] font-semibold;
+    color: rgb(var(--ui-brand-soft));
+  }
+
+  .dash-more:hover {
+    background: rgb(var(--ui-brand) / 0.08);
+  }
+
+  html:not(.dark) .dash-more { color: rgb(var(--ui-brand)); }
+
+  @media (max-width: 639px) {
+    .dash-pill { @apply justify-center px-0; }
+    .dash-pill > span:last-child { display: none; }
+  }
+
+  /* Listas de ação (pendências, atividade) */
+  .dash-row {
+    @apply flex w-full min-w-0 items-center gap-3 px-4 py-2.5 text-left sm:px-5;
+    transition: background-color var(--ui-fast);
+  }
+
+  button.dash-row:hover,
+  .dash-row:has(> button:first-child:hover) {
+    background: rgb(var(--ui-brand) / 0.05);
+  }
+
+  .dash-sev {
+    @apply flex h-7 w-7 shrink-0 items-center justify-center rounded-md;
+    background: rgb(var(--tone) / 0.12);
+    color: rgb(var(--tone));
+  }
+
+  .dash-sev svg { @apply h-3.5 w-3.5; }
+
+  /* Barra empilhada da bancada */
+  .dash-stack {
+    @apply flex h-2.5 w-full gap-[2px] overflow-hidden rounded-full;
+    background: rgb(var(--ui-surface-3));
+  }
+
+  .dash-stack > span {
+    @apply h-full first:rounded-l-full last:rounded-r-full;
+    background: rgb(var(--tone));
+    transition: flex-grow var(--ui-base);
+  }
+
+  /* Ultra IA — superfície com assinatura própria */
+  .ui-ai {
+    @apply relative flex min-h-0 flex-col overflow-hidden;
+    height: 34rem;
+    border: 1px solid transparent;
+    border-radius: var(--ui-radius-lg);
+    background:
+      radial-gradient(130% 55% at 100% 0%, rgb(var(--ui-brand) / 0.1), transparent 62%) padding-box,
+      linear-gradient(rgb(var(--ui-surface-2)), rgb(var(--ui-surface-2))) padding-box,
+      linear-gradient(155deg, rgb(var(--ui-brand) / 0.6), rgb(var(--ui-accent) / 0.28) 38%, rgb(var(--ui-border)) 70%) border-box;
+    box-shadow: var(--ui-shadow);
+  }
+
+  @media (min-width: 1280px) {
+    .dash-rail .ui-ai {
+      height: auto;
+      flex: 1 1 0%;
+    }
+  }
+
+  .ui-ai-mark {
+    @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-[0.7rem] text-white;
+    background: linear-gradient(140deg, rgb(var(--ui-brand)), rgb(var(--ui-brand-soft)) 55%, rgb(var(--ui-accent)));
+    box-shadow: 0 6px 18px rgb(var(--ui-brand) / 0.32), inset 0 1px 0 rgb(255 255 255 / 0.25);
+  }
+
+  .ui-ai-mark svg { @apply h-4 w-4; }
+
+  .ui-ai-suggestion {
+    @apply flex w-full items-center justify-between gap-3 rounded-md px-3 py-2 text-left text-sm font-medium;
+    border: 1px solid rgb(var(--ui-border));
+    background: rgb(var(--ui-surface) / 0.6);
+    color: rgb(var(--ui-text));
+    transition: border-color var(--ui-fast), background-color var(--ui-fast);
+  }
+
+  .ui-ai-suggestion svg {
+    @apply h-4 w-4 shrink-0;
+    color: rgb(var(--ui-text-subtle));
+    transition: color var(--ui-fast), transform var(--ui-fast);
+  }
+
+  .ui-ai-suggestion:hover {
+    border-color: rgb(var(--ui-brand) / 0.5);
+    background: rgb(var(--ui-brand) / 0.07);
+  }
+
+  .ui-ai-suggestion:hover svg {
+    color: rgb(var(--ui-brand-soft));
+    transform: translate(1px, -1px);
+  }
+
+  .ui-ai-chip {
+    @apply shrink-0 whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium;
+    border: 1px solid rgb(var(--ui-border));
+    color: rgb(var(--ui-text-muted));
+    transition: border-color var(--ui-fast), color var(--ui-fast);
+  }
+
+  .ui-ai-chip:hover {
+    border-color: rgb(var(--ui-brand) / 0.55);
+    color: rgb(var(--ui-text));
+  }
+
+  .ui-ai-composer {
+    @apply flex items-end gap-2 p-1.5 pl-3;
+    border: 1px solid rgb(var(--ui-border));
+    border-radius: var(--ui-radius-md);
+    background: rgb(var(--ui-surface));
+    transition: border-color var(--ui-fast), box-shadow var(--ui-fast);
+  }
+
+  .ui-ai-composer:focus-within {
+    border-color: rgb(var(--ui-brand));
+    box-shadow: var(--ui-ring);
+  }
+
+  .ui-ai-composer textarea {
+    @apply max-h-40 min-h-[2.25rem] flex-1 resize-none bg-transparent py-2 text-sm leading-5 outline-none;
+    color: rgb(var(--ui-text));
+  }
+
+  .ui-ai-composer textarea::placeholder {
+    color: rgb(var(--ui-text-subtle));
+  }
+
+  .ui-ai-composer textarea:focus-visible {
+    outline: none;
+  }
+
+  .ui-ai-send {
+    @apply flex h-9 w-9 shrink-0 items-center justify-center rounded-[0.6rem] text-white;
+    background: rgb(var(--ui-brand));
+    transition: background-color var(--ui-fast), opacity var(--ui-fast);
+  }
+
+  .ui-ai-send:not(:disabled):hover {
+    background: rgb(var(--ui-brand-soft));
+  }
+
+  .ui-ai-send:disabled {
+    opacity: 0.4;
+  }
+
+  .ui-ai-typing {
+    @apply h-1.5 w-1.5 rounded-full;
+    background: rgb(var(--ui-text-subtle));
+    animation: ui-ai-typing 1s ease-in-out infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ui-ai-typing { animation: none; }
+  }
+}
+
+/* ==========================================================================
    COMPATIBILIDADE — telas ainda não migradas
    Mantém modais, formulários e páginas legadas legíveis nos dois temas.
    Remover aos poucos conforme cada tela adotar os primitivos ui-*.
