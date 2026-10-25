@@ -12,6 +12,7 @@ import nodemailer from 'nodemailer';
 import { detectImageMime, normalizeDocumentConfig } from './document-customization.mjs';
 import { addMonthsClamped, formatDateOnly, installmentNumber, occurrenceDate, occurrenceIndex, occurrencesInRange, parseDateOnly, validatePayableInput } from './payable-recurrence.mjs';
 import { createFinanceAgent, inferExpenseCategory, formatBRL } from './finance-agent.mjs';
+import { resolveRange } from './finance-queries.mjs';
 import { createAgentBrain } from './agent-brain.mjs';
 import { createReceiptStore } from './receipts.mjs';
 import { createLojaTools } from './loja-agent.mjs';
@@ -5861,10 +5862,16 @@ app.get('/api/financeiro/resumo', requireAuth, requireAdmin, async (req, res) =>
   try {
     const userId = req.auth.accountId;
     const today = todayDate();
-    const month = /^\d{4}-\d{2}$/.test(String(req.query.mes || '')) ? String(req.query.mes) : monthKey(today);
-    const { start, next } = monthBounds(month);
-    const previous = monthBounds(shiftMonth(month, -1));
+    // Período livre (semana, mês, ano, personalizado) ou, como antes, `mes=AAAA-MM`.
+    const range = resolveRange(req.query, today);
+    const start = range.inicio;
+    const next = range.fimExclusivo;
+    const previous = { start: range.anterior.inicio, next: range.anterior.fimExclusivo };
+    // A série de 12 meses termina no mês do fim do período.
+    const month = monthKey(range.fim);
     const seriesStart = monthBounds(shiftMonth(month, -11)).start;
+    const seriesNext = monthBounds(month).next;
+    const withDaily = range.dias <= 62;
 
     // Mantém OS, recebíveis e pagamentos coerentes antes de qualquer leitura.
     await reconcileReceivables(pool, userId);
@@ -5878,7 +5885,7 @@ app.get('/api/financeiro/resumo', requireAuth, requireAdmin, async (req, res) =>
       cashResult, previousCashResult, accrualResult, payableAccrualResult,
       receivableResult, agingResult, payableResult, seriesCashResult,
       projectionReceivableResult, projectionPayableResult,
-      revenueCategoriesResult, expenseCategoriesResult, indicatorsResult,
+      revenueCategoriesResult, expenseCategoriesResult, indicatorsResult, dailyResult,
     ] = await Promise.all([
       // Caixa do mês: entradas e saídas efetivamente movimentadas.
       pool.query(
@@ -5969,7 +5976,7 @@ app.get('/api/financeiro/resumo', requireAuth, requireAdmin, async (req, res) =>
            FROM transacoes_financeiras
           WHERE user_id=? AND LEFT(data,10)>=? AND LEFT(data,10)<?
           GROUP BY mes ORDER BY mes`,
-        [userId, seriesStart, next],
+        [userId, seriesStart, seriesNext],
       ),
       // Projeção: o que vence nos próximos 90 dias, entrada e saída.
       pool.query(
@@ -6033,6 +6040,18 @@ app.get('/api/financeiro/resumo', requireAuth, requireAdmin, async (req, res) =>
           AND LEFT(COALESCE(data_entrega,updated_at),10)>=? AND LEFT(COALESCE(data_entrega,updated_at),10)<?`,
         [userId, start, next],
       ),
+      // Caixa dia a dia — só para períodos curtos (semana, mês), onde o gráfico diário faz sentido.
+      withDaily
+        ? pool.query(
+          `SELECT LEFT(data,10) AS dia,
+                  COALESCE(SUM(CASE WHEN tipo='receita' THEN valor ELSE 0 END),0) AS entradas,
+                  COALESCE(SUM(CASE WHEN tipo='despesa' THEN valor ELSE 0 END),0) AS saidas
+             FROM transacoes_financeiras
+            WHERE user_id=? AND LEFT(data,10)>=? AND LEFT(data,10)<?
+            GROUP BY dia`,
+          [userId, start, next],
+        )
+        : Promise.resolve([[]]),
     ]);
 
     const cash = cashResult[0][0] || {};
@@ -6080,6 +6099,16 @@ app.get('/api/financeiro/resumo', requireAuth, requireAdmin, async (req, res) =>
       return { mes: key, entradas, saidas, resultado: money(entradas - saidas) };
     });
 
+    // Dias sem movimento aparecem zerados, para o eixo do gráfico ficar contínuo.
+    const dailyMap = new Map(dailyResult[0].map((row) => [String(row.dia), row]));
+    const diario = withDaily
+      ? Array.from({ length: range.dias }, (_, index) => {
+        const dia = addDaysToIsoDate(start, index);
+        const row = dailyMap.get(dia) || {};
+        return { dia, entradas: money(row.entradas), saidas: money(row.saidas) };
+      })
+      : [];
+
     const entradas = money(cash.entradas);
     const saidas = money(cash.saidas);
     const aberto = money(receivable.aberto);
@@ -6087,15 +6116,17 @@ app.get('/api/financeiro/resumo', requireAuth, requireAdmin, async (req, res) =>
 
     return res.json({
       data: {
-        periodo: { mes: month, inicio: start, fim_exclusivo: next, hoje: today },
+        periodo: { mes: month, inicio: start, fim: range.fim, fim_exclusivo: next, dias: range.dias, anterior: range.anterior, hoje: today },
         caixa: {
           entradas,
           saidas,
           resultado: money(entradas - saidas),
           lancamentos: Number(cash.lancamentos || 0),
+          // "mes_anterior" é o período anterior de mesma duração (nome mantido por compatibilidade).
           entradas_mes_anterior: money(previousCash.entradas),
           saidas_mes_anterior: money(previousCash.saidas),
         },
+        diario,
         competencia: {
           receita: receitaCompetencia,
           custo_direto: custoCompetencia,

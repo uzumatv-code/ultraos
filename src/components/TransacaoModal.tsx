@@ -12,6 +12,8 @@ interface TransacaoModalProps {
   transacaoParaEditar?: TransacaoFinanceira;
   categorias: CategoriaFinanceira[];
   onSuccess: () => void;
+  /** Tipo já marcado ao abrir um lançamento novo (atalhos "Entrada" e "Saída"). */
+  tipoInicial?: 'receita' | 'despesa';
 }
 
 export function TransacaoModal({
@@ -19,7 +21,8 @@ export function TransacaoModal({
   onClose,
   transacaoParaEditar,
   categorias,
-  onSuccess
+  onSuccess,
+  tipoInicial = 'receita'
 }: TransacaoModalProps) {
   const [descricao, setDescricao] = useState('');
   const [valor, setValor] = useState('');
@@ -35,10 +38,11 @@ export function TransacaoModal({
       setTipo(transacaoParaEditar.tipo);
       setData(new Date(transacaoParaEditar.data).toISOString().split('T')[0]);
       setCategoriaId(transacaoParaEditar.categoria_id);
-    } else {
+    } else if (isOpen) {
       limparFormulario();
+      setTipo(tipoInicial);
     }
-  }, [transacaoParaEditar]);
+  }, [transacaoParaEditar, isOpen, tipoInicial]);
 
   function formatarValor(value: string) {
     value = value.replace(/\D/g, '');

@@ -52,6 +52,44 @@ export function resolvePeriod(periodo, today, de, ate) {
   }
 }
 
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const MAX_RANGE_DAYS = 366;
+
+/**
+ * Período da visão financeira.
+ *
+ * Aceita `inicio` e `fim` (inclusive) ou, como antes, `mes` (AAAA-MM). Devolve o
+ * intervalo semiaberto [inicio, fimExclusivo), o período imediatamente anterior
+ * de mesma duração (para comparação) e o número de dias. Datas inválidas,
+ * invertidas ou um intervalo maior que um ano caem no mês de `today`.
+ */
+export function resolveRange({ mes, inicio, fim } = {}, today) {
+  const dayCount = (from, toExclusive) => Math.round((Date.parse(`${toExclusive}T12:00:00Z`) - Date.parse(`${from}T12:00:00Z`)) / 86_400_000);
+  const build = (from, toExclusive) => {
+    const dias = dayCount(from, toExclusive);
+    return {
+      inicio: from,
+      fim: addDays(toExclusive, -1),
+      fimExclusivo: toExclusive,
+      dias,
+      anterior: { inicio: addDays(from, -dias), fimExclusivo: from },
+    };
+  };
+
+  const from = String(inicio || '');
+  const to = String(fim || '');
+  if (DATE_RE.test(from) && DATE_RE.test(to) && from <= to) {
+    const toExclusive = addDays(to, 1);
+    if (dayCount(from, toExclusive) <= MAX_RANGE_DAYS) return build(from, toExclusive);
+  }
+
+  const month = /^\d{4}-\d{2}$/.test(String(mes || '')) ? String(mes) : today.slice(0, 7);
+  const [y, m] = month.split('-').map(Number);
+  const start = `${month}-01`;
+  const next = iso(new Date(Date.UTC(y, m, 1, 12)));
+  return build(start, next);
+}
+
 export const FINANCE_QUERY_TOOL = {
   type: 'function',
   name: 'consultar_financeiro',

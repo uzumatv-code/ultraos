@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createFinanceQueries, resolvePeriod } from './finance-queries.mjs';
+import { createFinanceQueries, resolvePeriod, resolveRange } from './finance-queries.mjs';
 
 test('períodos nomeados são resolvidos no servidor', () => {
   assert.deepEqual(resolvePeriod('hoje', '2026-10-02'), { de: '2026-10-02', ate: '2026-10-02', rotulo: 'hoje' });
@@ -45,4 +45,30 @@ test('a_receber agrupa por cliente e ordena por quem deve mais', async () => {
   assert.equal(out.total_a_receber_reais, 410);
   assert.equal(out.clientes[0].cliente, 'Beto');
   assert.equal(out.clientes[1].deve_reais, 110);
+});
+
+test('período da visão financeira: semana, mês e comparação com o período anterior', () => {
+  const week = resolveRange({ inicio: '2026-10-19', fim: '2026-10-25' }, '2026-10-25');
+  assert.deepEqual(week, {
+    inicio: '2026-10-19', fim: '2026-10-25', fimExclusivo: '2026-10-26', dias: 7,
+    anterior: { inicio: '2026-10-12', fimExclusivo: '2026-10-19' },
+  });
+
+  const month = resolveRange({ mes: '2026-02' }, '2026-10-25');
+  assert.equal(month.fim, '2026-02-28');
+  assert.equal(month.dias, 28);
+  assert.deepEqual(month.anterior, { inicio: '2026-01-04', fimExclusivo: '2026-02-01' });
+
+  const january = resolveRange({ mes: '2026-12' }, '2026-10-25');
+  assert.equal(january.fimExclusivo, '2027-01-01');
+});
+
+test('período inválido, invertido ou maior que um ano cai no mês atual', () => {
+  const fallback = { inicio: '2026-10-01', fim: '2026-10-31' };
+  for (const query of [{}, { inicio: '2026-10-20', fim: '2026-10-01' }, { inicio: '2024-01-01', fim: '2026-01-01' }, { inicio: 'x', fim: 'y' }]) {
+    const range = resolveRange(query, '2026-10-25');
+    assert.equal(range.inicio, fallback.inicio);
+    assert.equal(range.fim, fallback.fim);
+  }
+  assert.equal(resolveRange({ inicio: '2026-01-01', fim: '2026-12-31' }, '2026-10-25').dias, 365);
 });

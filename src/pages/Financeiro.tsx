@@ -1,153 +1,97 @@
 /**
- * Visão financeira.
+ * Financeiro.
  *
- * O erro estrutural da versão anterior era somar coisas que não se somam:
- * a receita vinha do caixa (transações lançadas) e a despesa vinha da
- * competência (contas a pagar do mês, pagas ou não). O "resultado" exibido
- * não correspondia nem ao dinheiro em conta nem ao resultado do período, e
- * despesas avulsas — lançadas fora do Contas a Pagar — simplesmente sumiam.
+ * Tudo gira em torno de um período (semana, mês, ano ou intervalo livre) que
+ * fica na URL. A tela responde, nesta ordem:
+ *   1. quanto entrou, saiu e sobrou no período? → faixa de status;
+ *   2. como o dinheiro se moveu? → fluxo de caixa dia a dia (ou 12 meses);
+ *   3. o que preciso pagar ou cobrar agora? → vencimentos, no trilho;
+ *   4. de onde veio e para onde foi? → categorias e o extrato do período.
+ * Carteira (a receber / a pagar) e resultado por competência ficam em abas.
  *
- * Aqui os dois regimes aparecem separados e rotulados:
- *
- *   CAIXA         o que entrou e saiu no mês (transações financeiras).
- *   COMPETÊNCIA   o que o mês gerou, pago ou não (recebíveis e pagáveis
- *                 pelo vencimento), organizado em DRE.
- *
- * Além disso: aging da inadimplência, projeção de 30/60/90 dias e indicadores
- * de produção (ticket médio, prazo médio de recebimento). Todos os números
- * vêm agregados de `/api/financeiro/resumo` — o navegador não soma mais nada.
+ * Os dois regimes continuam separados: CAIXA é o que entrou e saiu
+ * (transações); COMPETÊNCIA é o que o período gerou, pago ou não (DRE).
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ChevronLeft, ChevronRight, Minus, Plus, Tags, Upload } from 'lucide-react';
 import { useLiveRefresh } from '../lib/live-events';
-import { LiveBadge } from '../components/LiveBadge';
-import {
-  ArcElement, BarElement, CategoryScale, Chart as ChartJS, Filler, Legend,
-  LineElement, LinearScale, PointElement, Tooltip,
-} from 'chart.js';
-import { Bar, Doughnut } from 'react-chartjs-2';
-import {
-  AlertTriangle, ArrowDownRight, ArrowUpRight, CalendarRange, CheckCircle2,
-  ChevronLeft, ChevronRight, Clock, FileText, Plus, Receipt, Tags, TrendingUp,
-  Upload, Wallet,
-} from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
-import { supabase } from '../lib/supabase';
 import { apiRequest } from '../lib/api-client';
+import { supabase } from '../lib/supabase';
+import { useUrlState } from '../hooks/useUrlState';
 import { toast } from '../components/ToastCustom';
-import { formatCurrency, formatDateOnly } from '../utils/formatters';
+import { LiveBadge } from '../components/LiveBadge';
 import { TransacaoModal } from '../components/TransacaoModal';
 import { CategoriaFinanceiraModal } from '../components/CategoriaFinanceiraModal';
 import { ImportarCSVModal } from '../components/ImportarCSVModal';
-import { baseChartOptions, useChartPalette } from '../lib/chart-theme';
-import { Badge, EmptyState, Kpi, Meter, Panel, Segmented, Skeleton, Table, Td, UIButton, toneText, type Tone } from '../components/ui';
-import type { CategoriaFinanceira } from '../types/database';
+import { formatCurrency } from '../utils/formatters';
+import { todayLocalDate } from '../utils/dates';
+import { Segmented, Skeleton, UIButton, type Tone } from '../components/ui';
+import { CashFlowChart } from '../components/financeiro/CashFlowChart';
+import { DueList } from '../components/financeiro/DueList';
+import { Lancamentos } from '../components/financeiro/Lancamentos';
+import { PagarList, ReceberList } from '../components/financeiro/Carteira';
+import { AgingBars, CategoryBars, DreTable, FinPanel, ProjectionList } from '../components/financeiro/Analises';
+import { containsDate, periodOptions, previousLabel, rangeFor, rangeLabel, shiftRef, variation, type PeriodMode } from '../components/financeiro/period';
+import type { Payable, Receivable, Resumo } from '../components/financeiro/types';
+import type { CategoriaFinanceira, TransacaoFinanceira } from '../types/database';
 
-ChartJS.register(CategoryScale, LinearScale, BarElement, LineElement, PointElement, Tooltip, Legend, ArcElement, Filler);
-
-type Resumo = {
-  periodo: { mes: string; inicio: string; fim_exclusivo: string; hoje: string };
-  caixa: { entradas: number; saidas: number; resultado: number; lancamentos: number; entradas_mes_anterior: number; saidas_mes_anterior: number };
-  competencia: {
-    receita: number; custo_direto: number; despesa: number; investimento: number;
-    resultado: number; margem: number;
-    grupos: Array<{ chave: string; label: string; sinal: number; valor: number; quantidade: number }>;
-  };
-  recebiveis: {
-    aberto: number; vencido: number; a_vencer: number; quantidade: number;
-    quantidade_vencida: number; inadimplencia: number;
-    aging: Array<{ chave: string; label: string; valor: number; quantidade: number }>;
-  };
-  pagaveis: { aberto: number; vencido: number; a_vencer: number; pago_mes: number; quantidade_vencida: number };
-  projecao: Array<{ chave: string; label: string; entradas: number; saidas: number; saldo: number }>;
-  serie: Array<{ mes: string; entradas: number; saidas: number; resultado: number }>;
-  categorias: { receitas: Array<{ nome: string; cor: string; valor: number }>; despesas: Array<{ nome: string; cor: string; valor: number }> };
-  indicadores: { os_concluidas: number; ticket_medio: number; valor_produzido: number; prazo_medio_recebimento: number };
-};
-
-type Receivable = {
-  id: string; descricao: string; valor: number; valor_recebido: number; saldo: number;
-  data_vencimento: string; status: string; ordem_servico_id?: string; forma_pagamento?: string;
-  dias_atraso: number; cliente_nome?: string; cliente_telefone?: string; ordem_numero?: number;
-};
-
-type Payable = {
-  id: string; descricao: string; valor: number; data_vencimento: string; status: string;
-  forma_pagamento?: string; recorrente?: number; dias_atraso: number;
-  categoria_nome?: string; categoria_cor?: string;
-};
-
-type TabId = 'visao' | 'resultado' | 'receber' | 'pagar' | 'projecao';
+type TabId = 'visao' | 'lancamentos' | 'receber' | 'pagar' | 'resultado';
 
 const tabs: Array<{ value: TabId; label: string }> = [
   { value: 'visao', label: 'Visão geral' },
-  { value: 'resultado', label: 'Resultado' },
+  { value: 'lancamentos', label: 'Lançamentos' },
   { value: 'receber', label: 'A receber' },
   { value: 'pagar', label: 'A pagar' },
-  { value: 'projecao', label: 'Projeção' },
+  { value: 'resultado', label: 'Resultado' },
 ];
 
-function currentMonthKey() {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-}
+const urlDefaults = { aba: 'visao', periodo: 'mes', ref: '', de: '', ate: '' };
 
-function shiftMonth(monthText: string, offset: number) {
-  const [year, month] = monthText.split('-').map(Number);
-  const date = new Date(year, month - 1 + offset, 1);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-}
-
-function monthLabel(monthText: string) {
-  const [year, month] = monthText.split('-').map(Number);
-  return new Date(year, month - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
-}
-
-function shortMonth(monthText: string) {
-  const [year, month] = monthText.split('-').map(Number);
-  return new Date(year, month - 1, 1).toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '');
-}
-
-function variation(current: number, previous: number) {
-  if (!previous) return null;
-  return Number((((current - previous) / previous) * 100).toFixed(1));
+function varText(value: number | null, mode: PeriodMode) {
+  if (value === null) return `Sem movimento no ${previousLabel(mode)}`;
+  return `${value > 0 ? '+' : ''}${value.toLocaleString('pt-BR')}% vs. ${previousLabel(mode)}`;
 }
 
 export function Financeiro() {
-  const navigate = useNavigate();
-  const { palette } = useChartPalette();
+  const today = todayLocalDate();
+  const { state, setState } = useUrlState(urlDefaults);
+  const tab = (tabs.some((item) => item.value === state.aba) ? state.aba : 'visao') as TabId;
+  const mode = (periodOptions.some((item) => item.value === state.periodo) ? state.periodo : 'mes') as PeriodMode;
+  const ref = state.ref || today;
+  const range = useMemo(() => rangeFor(mode, ref, state.de, state.ate), [mode, ref, state.de, state.ate]);
 
-  const [month, setMonth] = useState(currentMonthKey);
-  const [tab, setTab] = useState<TabId>('visao');
   const [resumo, setResumo] = useState<Resumo | null>(null);
   const [loading, setLoading] = useState(true);
   const [receivables, setReceivables] = useState<Receivable[]>([]);
   const [payables, setPayables] = useState<Payable[]>([]);
-  const [walletLoading, setWalletLoading] = useState(false);
+  const [walletLoading, setWalletLoading] = useState(true);
   const [categorias, setCategorias] = useState<CategoriaFinanceira[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
-
-  const [transacaoOpen, setTransacaoOpen] = useState(false);
+  const [lancamento, setLancamento] = useState<{ tipo: 'receita' | 'despesa'; editar?: TransacaoFinanceira } | null>(null);
   const [categoriaOpen, setCategoriaOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [extratoKey, setExtratoKey] = useState(0);
 
-  const loadResumo = useCallback(async (silent = false) => {
-    if (!silent) setLoading(true);
-    try {
-      setResumo(await apiRequest<Resumo>(`/api/financeiro/resumo?mes=${month}`));
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Erro ao carregar o financeiro');
-    } finally {
-      setLoading(false);
-    }
-  }, [month]);
+  const loadResumo = useCallback(
+    async (silent = false) => {
+      if (!silent) setLoading(true);
+      try {
+        setResumo(await apiRequest<Resumo>(`/api/financeiro/resumo?inicio=${range.inicio}&fim=${range.fim}`));
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Erro ao carregar o financeiro');
+      } finally {
+        setLoading(false);
+      }
+    },
+    [range.inicio, range.fim],
+  );
 
-  const loadWallet = useCallback(async (silent = false) => {
-    if (!silent) setWalletLoading(true);
+  const loadWallet = useCallback(async () => {
     try {
       const [receber, pagar] = await Promise.all([
-        apiRequest<{ rows: Receivable[] }>('/api/financeiro/carteira?tipo=receber&limit=100'),
-        apiRequest<{ rows: Payable[] }>('/api/financeiro/carteira?tipo=pagar&limit=100'),
+        apiRequest<{ rows: Receivable[] }>('/api/financeiro/carteira?tipo=receber&limit=200'),
+        apiRequest<{ rows: Payable[] }>('/api/financeiro/carteira?tipo=pagar&limit=200'),
       ]);
       setReceivables(receber.rows);
       setPayables(pagar.rows);
@@ -159,12 +103,8 @@ export function Financeiro() {
   }, []);
 
   const loadCategorias = useCallback(async () => {
-    try {
-      const { data } = await supabase.from('categorias_financeiras').select('*').order('nome');
-      setCategorias(data || []);
-    } catch {
-      // Categorias só afetam os modais de lançamento.
-    }
+    const { data } = await supabase.from('categorias_financeiras').select('*').order('nome');
+    setCategorias(data || []);
   }, []);
 
   useEffect(() => {
@@ -176,29 +116,23 @@ export function Financeiro() {
     void loadCategorias();
   }, [loadWallet, loadCategorias]);
 
-  async function refreshAll() {
-    await Promise.all([loadResumo(true), loadWallet(true)]);
-  }
+  const refreshAll = useCallback(async () => {
+    setExtratoKey((value) => value + 1);
+    await Promise.all([loadResumo(true), loadWallet()]);
+  }, [loadResumo, loadWallet]);
 
   // Qualquer mudança no financeiro (outra tela, WhatsApp, agente de IA…) atualiza esta tela sozinha.
-  useLiveRefresh(['financeiro'], () => Promise.all([loadResumo(true), loadWallet(true)]));
+  useLiveRefresh(['financeiro'], () => Promise.all([loadResumo(true), loadWallet()]));
 
-  async function receberConta(conta: Receivable) {
-    if (!conta.ordem_servico_id) {
-      toast.error('Este recebível não está vinculado a uma OS.');
-      return;
-    }
+  async function receive(conta: Receivable) {
+    if (!conta.ordem_servico_id) return;
     setBusy(conta.id);
     try {
       await apiRequest(`/api/financeiro/os/${conta.ordem_servico_id}/pagamentos`, {
         method: 'POST',
-        body: JSON.stringify({
-          valor: conta.saldo,
-          forma_pagamento: conta.forma_pagamento,
-          observacoes: 'Recebimento registrado na visão financeira',
-        }),
+        body: JSON.stringify({ valor: conta.saldo, forma_pagamento: conta.forma_pagamento, observacoes: 'Recebimento registrado na visão financeira' }),
       });
-      toast.success('Recebimento lançado no caixa.');
+      toast.success(`${formatCurrency(Number(conta.saldo))} recebido e lançado no caixa.`);
       await refreshAll();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Erro ao registrar recebimento');
@@ -207,14 +141,14 @@ export function Financeiro() {
     }
   }
 
-  async function pagarConta(conta: Payable) {
+  async function pay(conta: Payable) {
     setBusy(conta.id);
     try {
       await apiRequest(`/api/financeiro/contas-pagar/${conta.id}/pagar`, {
         method: 'POST',
         body: JSON.stringify({ forma_pagamento: conta.forma_pagamento }),
       });
-      toast.success('Conta paga e despesa lançada no caixa.');
+      toast.success(`"${conta.descricao}" paga e lançada no caixa.`);
       await refreshAll();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Erro ao pagar conta');
@@ -223,439 +157,216 @@ export function Financeiro() {
     }
   }
 
-  const chartOptions = useMemo(() => baseChartOptions(palette), [palette]);
-
-  const serieData = useMemo(() => {
-    if (!resumo) return null;
-    return {
-      labels: resumo.serie.map((item) => shortMonth(item.mes)),
-      datasets: [
-        {
-          label: 'Entradas',
-          data: resumo.serie.map((item) => item.entradas),
-          backgroundColor: palette.successSoft,
-          borderColor: palette.success,
-          borderWidth: 1,
-          borderRadius: 4,
-        },
-        {
-          label: 'Saídas',
-          data: resumo.serie.map((item) => item.saidas),
-          backgroundColor: palette.dangerSoft,
-          borderColor: palette.danger,
-          borderWidth: 1,
-          borderRadius: 4,
-        },
-      ],
-    };
-  }, [palette, resumo]);
-
-  const donutOptions = useMemo(
-    () => ({
-      ...chartOptions,
-      cutout: '62%',
-      scales: undefined,
-    }),
-    [chartOptions],
-  );
-
-  if (loading && !resumo) {
-    return (
-      <main className="ui-page space-y-4">
-        <Skeleton className="h-16 w-72" />
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {Array.from({ length: 4 }, (_, index) => (
-            <Skeleton key={index} className="h-32" />
-          ))}
-        </div>
-        <Skeleton className="h-80" />
-      </main>
-    );
+  function changeMode(next: PeriodMode) {
+    if (next === 'personalizado') setState({ periodo: next, de: state.de || range.inicio, ate: state.ate || range.fim });
+    else setState({ periodo: next, de: '', ate: '' });
   }
 
+  const goTab = (value: TabId) => setState({ aba: value });
+  const isCurrent = containsDate(range, today);
+  const label = rangeLabel(mode, range, today);
+
+  if (loading && !resumo) return <FinanceSkeleton />;
   if (!resumo) return null;
 
-  const entradaVar = variation(resumo.caixa.entradas, resumo.caixa.entradas_mes_anterior);
-  const isCurrentMonth = month === currentMonthKey();
+  const { caixa, recebiveis, pagaveis, competencia, indicadores } = resumo;
+  const weekly = payables.filter((row) => row.dias_atraso <= 0 && row.dias_atraso >= -7);
+  const payWeek = {
+    total: weekly.reduce((sum, row) => sum + Number(row.valor), 0),
+    count: weekly.length,
+    until: new Date(Date.now() + 7 * 86_400_000).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }),
+  };
+  const usesPeriod = tab === 'visao' || tab === 'lancamentos' || tab === 'resultado';
 
   return (
-    <main className="ui-page space-y-4">
-      <header className="ui-page-header">
+    <main className="ui-page space-y-5">
+      <header className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
         <div className="min-w-0">
-          <p className="ui-page-eyebrow">Gestão financeira</p>
-          <h1 className="ui-page-title">Financeiro</h1>
-          <p className="ui-page-description">
-            Caixa e competência lado a lado, sem misturar o que entrou com o que foi gerado.
-          </p>
+          <p className="dash-eyebrow">Gestão financeira</p>
+          <h1 className="mt-1 font-display text-[1.55rem] font-semibold leading-tight tracking-[-0.025em] text-ink sm:text-[1.85rem]">Financeiro</h1>
         </div>
-        <div className="ui-page-actions">
-          <LiveBadge />
-          <div className="flex items-center gap-1 rounded-md border border-hairline bg-surface-raised p-1">
-            <button type="button" onClick={() => setMonth(shiftMonth(month, -1))} className="app-icon-button h-8 w-8" aria-label="Mês anterior">
-              <ChevronLeft className="h-4 w-4" />
-            </button>
-            <span className="min-w-36 text-center text-sm font-semibold text-ink first-letter:uppercase">{monthLabel(month)}</span>
-            <button
-              type="button"
-              onClick={() => setMonth(shiftMonth(month, 1))}
-              className="app-icon-button h-8 w-8"
-              aria-label="Próximo mês"
-              disabled={isCurrentMonth}
-            >
-              <ChevronRight className="h-4 w-4" />
-            </button>
-          </div>
-          <UIButton size="sm" icon={Tags} onClick={() => setCategoriaOpen(true)}>Categorias</UIButton>
-          <UIButton size="sm" icon={Upload} onClick={() => setImportOpen(true)}>Importar</UIButton>
-          <UIButton size="sm" variant="primary" icon={Plus} onClick={() => setTransacaoOpen(true)}>Lançar</UIButton>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="hidden sm:inline-flex">
+            <LiveBadge />
+          </span>
+          <UIButton variant="ghost" size="sm" icon={Tags} onClick={() => setCategoriaOpen(true)} aria-label="Categorias" title="Categorias" />
+          <UIButton variant="ghost" size="sm" icon={Upload} onClick={() => setImportOpen(true)} aria-label="Importar extrato CSV" title="Importar extrato CSV" />
+          <UIButton variant="secondary" size="sm" icon={Minus} onClick={() => setLancamento({ tipo: 'despesa' })}>
+            Saída
+          </UIButton>
+          <UIButton variant="primary" size="sm" icon={Plus} onClick={() => setLancamento({ tipo: 'receita' })}>
+            Entrada
+          </UIButton>
         </div>
       </header>
 
-      <Segmented value={tab} onChange={setTab} options={tabs} className="w-full overflow-x-auto sm:w-auto" />
+      {/* Navegação: abas à esquerda, período à direita (só nas abas que dependem dele). */}
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <Segmented<TabId> value={tab} onChange={goTab} options={tabs} className="max-w-full overflow-x-auto [scrollbar-width:none]" />
+        {usesPeriod ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <Segmented<PeriodMode> value={mode} onChange={changeMode} options={periodOptions} />
+            {mode === 'personalizado' ? (
+              <div className="flex items-center gap-1.5">
+                <input type="date" className="ui-field h-9 w-auto" value={range.inicio} max={range.fim} aria-label="Início do período" onChange={(event) => event.target.value && setState({ de: event.target.value })} />
+                <span className="text-xs text-ink-subtle">até</span>
+                <input type="date" className="ui-field h-9 w-auto" value={range.fim} min={range.inicio} aria-label="Fim do período" onChange={(event) => event.target.value && setState({ ate: event.target.value })} />
+              </div>
+            ) : (
+              <div className="flex items-center gap-1 rounded-md border border-hairline bg-surface-raised p-0.5">
+                <button type="button" className="app-icon-button h-8 w-8" onClick={() => setState({ ref: shiftRef(mode, ref, -1) })} aria-label="Período anterior">
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+                <span className="min-w-[8.5rem] text-center text-sm font-semibold text-ink">{label}</span>
+                <button type="button" className="app-icon-button h-8 w-8" onClick={() => setState({ ref: shiftRef(mode, ref, 1) })} aria-label="Próximo período">
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+              </div>
+            )}
+            {!isCurrent && mode !== 'personalizado' && (
+              <button type="button" className="ui-btn ui-btn-ghost ui-btn-sm" onClick={() => setState({ ref: '' })}>
+                Hoje
+              </button>
+            )}
+          </div>
+        ) : (
+          <p className="text-xs text-ink-subtle">Mostra tudo o que está em aberto hoje, sem filtro de período.</p>
+        )}
+      </div>
 
       {/* ------------------------------------------------------- Visão geral */}
       {tab === 'visao' && (
-        <div className="space-y-4">
-          <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <Kpi
-              label="Entrou no caixa"
-              value={formatCurrency(resumo.caixa.entradas)}
-              context={entradaVar === null ? `${resumo.caixa.lancamentos} lançamento(s) no mês` : `${entradaVar > 0 ? '+' : ''}${entradaVar}% vs. mês anterior`}
-              icon={ArrowUpRight}
-              tone="success"
-            />
-            <Kpi
-              label="Saiu do caixa"
-              value={formatCurrency(resumo.caixa.saidas)}
-              context="Pagamentos efetivamente realizados"
-              icon={ArrowDownRight}
-              tone="danger"
-            />
-            <Kpi
-              label="Sobrou no mês"
-              value={formatCurrency(resumo.caixa.resultado)}
-              context="Entradas menos saídas — dinheiro real"
-              icon={Wallet}
-              tone={resumo.caixa.resultado >= 0 ? 'success' : 'danger'}
-              emphasis
-            />
-            <Kpi
-              label="Inadimplência"
-              value={`${resumo.recebiveis.inadimplencia}%`}
-              context={`${formatCurrency(resumo.recebiveis.vencido)} vencidos em ${resumo.recebiveis.quantidade_vencida} título(s)`}
-              icon={AlertTriangle}
-              tone={resumo.recebiveis.inadimplencia > 20 ? 'danger' : resumo.recebiveis.inadimplencia > 0 ? 'warning' : 'success'}
-              linkLabel="Ver carteira"
-              onClick={() => setTab('receber')}
-            />
-          </section>
+        <>
+          <div className="dash-pulse-wrap">
+            <section className="dash-pulse" aria-label="Resumo do período">
+              <Pulse label="Entrou" value={formatCurrency(caixa.entradas)} context={varText(variation(caixa.entradas, caixa.entradas_mes_anterior), mode)} tone="success" onClick={() => goTab('lancamentos')} />
+              <Pulse label="Saiu" value={formatCurrency(caixa.saidas)} context={varText(variation(caixa.saidas, caixa.saidas_mes_anterior), mode)} tone="danger" onClick={() => goTab('lancamentos')} />
+              <Pulse
+                label="Sobrou"
+                value={formatCurrency(caixa.resultado)}
+                context={`${caixa.lancamentos} lançamento${caixa.lancamentos === 1 ? '' : 's'} no período`}
+                tone={caixa.resultado < 0 ? 'danger' : 'success'}
+                alert={caixa.resultado < 0}
+                onClick={() => goTab('lancamentos')}
+              />
+              <Pulse
+                label="A receber vencido"
+                value={formatCurrency(recebiveis.vencido)}
+                context={recebiveis.vencido ? `${recebiveis.quantidade_vencida} título(s) · ${recebiveis.inadimplencia.toLocaleString('pt-BR')}% da carteira` : 'Nada vencido'}
+                tone="danger"
+                alert={recebiveis.vencido > 0}
+                onClick={() => goTab('receber')}
+              />
+            </section>
+          </div>
 
-          <section className="grid gap-4 xl:grid-cols-[1.6fr_1fr]">
-            <Panel title="Caixa dos últimos 12 meses" subtitle="Entradas e saídas efetivamente movimentadas" icon={TrendingUp}>
-              <div className="h-72">{serieData && <Bar data={serieData} options={chartOptions} />}</div>
-            </Panel>
-
-            <Panel title="Produção do mês" subtitle="O que a bancada gerou de valor" icon={CheckCircle2}>
-              <div className="space-y-3">
-                <IndicatorRow label="OS concluídas" value={String(resumo.indicadores.os_concluidas)} />
-                <IndicatorRow label="Valor produzido" value={formatCurrency(resumo.indicadores.valor_produzido)} />
-                <IndicatorRow label="Ticket médio" value={formatCurrency(resumo.indicadores.ticket_medio)} />
-                <IndicatorRow
-                  label="Prazo médio de recebimento"
-                  value={resumo.indicadores.prazo_medio_recebimento ? `${resumo.indicadores.prazo_medio_recebimento} dias` : '—'}
-                  hint="Da entrada da OS até o último pagamento"
-                />
-                <div className="border-t border-hairline pt-3">
-                  <p className="text-xs text-ink-muted">
-                    Carteira em aberto:{' '}
-                    <strong className="tabular-nums text-ink">{formatCurrency(resumo.recebiveis.aberto)}</strong> em{' '}
-                    {resumo.recebiveis.quantidade} título(s)
-                  </p>
-                </div>
+          <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_22rem] 2xl:grid-cols-[minmax(0,1fr)_26rem]">
+            <div className="min-w-0 space-y-5">
+              <CashFlowChart daily={resumo.diario ?? []} monthly={resumo.serie} />
+              <div className="grid gap-5 md:grid-cols-2">
+                <FinPanel id="cat-in" title="De onde veio" subtitle="Entradas por categoria no período">
+                  <CategoryBars items={resumo.categorias.receitas} empty="Nenhuma entrada no período." />
+                </FinPanel>
+                <FinPanel id="cat-out" title="Para onde foi" subtitle="Saídas por categoria no período">
+                  <CategoryBars items={resumo.categorias.despesas} empty="Nenhuma saída no período." />
+                </FinPanel>
               </div>
-            </Panel>
-          </section>
-
-          <section className="grid gap-4 xl:grid-cols-2">
-            <Panel title="Entradas por categoria" subtitle="Composição do que foi recebido no mês" icon={ArrowUpRight} tone="success">
-              {resumo.categorias.receitas.length ? (
-                <div className="h-64">
-                  <Doughnut
-                    data={{
-                      labels: resumo.categorias.receitas.map((item) => item.nome),
-                      datasets: [{ data: resumo.categorias.receitas.map((item) => item.valor), backgroundColor: resumo.categorias.receitas.map((item) => item.cor), borderWidth: 0 }],
-                    }}
-                    options={donutOptions}
-                  />
-                </div>
-              ) : (
-                <EmptyState icon={ArrowUpRight} title="Nenhuma entrada no período" />
-              )}
-            </Panel>
-
-            <Panel title="Saídas por categoria" subtitle="Onde o dinheiro foi gasto no mês" icon={ArrowDownRight} tone="danger">
-              {resumo.categorias.despesas.length ? (
-                <CategoryBars items={resumo.categorias.despesas} />
-              ) : (
-                <EmptyState icon={ArrowDownRight} title="Nenhuma saída no período" />
-              )}
-            </Panel>
-          </section>
-        </div>
-      )}
-
-      {/* --------------------------------------------------------- Resultado */}
-      {tab === 'resultado' && (
-        <div className="space-y-4">
-          <Panel
-            title={`Resultado por competência · ${monthLabel(month)}`}
-            subtitle="O que o mês gerou, tenha sido pago ou não. Não confundir com o caixa."
-            icon={FileText}
-            flush
-          >
-            <DreTable competencia={resumo.competencia} />
-          </Panel>
-
-          <section className="grid gap-4 md:grid-cols-3">
-            <Kpi label="Receita do período" value={formatCurrency(resumo.competencia.receita)} context="Recebíveis gerados com vencimento no mês" icon={ArrowUpRight} tone="success" />
-            <Kpi label="Resultado do período" value={formatCurrency(resumo.competencia.resultado)} context="Receita menos custos e despesas" icon={Wallet} tone={resumo.competencia.resultado >= 0 ? 'success' : 'danger'} emphasis />
-            <Kpi label="Margem" value={`${resumo.competencia.margem}%`} context="Resultado sobre a receita do período" icon={TrendingUp} tone={resumo.competencia.margem >= 20 ? 'success' : resumo.competencia.margem >= 0 ? 'warning' : 'danger'} />
-          </section>
-
-          <Panel title="Caixa × competência" subtitle="Por que os dois números diferem" icon={CalendarRange}>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="rounded-md border border-hairline bg-surface-muted p-4">
-                <p className="text-2xs font-semibold uppercase tracking-[0.12em] text-ink-subtle">Caixa</p>
-                <p className={`mt-1 text-xl font-semibold tabular-nums ${resumo.caixa.resultado >= 0 ? toneText.success : toneText.danger}`}>
-                  {formatCurrency(resumo.caixa.resultado)}
-                </p>
-                <p className="mt-2 text-xs text-ink-muted">
-                  Dinheiro que efetivamente entrou e saiu no mês. É o que responde “dá para pagar as contas”.
-                </p>
-              </div>
-              <div className="rounded-md border border-hairline bg-surface-muted p-4">
-                <p className="text-2xs font-semibold uppercase tracking-[0.12em] text-ink-subtle">Competência</p>
-                <p className={`mt-1 text-xl font-semibold tabular-nums ${resumo.competencia.resultado >= 0 ? toneText.success : toneText.danger}`}>
-                  {formatCurrency(resumo.competencia.resultado)}
-                </p>
-                <p className="mt-2 text-xs text-ink-muted">
-                  Resultado do trabalho do período, independentemente de já ter sido pago. É o que responde “o mês foi lucrativo”.
-                </p>
-              </div>
+              <FinPanel id="producao" title="Produção da bancada" subtitle="OS concluídas no período">
+                <dl className="grid grid-cols-2 divide-hairline sm:grid-cols-4 sm:divide-x">
+                  <Stat label="OS concluídas" value={String(indicadores.os_concluidas)} />
+                  <Stat label="Valor produzido" value={formatCurrency(indicadores.valor_produzido)} />
+                  <Stat label="Ticket médio" value={formatCurrency(indicadores.ticket_medio)} />
+                  <Stat label="Prazo de recebimento" value={indicadores.prazo_medio_recebimento ? `${indicadores.prazo_medio_recebimento} dias` : '—'} hint="Da entrada da OS ao último pagamento" />
+                </dl>
+              </FinPanel>
             </div>
-          </Panel>
-        </div>
+
+            <aside className="space-y-5 xl:sticky xl:top-[5.75rem]" aria-label="Vencimentos e projeção">
+              <DueList receivables={receivables} payables={payables} busy={busy} onReceive={(item) => void receive(item)} onPay={(item) => void pay(item)} onSeeAll={goTab} />
+              <FinPanel id="projecao" title="Projeção" subtitle="Saldo previsto do que já está registrado">
+                <ProjectionList projecao={resumo.projecao} />
+              </FinPanel>
+            </aside>
+          </div>
+        </>
       )}
 
-      {/* --------------------------------------------------------- Recebíveis */}
+      {/* --------------------------------------------------------- Lançamentos */}
+      {tab === 'lancamentos' && (
+        <Lancamentos
+          key={extratoKey}
+          range={range}
+          categorias={categorias}
+          onEdit={(row) => setLancamento({ tipo: row.tipo, editar: row })}
+          onChanged={() => void loadResumo(true)}
+        />
+      )}
+
+      {/* --------------------------------------------------------- A receber */}
       {tab === 'receber' && (
-        <div className="space-y-4">
-          <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <Kpi label="Carteira em aberto" value={formatCurrency(resumo.recebiveis.aberto)} context={`${resumo.recebiveis.quantidade} título(s)`} icon={Receipt} tone="brand" />
-            <Kpi label="Vencido" value={formatCurrency(resumo.recebiveis.vencido)} context={`${resumo.recebiveis.quantidade_vencida} título(s) em atraso`} icon={AlertTriangle} tone="danger" emphasis={resumo.recebiveis.vencido > 0} />
-            <Kpi label="A vencer" value={formatCurrency(resumo.recebiveis.a_vencer)} context="Ainda dentro do prazo" icon={Clock} tone="info" />
-            <Kpi label="Índice de inadimplência" value={`${resumo.recebiveis.inadimplencia}%`} context="Vencido sobre a carteira total" icon={TrendingUp} tone={resumo.recebiveis.inadimplencia > 20 ? 'danger' : 'warning'} />
-          </section>
-
-          <Panel title="Idade da carteira" subtitle="Há quanto tempo cada valor está parado" icon={Clock}>
-            <AgingBars aging={resumo.recebiveis.aging} />
-          </Panel>
-
-          <Panel title="Títulos em aberto" subtitle="Os mais antigos primeiro — é por onde a cobrança começa" icon={Receipt} flush>
-            {walletLoading ? (
-              <div className="p-4"><Skeleton className="h-40" /></div>
-            ) : receivables.length === 0 ? (
-              <EmptyState icon={CheckCircle2} title="Nada a receber" description="Toda a carteira está quitada." />
-            ) : (
-              <Table>
-                <thead>
-                  <tr>
-                    <th>Cliente</th>
-                    <th className="w-24">OS</th>
-                    <th className="w-28">Vencimento</th>
-                    <th className="w-28">Atraso</th>
-                    <th className="w-32 text-right">Saldo</th>
-                    <th className="w-28" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {receivables.map((conta) => (
-                    <tr key={conta.id}>
-                      <Td>
-                        <p className="truncate font-medium text-ink">{conta.cliente_nome || conta.descricao}</p>
-                        <p className="truncate text-xs text-ink-subtle">{conta.cliente_telefone || conta.descricao}</p>
-                      </Td>
-                      <Td>
-                        {conta.ordem_numero ? (
-                          <button type="button" onClick={() => navigate(`/ordens/${conta.ordem_servico_id}/historico`)} className="tabular-nums text-brand-soft hover:underline">
-                            #{conta.ordem_numero}
-                          </button>
-                        ) : (
-                          <span className="text-ink-subtle">—</span>
-                        )}
-                      </Td>
-                      <Td>
-                        <span className="tabular-nums text-ink-muted">{formatDateOnly(conta.data_vencimento)}</span>
-                      </Td>
-                      <Td>
-                        {conta.dias_atraso > 0 ? (
-                          <Badge tone={conta.dias_atraso > 30 ? 'danger' : 'warning'}>{conta.dias_atraso} dias</Badge>
-                        ) : (
-                          <Badge tone="neutral">Em dia</Badge>
-                        )}
-                      </Td>
-                      <Td numeric>
-                        <strong className="text-ink">{formatCurrency(conta.saldo)}</strong>
-                      </Td>
-                      <Td>
-                        <UIButton
-                          size="sm"
-                          variant="success"
-                          icon={CheckCircle2}
-                          loading={busy === conta.id}
-                          disabled={!conta.ordem_servico_id}
-                          onClick={() => void receberConta(conta)}
-                        >
-                          Receber
-                        </UIButton>
-                      </Td>
-                    </tr>
-                  ))}
-                </tbody>
-              </Table>
-            )}
-          </Panel>
-        </div>
+        <>
+          <div className="dash-pulse-wrap">
+            <section className="dash-pulse" aria-label="Resumo da carteira a receber">
+              <Pulse label="Em aberto" value={formatCurrency(recebiveis.aberto)} context={`${recebiveis.quantidade} título(s)`} tone="info" />
+              <Pulse label="Vencido" value={formatCurrency(recebiveis.vencido)} context={`${recebiveis.quantidade_vencida} título(s) em atraso`} tone="danger" alert={recebiveis.vencido > 0} />
+              <Pulse label="A vencer" value={formatCurrency(recebiveis.a_vencer)} context="Ainda no prazo" tone="info" />
+              <Pulse label="Inadimplência" value={`${recebiveis.inadimplencia.toLocaleString('pt-BR')}%`} context="Vencido sobre a carteira" tone="warning" alert={recebiveis.inadimplencia > 20} />
+            </section>
+          </div>
+          <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_22rem] 2xl:grid-cols-[minmax(0,1fr)_26rem]">
+            <ReceberList rows={receivables} loading={walletLoading} busy={busy} onReceive={(item) => void receive(item)} />
+            <FinPanel id="aging" title="Idade da carteira" subtitle="Há quanto tempo cada valor está parado" className="xl:sticky xl:top-[5.75rem]">
+              <AgingBars aging={recebiveis.aging} />
+            </FinPanel>
+          </div>
+        </>
       )}
 
-      {/* ------------------------------------------------------------ Pagáveis */}
+      {/* ------------------------------------------------------------ A pagar */}
       {tab === 'pagar' && (
-        <div className="space-y-4">
-          <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <Kpi label="Em aberto" value={formatCurrency(resumo.pagaveis.aberto)} context="Total ainda não pago" icon={Receipt} tone="brand" />
-            <Kpi label="Vencido" value={formatCurrency(resumo.pagaveis.vencido)} context={`${resumo.pagaveis.quantidade_vencida} conta(s) atrasada(s)`} icon={AlertTriangle} tone="danger" emphasis={resumo.pagaveis.vencido > 0} />
-            <Kpi label="A vencer" value={formatCurrency(resumo.pagaveis.a_vencer)} context="Dentro do prazo" icon={Clock} tone="info" />
-            <Kpi label="Pago no mês" value={formatCurrency(resumo.pagaveis.pago_mes)} context="Contas quitadas com vencimento no mês" icon={CheckCircle2} tone="success" />
-          </section>
-
-          <Panel
-            title="Contas a pagar em aberto"
-            subtitle="Ordenadas por vencimento"
-            icon={Receipt}
-            action={<UIButton size="sm" onClick={() => navigate('/contas')}>Gerenciar contas</UIButton>}
-            flush
-          >
-            {walletLoading ? (
-              <div className="p-4"><Skeleton className="h-40" /></div>
-            ) : payables.length === 0 ? (
-              <EmptyState icon={CheckCircle2} title="Nenhuma conta em aberto" description="Nada pendente de pagamento." />
-            ) : (
-              <Table>
-                <thead>
-                  <tr>
-                    <th>Descrição</th>
-                    <th className="w-40">Categoria</th>
-                    <th className="w-28">Vencimento</th>
-                    <th className="w-28">Situação</th>
-                    <th className="w-32 text-right">Valor</th>
-                    <th className="w-24" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {payables.map((conta) => (
-                    <tr key={conta.id}>
-                      <Td>
-                        <p className="truncate font-medium text-ink">{conta.descricao}</p>
-                        {Number(conta.recorrente) === 1 && <p className="text-xs text-ink-subtle">Recorrente</p>}
-                      </Td>
-                      <Td>
-                        <span className="truncate text-ink-muted">{conta.categoria_nome || 'Sem categoria'}</span>
-                      </Td>
-                      <Td>
-                        <span className="tabular-nums text-ink-muted">{formatDateOnly(conta.data_vencimento)}</span>
-                      </Td>
-                      <Td>
-                        {conta.dias_atraso > 0 ? <Badge tone="danger">{conta.dias_atraso} dias</Badge> : <Badge tone="neutral">A vencer</Badge>}
-                      </Td>
-                      <Td numeric>
-                        <strong className="text-ink">{formatCurrency(conta.valor)}</strong>
-                      </Td>
-                      <Td>
-                        <UIButton size="sm" icon={CheckCircle2} loading={busy === conta.id} onClick={() => void pagarConta(conta)}>
-                          Pagar
-                        </UIButton>
-                      </Td>
-                    </tr>
-                  ))}
-                </tbody>
-              </Table>
-            )}
-          </Panel>
-        </div>
+        <>
+          <div className="dash-pulse-wrap">
+            <section className="dash-pulse" aria-label="Resumo das contas a pagar">
+              <Pulse label="Em aberto" value={formatCurrency(pagaveis.aberto)} context="Total ainda não pago" tone="info" />
+              <Pulse label="Vencido" value={formatCurrency(pagaveis.vencido)} context={`${pagaveis.quantidade_vencida} conta(s) atrasada(s)`} tone="danger" alert={pagaveis.vencido > 0} />
+              <Pulse label="A vencer" value={formatCurrency(pagaveis.a_vencer)} context="Dentro do prazo" tone="info" />
+              <Pulse label="Vence em 7 dias" value={formatCurrency(payWeek.total)} context={`${payWeek.count} conta(s) até ${payWeek.until}`} tone="warning" />
+            </section>
+          </div>
+          <PagarList rows={payables} loading={walletLoading} busy={busy} onPay={(item) => void pay(item)} />
+        </>
       )}
 
-      {/* ------------------------------------------------------------ Projeção */}
-      {tab === 'projecao' && (
-        <div className="space-y-4">
-          <Panel
-            title="Fluxo de caixa projetado"
-            subtitle="Entradas e saídas já comprometidas, pela data de vencimento"
-            icon={CalendarRange}
-            flush
-          >
-            <Table>
-              <thead>
-                <tr>
-                  <th>Janela</th>
-                  <th className="w-40 text-right">Entradas previstas</th>
-                  <th className="w-40 text-right">Saídas previstas</th>
-                  <th className="w-40 text-right">Saldo da janela</th>
-                  <th className="w-40 text-right">Saldo acumulado</th>
-                </tr>
-              </thead>
-              <tbody>
-                {resumo.projecao.reduce<Array<{ item: Resumo['projecao'][number]; acumulado: number }>>((acc, item) => {
-                  const previous = acc.length ? acc[acc.length - 1].acumulado : 0;
-                  acc.push({ item, acumulado: Number((previous + item.saldo).toFixed(2)) });
-                  return acc;
-                }, []).map(({ item, acumulado }) => (
-                  <tr key={item.chave}>
-                    <Td>
-                      <span className="font-medium text-ink">{item.label}</span>
-                      {item.chave === 'vencido' && <p className="text-xs text-ink-subtle">Já deveria ter entrado ou saído</p>}
-                    </Td>
-                    <Td numeric><span className={toneText.success}>{formatCurrency(item.entradas)}</span></Td>
-                    <Td numeric><span className={toneText.danger}>{formatCurrency(item.saidas)}</span></Td>
-                    <Td numeric><strong className={item.saldo >= 0 ? toneText.success : toneText.danger}>{formatCurrency(item.saldo)}</strong></Td>
-                    <Td numeric><strong className={acumulado >= 0 ? 'text-ink' : toneText.danger}>{formatCurrency(acumulado)}</strong></Td>
-                  </tr>
-                ))}
-              </tbody>
-            </Table>
-          </Panel>
-
-          <Panel title="Como ler esta projeção" icon={AlertTriangle} tone="info">
-            <ul className="space-y-2 text-sm text-ink-muted">
-              <li>
-                <strong className="text-ink">Vencido</strong> soma o que já passou do prazo nos dois sentidos. Um saldo negativo
-                aqui costuma significar que a cobrança está mais atrasada que os pagamentos.
-              </li>
-              <li>
-                <strong className="text-ink">Saldo acumulado</strong> assume que tudo será recebido e pago na data prevista.
-                Compare com o índice de inadimplência antes de contar com esse dinheiro.
-              </li>
-              <li>
-                A projeção considera apenas o que já está registrado. Contas recorrentes ainda não materializadas e OS ainda
-                não faturadas não aparecem aqui.
-              </li>
-            </ul>
-          </Panel>
-        </div>
+      {/* ---------------------------------------------------------- Resultado */}
+      {tab === 'resultado' && (
+        <>
+          <div className="dash-pulse-wrap">
+            <section className="dash-pulse" aria-label="Resultado por competência">
+              <Pulse label="Receita gerada" value={formatCurrency(competencia.receita)} context="Recebíveis com vencimento no período" tone="success" />
+              <Pulse label="Custos e despesas" value={formatCurrency(competencia.custo_direto + competencia.despesa)} context="Contas com vencimento no período" tone="danger" />
+              <Pulse label="Resultado" value={formatCurrency(competencia.resultado)} context="O período deu lucro?" tone={competencia.resultado < 0 ? 'danger' : 'success'} alert={competencia.resultado < 0} />
+              <Pulse label="Margem" value={`${competencia.margem.toLocaleString('pt-BR')}%`} context="Resultado sobre a receita" tone={competencia.margem < 0 ? 'danger' : 'success'} />
+            </section>
+          </div>
+          <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_22rem] 2xl:grid-cols-[minmax(0,1fr)_26rem]">
+            <FinPanel id="dre" title={`Resultado por competência · ${label}`} subtitle="O que o período gerou, pago ou não">
+              <DreTable competencia={competencia} />
+            </FinPanel>
+            <FinPanel id="regimes" title="Caixa × competência" subtitle="Por que os dois números diferem">
+              <div className="space-y-4 px-4 py-4 sm:px-5">
+                <Regime label="Caixa" value={caixa.resultado} text="O que entrou menos o que saiu de fato. Responde “dá para pagar as contas?”." />
+                <Regime label="Competência" value={competencia.resultado} text="O resultado do trabalho do período, recebido ou não. Responde “o período foi lucrativo?”." />
+              </div>
+            </FinPanel>
+          </div>
+        </>
       )}
 
       <TransacaoModal
-        isOpen={transacaoOpen}
-        onClose={() => setTransacaoOpen(false)}
+        isOpen={Boolean(lancamento)}
+        onClose={() => setLancamento(null)}
+        transacaoParaEditar={lancamento?.editar}
+        tipoInicial={lancamento?.tipo}
         categorias={categorias}
         onSuccess={() => void refreshAll()}
       />
@@ -667,149 +378,59 @@ export function Financeiro() {
           void refreshAll();
         }}
       />
-      <ImportarCSVModal
-        isOpen={importOpen}
-        onClose={() => setImportOpen(false)}
-        categorias={categorias}
-        onSuccess={() => void refreshAll()}
-      />
+      <ImportarCSVModal isOpen={importOpen} onClose={() => setImportOpen(false)} categorias={categorias} onSuccess={() => void refreshAll()} />
     </main>
   );
 }
 
-/* ------------------------------------------------------------------ Apoio */
-
-function IndicatorRow({ label, value, hint }: { label: string; value: string; hint?: string }) {
-  return (
-    <div className="flex items-baseline justify-between gap-3 rounded-md bg-surface-muted px-3 py-2.5">
-      <span className="min-w-0">
-        <span className="block text-xs font-medium text-ink-muted">{label}</span>
-        {hint && <span className="block text-2xs text-ink-subtle">{hint}</span>}
-      </span>
-      <strong className="shrink-0 text-base font-semibold tabular-nums text-ink">{value}</strong>
+function Pulse({ label, value, context, tone, alert, onClick }: { label: string; value: string; context: string; tone: Tone; alert?: boolean; onClick?: () => void }) {
+  const body = (
+    <>
+      <span className="dash-eyebrow">{label}</span>
+      <strong className="dash-pulse-value truncate">{value}</strong>
+      <span className="truncate text-xs text-ink-muted">{context}</span>
+    </>
+  );
+  return onClick ? (
+    <button type="button" className="dash-pulse-item" data-tone={tone} data-alert={alert || undefined} onClick={onClick}>
+      {body}
+    </button>
+  ) : (
+    <div className="dash-pulse-item" data-tone={tone} data-alert={alert || undefined}>
+      {body}
     </div>
   );
 }
 
-function CategoryBars({ items }: { items: Array<{ nome: string; cor: string; valor: number }> }) {
-  const max = Math.max(...items.map((item) => item.valor), 1);
+function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="space-y-3">
-      {items.map((item) => (
-        <div key={item.nome}>
-          <div className="mb-1 flex items-center justify-between gap-3 text-xs">
-            <span className="truncate text-ink-muted">{item.nome}</span>
-            <strong className="shrink-0 tabular-nums text-ink">{formatCurrency(item.valor)}</strong>
-          </div>
-          <div className="ui-meter">
-            <span style={{ width: `${Math.max(4, (item.valor / max) * 100)}%`, backgroundColor: item.cor }} />
-          </div>
-        </div>
-      ))}
+    <div className="px-4 py-3 sm:px-5" title={hint}>
+      <dt className="dash-eyebrow">{label}</dt>
+      <dd className="mt-1 font-display text-lg font-semibold tabular-nums text-ink">{value}</dd>
     </div>
   );
 }
 
-function AgingBars({ aging }: { aging: Resumo['recebiveis']['aging'] }) {
-  const max = Math.max(...aging.map((item) => item.valor), 1);
-  const tones: Record<string, Tone> = {
-    a_vencer: 'info',
-    d1_15: 'warning',
-    d16_30: 'warning',
-    d31_60: 'danger',
-    d60_mais: 'danger',
-  };
-
+function Regime({ label, value, text }: { label: string; value: number; text: string }) {
   return (
-    <div className="space-y-3">
-      {aging.map((item) => (
-        <div key={item.chave}>
-          <div className="mb-1 flex items-center justify-between gap-3 text-xs">
-            <span className="text-ink-muted">
-              {item.label}
-              {item.quantidade > 0 && <span className="ml-2 text-ink-subtle">· {item.quantidade} título(s)</span>}
-            </span>
-            <strong className="tabular-nums text-ink">{formatCurrency(item.valor)}</strong>
-          </div>
-          <Meter value={item.valor} max={max} tone={tones[item.chave] ?? 'neutral'} />
-        </div>
-      ))}
-      <p className="border-t border-hairline pt-3 text-xs text-ink-muted">
-        Valores acima de 60 dias raramente são recebidos sem contato direto. Priorize a cobrança da faixa mais antiga.
-      </p>
+    <div>
+      <p className="dash-eyebrow">{label}</p>
+      <p className={`mt-1 font-display text-xl font-semibold tabular-nums ${value < 0 ? 'text-signal-danger' : 'text-ink'}`}>{formatCurrency(value)}</p>
+      <p className="mt-1 text-xs text-ink-muted">{text}</p>
     </div>
   );
 }
 
-function DreTable({ competencia }: { competencia: Resumo['competencia'] }) {
-  const find = (key: string) => competencia.grupos.find((group) => group.chave === key)?.valor ?? 0;
-
-  const receitaServico = find('receita_servico');
-  const receitaOutras = find('receita_outras');
-  const custo = find('custo_direto');
-  const margemBruta = Number((competencia.receita - custo).toFixed(2));
-  const operacional = find('despesa_operacional');
-  const administrativa = find('despesa_administrativa');
-  const financeira = find('despesa_financeira');
-  const investimento = find('investimento');
-
-  const rows: Array<{ label: string; value: number; kind: 'entrada' | 'saida' | 'subtotal' | 'total'; hint?: string }> = [
-    { label: 'Receita de serviços', value: receitaServico, kind: 'entrada' },
-    { label: 'Outras receitas', value: receitaOutras, kind: 'entrada' },
-    { label: 'Receita bruta', value: competencia.receita, kind: 'subtotal' },
-    { label: 'Custos diretos', value: -custo, kind: 'saida', hint: 'Peças, materiais e insumos aplicados no serviço' },
-    { label: 'Margem bruta', value: margemBruta, kind: 'subtotal' },
-    { label: 'Despesas operacionais', value: -operacional, kind: 'saida', hint: 'Aluguel, energia, ferramentas de trabalho' },
-    { label: 'Despesas administrativas', value: -administrativa, kind: 'saida', hint: 'Impostos, contabilidade, pró-labore' },
-    { label: 'Despesas financeiras', value: -financeira, kind: 'saida', hint: 'Tarifas, juros e taxas de cartão' },
-    { label: 'Resultado operacional', value: competencia.resultado, kind: 'total' },
-  ];
-
-  if (investimento > 0) {
-    rows.push({ label: 'Investimentos', value: -investimento, kind: 'saida', hint: 'Não entram no resultado operacional' });
-  }
-
+function FinanceSkeleton() {
   return (
-    <Table>
-      <thead>
-        <tr>
-          <th>Conta</th>
-          <th className="w-44 text-right">Valor</th>
-          <th className="w-28 text-right">% receita</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row) => {
-          const share = competencia.receita > 0 ? (Math.abs(row.value) / competencia.receita) * 100 : 0;
-          const isSummary = row.kind === 'subtotal' || row.kind === 'total';
-          return (
-            <tr key={row.label} className={isSummary ? 'bg-surface-muted/60' : undefined}>
-              <Td>
-                <span className={isSummary ? 'font-semibold text-ink' : 'text-ink-muted'}>{row.label}</span>
-                {row.hint && <p className="text-xs text-ink-subtle">{row.hint}</p>}
-              </Td>
-              <Td numeric>
-                <span
-                  className={
-                    row.kind === 'total'
-                      ? `text-base font-bold ${row.value >= 0 ? toneText.success : toneText.danger}`
-                      : row.kind === 'subtotal'
-                        ? 'font-semibold text-ink'
-                        : row.value < 0
-                          ? toneText.danger
-                          : toneText.success
-                  }
-                >
-                  {formatCurrency(row.value)}
-                </span>
-              </Td>
-              <Td numeric>
-                <span className="text-xs text-ink-subtle">{competencia.receita > 0 ? `${share.toFixed(1)}%` : '—'}</span>
-              </Td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </Table>
+    <main className="ui-page space-y-5">
+      <Skeleton className="h-12 w-60" />
+      <Skeleton className="h-10 w-full max-w-xl" />
+      <Skeleton className="h-[5.5rem]" />
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_22rem]">
+        <Skeleton className="h-[22rem]" />
+        <Skeleton className="h-[22rem]" />
+      </div>
+    </main>
   );
 }
