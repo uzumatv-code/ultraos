@@ -10,7 +10,7 @@ import { formatCurrency } from '../utils/formatters';
 import { Autocomplete } from '../components/Autocomplete';
 import { TransacaoModal } from '../components/TransacaoModal';
 import { CategoriaFinanceiraModal } from '../components/CategoriaFinanceiraModal';
-import { ImportarCSVModal } from '../components/ImportarCSVModal';
+import { ImportarExtratoModal } from '../components/financeiro/ImportarExtratoModal';
 import type { TransacaoFinanceira, CategoriaFinanceira } from '../types/database';
 
 export function Transacoes() {
@@ -382,10 +382,9 @@ export function Transacoes() {
         onSuccess={buscarDados}
       />
 
-      <ImportarCSVModal
+      <ImportarExtratoModal
         isOpen={modalImportarCSVAberto}
         onClose={() => setModalImportarCSVAberto(false)}
-        categorias={categorias}
         onSuccess={buscarDados}
       />
     </div>

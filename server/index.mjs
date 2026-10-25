@@ -13,6 +13,7 @@ import { detectImageMime, normalizeDocumentConfig } from './document-customizati
 import { addMonthsClamped, formatDateOnly, installmentNumber, occurrenceDate, occurrenceIndex, occurrencesInRange, parseDateOnly, validatePayableInput } from './payable-recurrence.mjs';
 import { createFinanceAgent, inferExpenseCategory, formatBRL } from './finance-agent.mjs';
 import { resolveRange } from './finance-queries.mjs';
+import { analyzeStatement, parseStatement, statementRange } from './extrato-core.mjs';
 import { createAgentBrain } from './agent-brain.mjs';
 import { createReceiptStore } from './receipts.mjs';
 import { createLojaTools } from './loja-agent.mjs';
@@ -6305,6 +6306,161 @@ app.get('/api/financeiro/carteira', requireAuth, requireAdmin, async (req, res) 
   }
 });
 
+/* ==========================================================================
+   Importação de extrato bancário
+   --------------------------------------------------------------------------
+   Duas etapas: "analisar" lê o arquivo e devolve a prévia com a decisão de
+   cada linha (nada é gravado); "importar" grava só as linhas confirmadas.
+   O identificador do banco fica em `id_externo`, então reimportar o mesmo
+   extrato nunca duplica — a checagem é refeita aqui no servidor.
+   ========================================================================== */
+
+const STATEMENT_MAX_LINES = 3000;
+
+async function ensureStatementSchema() {
+  const [rows] = await pool.query(
+    "SELECT COUNT(*) AS total FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'transacoes_financeiras' AND COLUMN_NAME = 'id_externo'",
+  );
+  if (Number(rows[0]?.total || 0) === 0) {
+    await pool.query('ALTER TABLE transacoes_financeiras ADD COLUMN id_externo VARCHAR(100) NULL');
+    await pool.query('CREATE INDEX idx_transacoes_user_externo ON transacoes_financeiras (user_id, id_externo)');
+  }
+  columnCache.delete('transacoes_financeiras');
+}
+
+async function existingExternalIds(userId, keys) {
+  const found = new Set();
+  for (let index = 0; index < keys.length; index += 500) {
+    const chunk = keys.slice(index, index + 500);
+    if (!chunk.length) continue;
+    const [rows] = await pool.query(
+      `SELECT id_externo FROM transacoes_financeiras WHERE user_id = ? AND id_externo IN (${chunk.map(() => '?').join(',')})`,
+      [userId, ...chunk],
+    );
+    rows.forEach((row) => found.add(row.id_externo));
+  }
+  return found;
+}
+
+app.post('/api/financeiro/extrato/analisar', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const userId = req.auth.accountId;
+    const content = String(req.body?.conteudo || '');
+    if (!content.trim()) return res.status(400).json({ error: { message: 'Envie o arquivo do extrato (OFX ou CSV).' } });
+    if (!(await hasColumn('transacoes_financeiras', 'id_externo'))) await ensureStatementSchema();
+
+    const parsed = parseStatement(req.body?.nome, content);
+    if (!parsed.linhas.length) {
+      return res.status(400).json({ error: { message: parsed.avisos[0] || 'Não encontrei movimentos neste arquivo. Envie o OFX ou o CSV exportado pelo banco.' } });
+    }
+    if (parsed.linhas.length > STATEMENT_MAX_LINES) {
+      return res.status(400).json({ error: { message: `O extrato tem ${parsed.linhas.length} movimentos. Envie períodos de até ${STATEMENT_MAX_LINES} movimentos por vez.` } });
+    }
+
+    const range = statementRange(parsed.linhas);
+    const oneYearAgo = addDaysToIsoDate(todayDate(), -365);
+    const [[existing], imported, [history], [categorias], [people], [company]] = await Promise.all([
+      pool.query(
+        `SELECT id, descricao, valor, tipo, LEFT(data,10) AS dia, id_externo
+           FROM transacoes_financeiras
+          WHERE user_id = ? AND LEFT(data,10) BETWEEN ? AND ?`,
+        [userId, range.busca.de, range.busca.ate],
+      ),
+      existingExternalIds(userId, parsed.linhas.map((line) => line.idExterno)),
+      pool.query(
+        `SELECT descricao, categoria_id, COUNT(*) AS usos
+           FROM transacoes_financeiras
+          WHERE user_id = ? AND categoria_id IS NOT NULL AND LEFT(data,10) >= ?
+          GROUP BY descricao, categoria_id`,
+        [userId, oneYearAgo],
+      ),
+      pool.query('SELECT id, nome, tipo, cor FROM categorias_financeiras WHERE user_id = ? ORDER BY nome', [userId]),
+      pool.query('SELECT nome FROM usuarios WHERE id IN (?, ?)', [userId, req.auth.userId]),
+      pool.query('SELECT nome_empresa FROM configuracoes_empresa WHERE user_id = ? LIMIT 1', [userId]).catch(() => [[]]),
+    ]);
+
+    // Categoria mais usada para cada descrição: corrigir uma vez ensina as próximas importações.
+    const historico = new Map();
+    const best = new Map();
+    for (const row of history) {
+      const uses = Number(row.usos || 0);
+      if (uses > (best.get(row.descricao) ?? 0)) {
+        best.set(row.descricao, uses);
+        historico.set(row.descricao, row.categoria_id);
+      }
+    }
+    const existentes = existing.concat([...imported].map((key) => ({ id: `ext-${key}`, id_externo: key })));
+    const donos = [...people.map((row) => row.nome), company[0]?.nome_empresa].filter(Boolean);
+
+    const linhas = analyzeStatement({ linhas: parsed.linhas, existentes, historico, categorias, donos, inferExpense: inferExpenseCategory });
+    const resumo = {};
+    for (const line of linhas) resumo[line.situacao] = (resumo[line.situacao] || 0) + 1;
+
+    return res.json({ data: { banco: parsed.banco, formato: parsed.formato, periodo: { inicio: range.inicio, fim: range.fim }, avisos: parsed.avisos.slice(0, 20), resumo, categorias, linhas } });
+  } catch (error) {
+    return res.status(500).json({ error: { message: error.message } });
+  }
+});
+
+app.post('/api/financeiro/extrato/importar', requireAuth, requireAdmin, async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    const userId = req.auth.accountId;
+    const input = Array.isArray(req.body?.linhas) ? req.body.linhas.slice(0, STATEMENT_MAX_LINES) : [];
+    const rows = input
+      .map((line) => ({
+        chave: String(line?.chave || '').slice(0, 100),
+        data: String(line?.data || ''),
+        valor: money(line?.valor),
+        tipo: line?.tipo === 'despesa' ? 'despesa' : line?.tipo === 'receita' ? 'receita' : null,
+        descricao: String(line?.descricao || '').trim().slice(0, 255),
+        categoria_id: line?.categoria_id ? String(line.categoria_id) : null,
+        categoria_nome: line?.categoria_nome ? String(line.categoria_nome).trim().slice(0, 100) : null,
+      }))
+      .filter((line) => line.chave && /^\d{4}-\d{2}-\d{2}$/.test(line.data) && line.valor > 0 && line.tipo && line.descricao);
+    if (!rows.length) return res.status(400).json({ error: { message: 'Nenhuma linha válida para importar.' } });
+    if (!(await hasColumn('transacoes_financeiras', 'id_externo'))) await ensureStatementSchema();
+
+    const already = await existingExternalIds(userId, rows.map((line) => line.chave));
+    const [ownCategories] = await pool.query('SELECT id, tipo FROM categorias_financeiras WHERE user_id = ?', [userId]);
+    const categoryType = new Map(ownCategories.map((row) => [row.id, row.tipo]));
+    const createdCategories = new Map();
+    const timestamp = now();
+    let inserted = 0;
+
+    await conn.beginTransaction();
+    for (const line of rows) {
+      if (already.has(line.chave)) continue;
+      let categoriaId = line.categoria_id && categoryType.get(line.categoria_id) === line.tipo ? line.categoria_id : null;
+      if (!categoriaId && line.categoria_nome) {
+        const key = `${line.tipo}|${categoryKey(line.categoria_nome)}`;
+        if (!createdCategories.has(key)) {
+          const color = line.tipo === 'receita' ? '#10B981' : inferExpenseCategory(line.categoria_nome).cor;
+          createdCategories.set(key, await ensureDefaultFinancialCategory(userId, line.tipo, line.categoria_nome, color, conn));
+        }
+        categoriaId = createdCategories.get(key);
+      }
+      await conn.query(
+        `INSERT INTO transacoes_financeiras
+          (id, user_id, descricao, valor, tipo, data, categoria_id, origem, id_externo, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'extrato', ?, ?, ?)`,
+        [uuid(), userId, line.descricao, line.valor, line.tipo, `${line.data}T12:00:00.000Z`, categoriaId, line.chave, timestamp, timestamp],
+      );
+      already.add(line.chave);
+      inserted += 1;
+    }
+    await conn.commit();
+
+    await writeAudit(req, { action: 'extrato.importar', resource: 'transacoes_financeiras', details: { importadas: inserted, ignoradas: rows.length - inserted, nome: String(req.body?.nome || '').slice(0, 120) } });
+    return res.json({ data: { importadas: inserted, ignoradas: rows.length - inserted } });
+  } catch (error) {
+    await conn.rollback().catch(() => {});
+    return res.status(500).json({ error: { message: error.message } });
+  } finally {
+    conn.release();
+  }
+});
+
 app.post('/api/financeiro/contas-pagar/materializar', requireAuth, requireAdmin, async (req, res) => {
   const conn = await pool.getConnection();
   try {
@@ -7788,6 +7944,7 @@ async function startServer() {
   try {
     await financeAgent.ensureSchema();
     await ensureInstallmentSchema();
+    await ensureStatementSchema();
     await ensureNfseSchema();
     await ensureQuoteSchema();
     await ensureWhatsAppMediaSchema();

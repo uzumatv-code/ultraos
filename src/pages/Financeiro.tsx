@@ -23,13 +23,13 @@ import { toast } from '../components/ToastCustom';
 import { LiveBadge } from '../components/LiveBadge';
 import { TransacaoModal } from '../components/TransacaoModal';
 import { CategoriaFinanceiraModal } from '../components/CategoriaFinanceiraModal';
-import { ImportarCSVModal } from '../components/ImportarCSVModal';
 import { formatCurrency } from '../utils/formatters';
 import { todayLocalDate } from '../utils/dates';
 import { Segmented, Skeleton, UIButton, type Tone } from '../components/ui';
 import { CashFlowChart } from '../components/financeiro/CashFlowChart';
 import { DueList } from '../components/financeiro/DueList';
 import { Lancamentos } from '../components/financeiro/Lancamentos';
+import { ImportarExtratoModal } from '../components/financeiro/ImportarExtratoModal';
 import { PagarList, ReceberList } from '../components/financeiro/Carteira';
 import { AgingBars, CategoryBars, DreTable, FinPanel, ProjectionList } from '../components/financeiro/Analises';
 import { containsDate, periodOptions, previousLabel, rangeFor, rangeLabel, shiftRef, variation, type PeriodMode } from '../components/financeiro/period';
@@ -190,7 +190,7 @@ export function Financeiro() {
             <LiveBadge />
           </span>
           <UIButton variant="ghost" size="sm" icon={Tags} onClick={() => setCategoriaOpen(true)} aria-label="Categorias" title="Categorias" />
-          <UIButton variant="ghost" size="sm" icon={Upload} onClick={() => setImportOpen(true)} aria-label="Importar extrato CSV" title="Importar extrato CSV" />
+          <UIButton variant="ghost" size="sm" icon={Upload} onClick={() => setImportOpen(true)} aria-label="Importar extrato do banco (OFX ou CSV)" title="Importar extrato do banco (OFX ou CSV)" />
           <UIButton variant="secondary" size="sm" icon={Minus} onClick={() => setLancamento({ tipo: 'despesa' })}>
             Saída
           </UIButton>
@@ -378,7 +378,7 @@ export function Financeiro() {
           void refreshAll();
         }}
       />
-      <ImportarCSVModal isOpen={importOpen} onClose={() => setImportOpen(false)} categorias={categorias} onSuccess={() => void refreshAll()} />
+      <ImportarExtratoModal isOpen={importOpen} onClose={() => setImportOpen(false)} onSuccess={() => void refreshAll()} />
     </main>
   );
 }

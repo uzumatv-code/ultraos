@@ -27,7 +27,7 @@ export function DashboardModal({
   onClose: () => void;
   labelledBy: string;
   children: ReactNode;
-  size?: 'md' | 'lg';
+  size?: 'md' | 'lg' | 'xl';
 }) {
   useEffect(() => {
     if (!open) return;
@@ -56,7 +56,7 @@ export function DashboardModal({
             aria-modal="true"
             aria-labelledby={labelledBy}
             onClick={(event) => event.stopPropagation()}
-            className={`flex max-h-[calc(100dvh-1rem)] w-full flex-col overflow-hidden rounded-t-2xl border border-hairline bg-surface-raised shadow-glass-lg sm:max-h-[calc(100dvh-2rem)] sm:rounded-2xl ${size === 'lg' ? 'sm:max-w-2xl' : 'sm:max-w-xl'}`}
+            className={`flex max-h-[calc(100dvh-1rem)] w-full flex-col overflow-hidden rounded-t-2xl border border-hairline bg-surface-raised shadow-glass-lg sm:max-h-[calc(100dvh-2rem)] sm:rounded-2xl ${size === 'xl' ? 'sm:max-w-5xl' : size === 'lg' ? 'sm:max-w-2xl' : 'sm:max-w-xl'}`}
           >
             {children}
           </motion.div>
