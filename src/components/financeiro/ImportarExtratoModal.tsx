@@ -8,12 +8,13 @@
  * com a mesma descrição) e confirma. Nada é gravado antes disso.
  */
 
-import { useMemo, useRef, useState, type DragEvent } from 'react';
-import { ArrowLeft, FileUp, Search, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
+import { ArrowLeft, FileUp, RotateCcw, Search, X } from 'lucide-react';
 import { apiRequest } from '../../lib/api-client';
 import { formatCurrency } from '../../utils/formatters';
 import { formatLocalDate } from '../../utils/dates';
 import { toast } from '../ToastCustom';
+import { alerts } from '../../utils/alerts';
 import { UIButton } from '../ui';
 import { DashboardModal } from '../dashboard/OrderQuickView';
 
@@ -42,6 +43,8 @@ type Analise = {
   categorias: Array<{ id: string; nome: string; tipo: 'receita' | 'despesa'; cor: string }>;
   linhas: Linha[];
 };
+
+type Importacao = { lote: string; quantidade: number; entradas: number; saidas: number; inicio: string; fim: string };
 
 const MAX_BYTES = 5 * 1024 * 1024;
 
@@ -79,6 +82,42 @@ export function ImportarExtratoModal({ isOpen, onClose, onSuccess }: { isOpen: b
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [importacoes, setImportacoes] = useState<Importacao[]>([]);
+  const [undoing, setUndoing] = useState<string | null>(null);
+
+  const loadImportacoes = useCallback(async () => {
+    try {
+      setImportacoes(await apiRequest<Importacao[]>('/api/financeiro/extrato/importacoes'));
+    } catch {
+      setImportacoes([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (isOpen) void loadImportacoes();
+  }, [isOpen, loadImportacoes]);
+
+  async function desfazer(item: Importacao) {
+    const confirm = await alerts.confirm({
+      title: 'Desfazer importação',
+      text: `Apagar os ${item.quantidade} lançamentos desta importação (+${formatCurrency(item.entradas)} / −${formatCurrency(item.saidas)})? O resto do caixa não é alterado.`,
+      icon: 'warning',
+      confirmButtonText: 'Desfazer',
+      cancelButtonText: 'Cancelar',
+    });
+    if (!confirm.isConfirmed) return;
+    setUndoing(item.lote);
+    try {
+      const result = await apiRequest<{ removidas: number }>(`/api/financeiro/extrato/importacoes?lote=${encodeURIComponent(item.lote)}`, { method: 'DELETE' });
+      toast.success(`Importação desfeita: ${result.removidas} lançamento(s) removidos.`);
+      await loadImportacoes();
+      onSuccess();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Não foi possível desfazer');
+    } finally {
+      setUndoing(null);
+    }
+  }
 
   function reset() {
     setAnalise(null);
@@ -235,6 +274,31 @@ export function ImportarExtratoModal({ isOpen, onClose, onSuccess }: { isOpen: b
             <span className="max-w-md text-sm text-ink-muted">OFX ou CSV exportado pelo banco. Nada é lançado antes de você revisar.</span>
             <input ref={inputRef} type="file" accept=".ofx,.csv,.txt" className="sr-only" disabled={loading} onChange={(event) => void handleFile(event.target.files?.[0])} />
           </label>
+          {importacoes.length > 0 && (
+            <section className="rounded-lg border border-hairline" aria-labelledby="importacoes-title">
+              <h3 id="importacoes-title" className="fin-day rounded-t-lg border-t-0">
+                Importações feitas
+              </h3>
+              <ul className="divide-y divide-hairline">
+                {importacoes.map((item) => (
+                  <li key={item.lote} className="flex flex-wrap items-center gap-3 px-4 py-2.5">
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm font-medium text-ink">
+                        {item.quantidade} lançamentos · {formatLocalDate(item.inicio)} a {formatLocalDate(item.fim)}
+                      </span>
+                      <span className="block text-xs text-ink-subtle">
+                        Importado em {new Date(item.lote).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} ·{' '}
+                        <span className="text-signal-success">+{formatCurrency(item.entradas)}</span> · −{formatCurrency(item.saidas)}
+                      </span>
+                    </span>
+                    <UIButton size="sm" variant="danger" icon={RotateCcw} loading={undoing === item.lote} disabled={Boolean(undoing)} onClick={() => void desfazer(item)}>
+                      Desfazer
+                    </UIButton>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
           <ul className="grid gap-3 text-sm text-ink-muted sm:grid-cols-3">
             <li className="rounded-lg border border-hairline p-3">
               <strong className="block text-ink">Sem duplicar</strong>

@@ -6461,6 +6461,44 @@ app.post('/api/financeiro/extrato/importar', requireAuth, requireAdmin, async (r
   }
 });
 
+/** Importações já feitas: cada uma é o conjunto gravado no mesmo instante (created_at). */
+app.get('/api/financeiro/extrato/importacoes', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    if (!(await hasColumn('transacoes_financeiras', 'id_externo'))) return res.json({ data: [] });
+    const [rows] = await pool.query(
+      `SELECT created_at AS lote, COUNT(*) AS quantidade,
+              COALESCE(SUM(CASE WHEN tipo='receita' THEN valor ELSE 0 END),0) AS entradas,
+              COALESCE(SUM(CASE WHEN tipo='despesa' THEN valor ELSE 0 END),0) AS saidas,
+              MIN(LEFT(data,10)) AS inicio, MAX(LEFT(data,10)) AS fim
+         FROM transacoes_financeiras
+        WHERE user_id = ? AND origem = 'extrato'
+        GROUP BY created_at
+        ORDER BY created_at DESC
+        LIMIT 20`,
+      [req.auth.accountId],
+    );
+    return res.json({ data: rows.map((row) => ({ ...row, quantidade: Number(row.quantidade), entradas: money(row.entradas), saidas: money(row.saidas) })) });
+  } catch (error) {
+    return res.status(500).json({ error: { message: error.message } });
+  }
+});
+
+/** Desfaz uma importação: apaga só as linhas que ela criou, nada mais do caixa. */
+app.delete('/api/financeiro/extrato/importacoes', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const lote = String(req.query.lote || '');
+    if (!lote) return res.status(400).json({ error: { message: 'Informe qual importação desfazer.' } });
+    const [result] = await pool.query(
+      "DELETE FROM transacoes_financeiras WHERE user_id = ? AND origem = 'extrato' AND created_at = ?",
+      [req.auth.accountId, lote],
+    );
+    await writeAudit(req, { action: 'extrato.desfazer', resource: 'transacoes_financeiras', details: { lote, removidas: result.affectedRows } });
+    return res.json({ data: { removidas: result.affectedRows } });
+  } catch (error) {
+    return res.status(500).json({ error: { message: error.message } });
+  }
+});
+
 app.post('/api/financeiro/contas-pagar/materializar', requireAuth, requireAdmin, async (req, res) => {
   const conn = await pool.getConnection();
   try {
