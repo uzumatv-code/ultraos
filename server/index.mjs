@@ -25,6 +25,7 @@ import { createPortal } from './portal.mjs';
 import { createLoja } from './loja.mjs';
 import { createRecomendados } from './recomendados.mjs';
 import { createMercadoLivreAuth } from './mercadolivre-auth.mjs';
+import { PUBLIC_UPLOAD_HEADERS, isPrivateUploadPath, resolveStoragePath } from './uploads-core.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -237,9 +238,8 @@ app.use(cors({
 }));
 // rawBody: o portal do cliente confere a assinatura HMAC sobre o corpo exato enviado pelo site.
 app.use(express.json({ limit: '10mb', verify: (req, _res, buf) => { if (req.url.startsWith('/api/portal/') || req.url.startsWith('/api/loja/')) req.rawBody = buf; } }));
-app.use('/uploads/certificados', (_req, res) => res.status(404).end());
-app.use('/uploads/privado', (_req, res) => res.status(404).end());
-app.use('/uploads', express.static(uploadsDir));
+app.use('/uploads', (req, res, next) => (isPrivateUploadPath(req.path) ? res.status(404).end() : next()));
+app.use('/uploads', express.static(uploadsDir, { setHeaders: (res) => res.set(PUBLIC_UPLOAD_HEADERS) }));
 
 app.get('/api/health', (_req, res) => {
   res.json({
@@ -325,19 +325,6 @@ function decryptSecret(value) {
   const decipher = crypto.createDecipheriv('aes-256-gcm', encryptionKey(), iv);
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
-}
-
-function resolveUploadPath(bucket, filePath) {
-  const safeBucket = String(bucket || '').replace(/[^a-zA-Z0-9_-]/g, '');
-  const cleanPath = String(filePath || '').replace(/^[/\\]+/, '');
-  if (!safeBucket || !cleanPath || cleanPath.includes('\0')) return null;
-
-  const bucketDir = path.resolve(uploadsDir, safeBucket);
-  const target = path.resolve(bucketDir, cleanPath);
-  if (target !== bucketDir && target.startsWith(`${bucketDir}${path.sep}`)) {
-    return { target, path: cleanPath.split(path.sep).join('/') };
-  }
-  return null;
 }
 
 async function getNextOrderNumber(userId) {
@@ -2713,8 +2700,9 @@ app.post('/api/rpc/get_next_rps_number', requireAuth, requireAdmin, async (req, 
 
 app.post('/api/storage/:bucket/upload', requireAuth, requireAdmin, express.raw({ type: '*/*', limit: '8mb' }), async (req, res) => {
   try {
-    const upload = resolveUploadPath(req.params.bucket, req.query.path);
+    const upload = resolveStoragePath({ uploadsDir, bucket: req.params.bucket, filePath: req.query.path, ownerIds: [req.auth.accountId, req.auth.userId] });
     if (!upload) return res.status(400).json({ error: { message: 'Caminho invalido' } });
+    if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: { message: 'Arquivo invalido' } });
     fs.mkdirSync(path.dirname(upload.target), { recursive: true });
     fs.writeFileSync(upload.target, req.body);
     res.json({ data: { path: upload.path }, error: null });
@@ -2726,7 +2714,7 @@ app.post('/api/storage/:bucket/upload', requireAuth, requireAdmin, express.raw({
 app.delete('/api/storage/:bucket', requireAuth, requireAdmin, async (req, res) => {
   const paths = Array.isArray(req.body?.paths) ? req.body.paths : [];
   for (const item of paths) {
-    const upload = resolveUploadPath(req.params.bucket, item);
+    const upload = resolveStoragePath({ uploadsDir, bucket: req.params.bucket, filePath: item, ownerIds: [req.auth.accountId, req.auth.userId] });
     if (!upload) continue;
     if (fs.existsSync(upload.target)) fs.rmSync(upload.target, { force: true });
   }
@@ -6404,6 +6392,7 @@ app.post('/api/financeiro/extrato/analisar', requireAuth, requireAdmin, async (r
 
 app.post('/api/financeiro/extrato/importar', requireAuth, requireAdmin, async (req, res) => {
   const conn = await pool.getConnection();
+  let lockName = null;
   try {
     const userId = req.auth.accountId;
     const input = Array.isArray(req.body?.linhas) ? req.body.linhas.slice(0, STATEMENT_MAX_LINES) : [];
@@ -6420,6 +6409,12 @@ app.post('/api/financeiro/extrato/importar', requireAuth, requireAdmin, async (r
       .filter((line) => line.chave && /^\d{4}-\d{2}-\d{2}$/.test(line.data) && line.valor > 0 && line.tipo && line.descricao);
     if (!rows.length) return res.status(400).json({ error: { message: 'Nenhuma linha válida para importar.' } });
     if (!(await hasColumn('transacoes_financeiras', 'id_externo'))) await ensureStatementSchema();
+
+    // Uma importação por conta de cada vez: sem isso, dois envios simultâneos (clique duplo)
+    // passariam juntos pela checagem abaixo e gravariam o extrato em dobro.
+    const [[lock]] = await conn.query('SELECT GET_LOCK(?, 30) AS obtido', [`extrato:${userId}`]);
+    if (Number(lock?.obtido) !== 1) return res.status(409).json({ error: { message: 'Já existe uma importação em andamento. Aguarde e tente de novo.' } });
+    lockName = `extrato:${userId}`;
 
     const already = await existingExternalIds(userId, rows.map((line) => line.chave));
     const [ownCategories] = await pool.query('SELECT id, tipo FROM categorias_financeiras WHERE user_id = ?', [userId]);
@@ -6457,6 +6452,7 @@ app.post('/api/financeiro/extrato/importar', requireAuth, requireAdmin, async (r
     await conn.rollback().catch(() => {});
     return res.status(500).json({ error: { message: error.message } });
   } finally {
+    if (lockName) await conn.query('SELECT RELEASE_LOCK(?)', [lockName]).catch(() => {});
     conn.release();
   }
 });
@@ -7506,7 +7502,15 @@ app.post('/api/ia/chat', requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-app.post('/api/financeiro/ia/webhook', handleFinancialAiWebhook);
+// O telefone vem do corpo da requisição, então sem o segredo qualquer um se passaria por um número autorizado.
+function requireWebhookSecret(req, res, next) {
+  if (!safeSecretMatch(req.get('x-webhook-secret'), EVOLUTION_WEBHOOK_SECRET)) {
+    return res.status(401).json({ error: { message: 'Webhook não autorizado' } });
+  }
+  next();
+}
+
+app.post('/api/financeiro/ia/webhook', requireWebhookSecret, handleFinancialAiWebhook);
 app.post('/api/webhooks/evolution/:secret', handleEvolutionWebhook);
 
 let whatsappReconciliationRunning = false;
