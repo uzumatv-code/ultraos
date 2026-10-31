@@ -1,6 +1,44 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { installmentNote, parseQuickExpense, inferExpenseCategory, detectAgentCommand, formatBRL } from './finance-agent.mjs';
+import { createFinanceAgent, installmentNote, parseMoneyQuestion, parseQuickExpense, inferExpenseCategory, detectAgentCommand, formatBRL } from './finance-agent.mjs';
+
+const HOJE = '2026-10-30';
+
+test('entende perguntas de entradas e gastos sem depender do modelo', () => {
+  assert.deepEqual(parseMoneyQuestion('Quanto entrou no dia?', HOJE), { consulta: 'entradas', periodo: 'hoje' });
+  assert.deepEqual(parseMoneyQuestion('veja quanto entrou hoje', HOJE), { consulta: 'entradas', periodo: 'hoje' });
+  assert.deepEqual(parseMoneyQuestion('quanto entrou na semana', HOJE), { consulta: 'entradas', periodo: 'semana' });
+  assert.deepEqual(parseMoneyQuestion('quanto recebi ontem', HOJE), { consulta: 'entradas', periodo: 'ontem' });
+  assert.deepEqual(parseMoneyQuestion('quanto gastei de lanche', HOJE), { consulta: 'gastos', periodo: 'mes', busca: 'lanche' });
+  assert.deepEqual(parseMoneyQuestion('Quanto gastei em combustível esse mês?', HOJE), { consulta: 'gastos', periodo: 'mes', busca: 'combustivel' });
+  assert.deepEqual(parseMoneyQuestion('quanto gastei de lanche hoje', HOJE), { consulta: 'gastos', periodo: 'hoje', busca: 'lanche' });
+  assert.deepEqual(parseMoneyQuestion('quanto gastei hoje', HOJE), { consulta: 'gastos', periodo: 'hoje' });
+  assert.deepEqual(parseMoneyQuestion('quanto entrou dia 20', HOJE), { consulta: 'entradas', periodo: 'personalizado', de: '2026-10-20' });
+  assert.equal(parseMoneyQuestion('quanto gastei dia 31', HOJE), null, 'setembro não tem dia 31: o modelo pergunta');
+});
+
+test('deixa para o modelo o que não é uma pergunta simples de caixa', () => {
+  assert.equal(parseMoneyQuestion('quanto entrou e quanto gastei hoje', HOJE), null);
+  assert.equal(parseMoneyQuestion('quanto o Oto está devendo', HOJE), null);
+  assert.equal(parseMoneyQuestion('quanto tenho de contas atrasadas', HOJE), null);
+  assert.equal(parseMoneyQuestion('gastei 50 no mercado', HOJE), null);
+  assert.equal(parseMoneyQuestion('quanto recebi do João na OS 10', HOJE), null);
+});
+
+test('responde a pergunta de gasto por item com o total filtrado', async () => {
+  const pool = { query: async () => [[
+    { descricao: 'Lanche na padaria', valor: '12.50', dia: '2026-10-29', categoria: 'Alimentação' },
+    { descricao: 'Pastel', valor: '8', dia: '2026-10-28', categoria: 'Alimentação' },
+    { descricao: 'Almoço executivo', valor: '35', dia: '2026-10-28', categoria: 'Alimentação' },
+    { descricao: 'Imposto municipal', valor: '90', dia: '2026-10-28', categoria: 'Impostos e taxas' },
+  ]] };
+  const agent = createFinanceAgent({ pool, todayDate: () => HOJE });
+  const out = await agent.handleMessage({ authorized: { user_id: 'u' }, phone: '1', message: 'quanto gastei de lanche?', canWrite: true });
+  assert.equal(out.status, 'respondido');
+  assert.match(out.reply, /R\$\s?20,50/);
+  assert.match(out.reply, /2 lançamentos/);
+  assert.doesNotMatch(out.reply, /Almoço|Imposto/);
+});
 
 test('reconhece lançamentos rápidos em texto livre', () => {
   const coffee = parseQuickExpense('comprei um café 10,00');
@@ -29,7 +67,7 @@ test('detecta comandos do agente', () => {
   assert.equal(detectAgentCommand('Oi'), null);
   assert.equal(detectAgentCommand('quais contas atrasadas?'), 'atrasadas');
   assert.equal(detectAgentCommand('o que vence essa semana'), 'proximas');
-  assert.equal(detectAgentCommand('quanto gastei hoje'), 'gastos_hoje');
+  assert.equal(detectAgentCommand('gastos de hoje'), 'gastos_hoje');
   assert.equal(detectAgentCommand('gastos do mês'), 'gastos_mes');
   assert.equal(detectAgentCommand('resumo'), 'resumo');
 });

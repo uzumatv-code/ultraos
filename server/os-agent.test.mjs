@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createOsTools, normalize, rankOrders, similarity } from './os-agent.mjs';
+import { createOsTools, normalize, OS_WRITE_TOOLS, planOrderPayment, rankOrders, similarity } from './os-agent.mjs';
 import { DEFAULT_TEMPLATES, renderTemplate } from './message-templates.mjs';
 
 const orders = [
@@ -28,6 +28,45 @@ test('acha a OS certa pelo cliente digitado errado e pelo equipamento', () => {
   assert.equal(narrowed[0].row.numero, 188);
 
   assert.equal(rankOrders(orders, { cliente: 'filadelfo', equipamento: 'viola' })[0].row.numero, 150);
+});
+
+test('acha a OS da Ana Paula escrita sem maiúscula', () => {
+  const ranked = rankOrders([...orders, { numero: 201, cliente_nome: 'Ana Paula Souza', instrumento: 'Violão' }], { cliente: 'ana paula' });
+  assert.equal(ranked[0].row.numero, 201);
+});
+
+test('"vai pagar na retirada" reorganiza só o saldo e mantém a forma combinada', () => {
+  const pagamento = { momento: 'retirada', forma: null, data: null };
+  assert.deepEqual(planOrderPayment({ total: 300, recebido: 100, pendentes: [{ forma_pagamento: 'pix', momento: 'data' }, { forma_pagamento: 'pix', momento: 'data' }], pagamento }), [
+    { valor: 200, forma_pagamento: 'pix', momento: 'retirada', data_vencimento: null, observacoes: null },
+  ]);
+  assert.equal(planOrderPayment({ total: 300, recebido: 0, pendentes: [], pagamento })[0].forma_pagamento, 'a_definir');
+});
+
+test('combinado de pagamento recusa o que não faz sentido', () => {
+  assert.throws(() => planOrderPayment({ total: 100, recebido: 100, pendentes: [], pagamento: { momento: 'retirada' } }), /saldo a receber/);
+  assert.throws(() => planOrderPayment({ total: 50, recebido: 100, pendentes: [], valorMudou: true }), /menor que o já recebido/);
+  assert.throws(() => planOrderPayment({ total: 100, recebido: 0, pendentes: [], pagamento: { momento: 'data' } }), /data combinada/);
+  assert.throws(() => planOrderPayment({ total: 100, recebido: 0, pendentes: [{}, {}], valorMudou: true }), /2 condições/);
+  assert.equal(planOrderPayment({ total: 100, recebido: 0, pendentes: [{}] }), null, 'sem mudança de valor nem combinado, nada muda');
+});
+
+test('novo valor acompanha a condição em aberto', () => {
+  const [condition] = planOrderPayment({ total: 450, recebido: 50, pendentes: [{ forma_pagamento: 'credito', momento: 'retirada' }], valorMudou: true });
+  assert.equal(condition.valor, 400);
+  assert.equal(condition.forma_pagamento, 'credito');
+  assert.equal(condition.momento, 'retirada');
+});
+
+test('editar_os exige permissão de escrita e repassa a alteração', async () => {
+  assert.ok(OS_WRITE_TOOLS.has('editar_os'));
+  const edits = [];
+  const tools = createOsTools({ pool: { query: async () => [[]] }, editOrder: async (...args) => { edits.push(args); return { ok: true, numero: 201 }; } });
+  const actions = [];
+  const out = await tools.run('editar_os', { os_id: 'o1', pagamento_momento: 'retirada' }, { userId: 'u', actions });
+  assert.equal(out.numero, 201);
+  assert.deepEqual(edits[0].slice(0, 2), ['u', 'o1']);
+  assert.equal(actions[0].type, 'os_editada');
 });
 
 test('modelos de mensagem do servidor renderizam com dados da OS e sem variáveis soltas', () => {

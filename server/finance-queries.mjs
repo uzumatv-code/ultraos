@@ -26,6 +26,36 @@ const addDays = (value, days) => {
 };
 const round2 = (value) => Number(Number(value || 0).toFixed(2));
 
+/**
+ * Valor da coluna `data` de um lançamento feito agora. O caixa é lido por LEFT(data,10): com o
+ * horário em UTC, tudo que entra depois das 21h em Brasília cairia no dia seguinte.
+ */
+export const cashStamp = (today) => `${today}T12:00:00.000Z`;
+
+const plainText = (value) => String(value ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+
+// Como as pessoas falam de um gasto → começos de palavra que aparecem nas descrições lançadas.
+const EXPENSE_TERMS = [
+  { termos: ['lanche', 'lanches', 'lanchonete', 'cafe', 'cafezinho'], palavras: ['lanch', 'cafe', 'padaria', 'salgado', 'pastel', 'coxinha', 'hamburg', 'pizza', 'sorvete', 'acai', 'ifood', 'refrigerante', 'suco'] },
+  { termos: ['almoco', 'janta', 'jantar', 'refeicao', 'refeicoes', 'comida', 'alimentacao'], palavras: ['almoc', 'almocei', 'jant', 'refeic', 'restaurante', 'marmita', 'comida', 'ifood', 'lanch', 'pizza'] },
+  { termos: ['combustivel', 'gasolina', 'etanol', 'alcool', 'diesel', 'posto', 'abastecimento', 'abastecer'], palavras: ['combust', 'gasolin', 'etanol', 'alcool', 'diesel', 'posto', 'abastec', 'shell', 'ipiranga', 'petrobras'] },
+  { termos: ['transporte', 'uber', 'taxi', 'corrida'], palavras: ['uber', '99', 'taxi', 'onibus', 'metro', 'passagem', 'estacionamento', 'pedagio'] },
+  { termos: ['mercado', 'supermercado', 'compras'], palavras: ['mercado', 'supermercado', 'atacad', 'hortifruti', 'acougue', 'feira'] },
+];
+
+/**
+ * Um gasto combina com o termo pedido pelo nome da categoria, pela descrição ou por um sinônimo.
+ * "Lanche" não é categoria (fica em Alimentação), então a busca precisa olhar a descrição.
+ */
+export function expenseMatches(row, termo) {
+  const wanted = plainText(termo);
+  if (!wanted) return true;
+  if (` ${plainText(row.categoria)}`.includes(` ${wanted}`)) return true;
+  const description = ` ${plainText(row.descricao)}`;
+  const group = EXPENSE_TERMS.find((item) => item.termos.includes(wanted));
+  return [wanted, ...(group?.palavras ?? [])].some((word) => description.includes(` ${word}`));
+}
+
 /** Devolve { de, ate (inclusive), rotulo } para um período nomeado. */
 export function resolvePeriod(periodo, today, de, ate) {
   const [y, m] = today.split('-').map(Number);
@@ -45,7 +75,7 @@ export function resolvePeriod(periodo, today, de, ate) {
     case 'personalizado': {
       const from = String(de || '').slice(0, 10);
       const to = String(ate || de || '').slice(0, 10);
-      if (/^\d{4}-\d{2}-\d{2}$/.test(from) && /^\d{4}-\d{2}-\d{2}$/.test(to)) return { de: from, ate: to, rotulo: `${from} a ${to}` };
+      if (/^\d{4}-\d{2}-\d{2}$/.test(from) && /^\d{4}-\d{2}-\d{2}$/.test(to)) return { de: from, ate: to, rotulo: from === to ? `dia ${from.slice(8, 10)}/${from.slice(5, 7)}` : `${from} a ${to}` };
       return { de: today, ate: today, rotulo: 'hoje' };
     }
     default: return { de: today, ate: today, rotulo: 'hoje' };
@@ -97,7 +127,7 @@ export const FINANCE_QUERY_TOOL = {
     'Consulta números do caixa. SEMPRE use esta ferramenta (nunca estime) para perguntas de dinheiro. ' +
     'consulta: ' +
     '"entradas" = quanto ENTROU (dinheiro recebido: pagamentos de OS + entradas lançadas à mão/por voz), com lista, total por origem e por forma; também traz as OS ABERTAS no período e já pagas. Serve para "quanto entrou hoje/no mês", "quanto faturei", "quanto recebi". ' +
-    '"gastos" = tudo que SAIU (despesas pagas), com lista completa e total por categoria; "quanto gastei", "liste meus gastos". ' +
+    '"gastos" = tudo que SAIU (despesas pagas), com lista completa e total por categoria; "quanto gastei", "liste meus gastos". Para um item ("quanto gastei de lanche", "em combustível") preencha busca; sem período citado, o padrão é o mês atual. ' +
     '"contas_pagar" = contas a pagar; status abertas (a pagar), atrasadas, pagas (quitadas) ou todas; filtra pelo período do VENCIMENTO (use periodo "tudo" para ver todas em aberto). ' +
     '"a_receber" = quem está devendo / quanto falta receber, agrupado por cliente e OS (não depende de período). ' +
     '"os_abertas_pagas" = OS criadas no período e o quanto já foi pago de cada (status financeiro pago/parcial/pendente). ' +
@@ -106,11 +136,12 @@ export const FINANCE_QUERY_TOOL = {
     type: 'object',
     properties: {
       consulta: { type: 'string', enum: FINANCE_QUERIES },
-      periodo: { type: 'string', enum: FINANCE_PERIODS, description: 'Padrão: hoje (mes para balanco). Use personalizado com de/ate para datas específicas.' },
+      periodo: { type: 'string', enum: FINANCE_PERIODS, description: 'Padrão: hoje (mes para balanco e para gastos com busca). Use personalizado com de/ate para datas específicas.' },
       de: { type: 'string', description: 'YYYY-MM-DD (periodo personalizado)' },
       ate: { type: 'string', description: 'YYYY-MM-DD inclusive (periodo personalizado)' },
       status: { type: 'string', enum: ['abertas', 'atrasadas', 'pagas', 'todas'], description: 'Só para contas_pagar; padrão abertas' },
       cliente: { type: 'string', description: 'Filtra a_receber/os_abertas_pagas por parte do nome do cliente' },
+      busca: { type: 'string', description: 'Gastos de um item ou assunto, como a pessoa falou (lanche, combustível, cordas). Procura na descrição e na categoria, com sinônimos.' },
       categoria: { type: 'string', description: 'Filtra gastos por categoria (parcial)' },
       limite: { type: 'integer', description: 'Máximo de itens nas listas (padrão 40, máx. 100)' },
     },
@@ -194,22 +225,22 @@ export function createFinanceQueries({ pool, todayDate }) {
   }
 
   async function gastos(userId, period, args) {
-    const params = [userId, period.de, period.ate];
-    let filter = '';
-    if (args.categoria) { filter = ' AND LOWER(cf.nome) LIKE ?'; params.push(`%${String(args.categoria).toLowerCase()}%`); }
-    const [rows] = await pool.query(
+    const [allRows] = await pool.query(
       `SELECT t.descricao, t.valor, LEFT(t.data,10) AS dia, t.forma_pagamento, COALESCE(cf.nome,'Sem categoria') AS categoria
          FROM transacoes_financeiras t
          LEFT JOIN categorias_financeiras cf ON cf.id = t.categoria_id
-        WHERE t.user_id = ? AND t.tipo = 'despesa' AND LEFT(t.data,10) >= ? AND LEFT(t.data,10) <= ?${filter}
+        WHERE t.user_id = ? AND t.tipo = 'despesa' AND LEFT(t.data,10) >= ? AND LEFT(t.data,10) <= ?
         ORDER BY t.data DESC`,
-      params,
+      [userId, period.de, period.ate],
     );
+    const termo = args.busca || args.categoria;
+    const rows = termo ? allRows.filter((row) => expenseMatches(row, termo)) : allRows;
     const porCategoria = {};
     for (const row of rows) porCategoria[row.categoria] = round2((porCategoria[row.categoria] || 0) + Number(row.valor || 0));
     const limit = clampLimit(args.limite);
     return {
       periodo: period,
+      ...(termo ? { busca: termo } : {}),
       total_gasto_reais: round2(rows.reduce((acc, row) => acc + Number(row.valor || 0), 0)),
       lancamentos: rows.length,
       por_categoria: Object.entries(porCategoria).sort((a, b) => b[1] - a[1]).map(([categoria, total]) => ({ categoria, total_reais: total })),
@@ -327,7 +358,8 @@ export function createFinanceQueries({ pool, todayDate }) {
 
   async function run(userId, args = {}) {
     const consulta = args.consulta;
-    const defaultPeriod = consulta === 'balanco' ? 'mes' : consulta === 'contas_pagar' ? 'tudo' : 'hoje';
+    const itemSearch = consulta === 'gastos' && (args.busca || args.categoria);
+    const defaultPeriod = consulta === 'balanco' || itemSearch ? 'mes' : consulta === 'contas_pagar' ? 'tudo' : 'hoje';
     const period = resolvePeriod(args.periodo || (args.de ? 'personalizado' : defaultPeriod), todayDate(), args.de, args.ate);
     switch (consulta) {
       case 'entradas': return entradas(userId, period, args);

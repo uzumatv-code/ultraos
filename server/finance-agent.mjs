@@ -12,6 +12,8 @@
  * são exportadas à parte para serem testadas sem banco.
  */
 
+import { cashStamp, createFinanceQueries } from './finance-queries.mjs';
+
 const CATEGORY_RULES = [
   { nome: 'Alimentação', cor: '#F59E0B', re: /caf[eé]|almo[cç]|jant|lanch|padaria|pizza|restaurante|ifood|marmita|comida|refei[cç][aã]o|sorvete|hamb[uú]rguer|pastel|salgado|bar\b|cerveja|a[cç]a[ií]/ },
   { nome: 'Mercado', cor: '#10B981', re: /mercado|supermercado|atacad[aã]o|feira|hortifruti|a[cç]ougue/ },
@@ -98,6 +100,51 @@ function normalizeText(text) {
   return String(text || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
 }
 
+const QUESTION_WORDS = new Set([
+  'quanto', 'quantos', 'total', 'eu', 'nos', 'a', 'o', 'as', 'os', 'de', 'do', 'da', 'dos', 'das', 'no', 'na', 'nas', 'em', 'com', 'por', 'pra', 'para', 'que', 'ja', 'foi', 'ate', 'agora',
+  'meu', 'meus', 'minha', 'minhas', 'veja', 'ver', 've', 'me', 'diga', 'fala', 'mostra', 'mostre', 'favor', 'esse', 'este', 'essa', 'esta', 'nesse', 'neste', 'nessa', 'nesta', 'dinheiro', 'caixa',
+]);
+const SPENT_WORDS = /\b(gastei|gastamos|gasto|gastos|paguei|pagamos|despesas?|saiu)\b/;
+const INCOME_WORDS = /\b(entrou|entraram|entradas?|recebi|recebemos|faturei|faturamos|faturamento)\b/;
+const OTHER_TOPICS = /\b(contas?|boletos?|os|ordem|ordens|cliente|clientes|deve|devendo|receber|saldo|sobrou|lucro|balanco|parcelas?|e quanto)\b/;
+
+/** "quanto entrou no dia", "quanto gastei de lanche", "quanto gastei em combustível esse mês" */
+export function parseMoneyQuestion(message, today) {
+  let text = normalizeText(message).replace(/[?!.,;:]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!text || text.split(' ').length > 14 || !/\b(quanto|quantos|total)\b/.test(text) || OTHER_TOPICS.test(text)) return null;
+  const spent = SPENT_WORDS.test(text);
+  const income = INCOME_WORDS.test(text);
+  if (spent === income) return null;
+
+  let periodo = null;
+  let de = null;
+  const specificDay = text.match(/\bdia (\d{1,2})(?:\/(\d{1,2}))?\b/);
+  if (specificDay) {
+    const [year, month, currentDay] = today.split('-').map(Number);
+    const wantedDay = Number(specificDay[1]);
+    let wantedMonth = Number(specificDay[2]) || month;
+    let wantedYear = year;
+    if (!specificDay[2] && wantedDay > currentDay) wantedMonth -= 1;
+    if (wantedMonth < 1) { wantedMonth = 12; wantedYear -= 1; }
+    if (new Date(Date.UTC(wantedYear, wantedMonth - 1, wantedDay)).getUTCDate() !== wantedDay) return null;
+    periodo = 'personalizado';
+    de = `${wantedYear}-${String(wantedMonth).padStart(2, '0')}-${String(wantedDay).padStart(2, '0')}`;
+    text = text.replace(specificDay[0], ' ');
+  } else {
+    const named = [
+      [/\bmes passado\b/, 'mes_passado'], [/\bultimo mes\b/, 'mes_passado'], [/\bontem\b/, 'ontem'], [/\bdia de hoje\b/, 'hoje'], [/\bhoje\b/, 'hoje'],
+      [/\bsemana\b/, 'semana'], [/\bmes\b/, 'mes'], [/\bano\b/, 'ano'], [/\b(no|do|neste|nesse) dia\b/, 'hoje'],
+    ].find(([re]) => re.test(text));
+    if (named) { periodo = named[1]; text = text.replace(named[0], ' '); }
+  }
+
+  const leftovers = text.replace(spent ? SPENT_WORDS : INCOME_WORDS, ' ').split(' ').filter((word) => word && !QUESTION_WORDS.has(word));
+  if (income) return leftovers.length ? null : { consulta: 'entradas', periodo: periodo || 'hoje', ...(de ? { de } : {}) };
+  if (leftovers.length > 3) return null;
+  const busca = leftovers.join(' ');
+  return { consulta: 'gastos', periodo: periodo || (busca ? 'mes' : 'hoje'), ...(de ? { de } : {}), ...(busca ? { busca } : {}) };
+}
+
 export function detectAgentCommand(message) {
   const text = normalizeText(message);
   if (!text) return null;
@@ -106,8 +153,8 @@ export function detectAgentCommand(message) {
   if (/(resumo|panorama|situacao).*(financ|hoje|dia|geral)|^resumo$|como estamos|como estao as contas/.test(text)) return 'resumo';
   if (/(contas?|boletos?|pagamentos?).*(atrasad|vencid|em atraso)|o que (esta|ta) atrasado|atrasadas?$/.test(text)) return 'atrasadas';
   if (/(contas?|boletos?|vencimentos?).*(semana|proximos? dias|proximas|a vencer|vao vencer)|proximas contas|o que vence/.test(text)) return 'proximas';
-  if (/(quanto|total).*(gastei|gasto|gastos|despesas?).*(hoje|dia)|gastos? de hoje|gastei hoje/.test(text)) return 'gastos_hoje';
-  if (/(quanto|total).*(gastei|gasto|gastos|despesas?).*(mes)|gastos? do mes|despesas? do mes|gastei no mes/.test(text)) return 'gastos_mes';
+  if (/^gastos? de hoje$/.test(text)) return 'gastos_hoje';
+  if (/^(gastos?|despesas?) do mes$/.test(text)) return 'gastos_mes';
   // Pedidos com outro período (hoje, ontem, semana…) ou sobre entradas vão para a IA, que consulta o período certo.
   if (/(saldo|caixa|sobrou|lucro)/.test(text) && !/hoje|ontem|semana|ano|passado|dia/.test(text)) return 'saldo_mes';
   return null;
@@ -120,7 +167,7 @@ const AJUDA = [
   '↩️ *Desfazer* — responda _desfazer_ logo após um lançamento',
   '📅 *Contas a pagar* — _contas atrasadas_ · _o que vence essa semana_ · _contas de hoje_',
   '✅ *Dar baixa* — _paguei a conta de luz_',
-  '📊 *Resumos* — _resumo_ · _quanto gastei hoje_ · _gastos do mês_ · _saldo do mês_',
+  '📊 *Resumos* — _resumo_ · _quanto entrou hoje_ · _quanto gastei de lanche_ · _saldo do mês_',
   '🧾 *Ordens de serviço* — _quais OS tenho hoje?_ · _OS 125 foi paga em pix_',
   '',
   'Também aviso você todo dia sobre contas vencendo e atrasadas.',
@@ -136,6 +183,7 @@ export function installmentNote(account) {
 }
 
 export function createFinanceAgent({ pool, uuid, now, todayDate, money, timezone, sendText, ensureCategory, openAiChat, materializeRecurrences, log = console }) {
+  const financeQueries = createFinanceQueries({ pool, todayDate });
   const ymNow = () => todayDate().slice(0, 7);
   const monthBounds = () => {
     const [y, m] = ymNow().split('-').map(Number);
@@ -303,7 +351,7 @@ export function createFinanceAgent({ pool, uuid, now, todayDate, money, timezone
       `INSERT INTO transacoes_financeiras
        (id, user_id, descricao, valor, tipo, data, categoria_id, forma_pagamento, origem, created_at, updated_at)
        VALUES (?, ?, ?, ?, 'despesa', ?, ?, ?, 'whatsapp_ia', ?, ?)`,
-      [id, userId, description, money(value), now(), categoriaId, formaPagamento || null, now(), now()],
+      [id, userId, description, money(value), cashStamp(todayDate()), categoriaId, formaPagamento || null, now(), now()],
     );
     return { id, category: cat };
   }
@@ -315,7 +363,7 @@ export function createFinanceAgent({ pool, uuid, now, todayDate, money, timezone
       `INSERT INTO transacoes_financeiras
        (id, user_id, descricao, valor, tipo, data, categoria_id, forma_pagamento, origem, created_at, updated_at)
        VALUES (?, ?, ?, ?, 'receita', ?, ?, ?, 'whatsapp_ia', ?, ?)`,
-      [id, userId, description, money(value), now(), categoriaId, formaPagamento || null, now(), now()],
+      [id, userId, description, money(value), cashStamp(todayDate()), categoriaId, formaPagamento || null, now(), now()],
     );
     return { id, description, value: money(value) };
   }
@@ -364,6 +412,31 @@ export function createFinanceAgent({ pool, uuid, now, todayDate, money, timezone
     return { account: tied[0].row, ambiguous: tied.length > 1 ? tied.slice(0, 4).map((i) => i.row) : null };
   }
 
+  async function answerMoneyQuestion(userId, question) {
+    const data = await financeQueries.run(userId, question);
+    const when = data.periodo.rotulo;
+    const list = (items) => {
+      const lines = items.slice(0, 8).map((item) => `• ${item.descricao} — *${formatBRL(item.valor)}* (${brDate(item.dia)})`);
+      if (items.length > 8) lines.push(`… e mais ${items.length - 8}`);
+      return lines.join('\n');
+    };
+    if (question.consulta === 'entradas') {
+      if (!data.lancamentos) return `💰 Nada entrou ${when}.`;
+      return [
+        `💰 Entrou *${formatBRL(data.total_entrou_reais)}* ${when} (${data.lancamentos} lançamento${data.lancamentos === 1 ? '' : 's'})`,
+        `OS: ${formatBRL(data.de_pagamentos_de_os.total_reais)} · Avulsas: ${formatBRL(data.entradas_avulsas.total_reais)}`,
+        list(data.lista),
+      ].join('\n');
+    }
+    const label = data.busca ? ` com *${data.busca}*` : '';
+    if (!data.lancamentos) {
+      return data.busca
+        ? `🔎 Não achei gastos com *${data.busca}* em ${when}. Se foi lançado com outro nome, me diga qual.`
+        : `💸 Nenhum gasto lançado ${when}.`;
+    }
+    return [`💸 Você gastou *${formatBRL(data.total_gasto_reais)}*${label} (${when}) em ${data.lancamentos} lançamento${data.lancamentos === 1 ? '' : 's'}`, list(data.lista)].join('\n');
+  }
+
   /* -------------------------------------------------- mensagem recebida */
 
   /**
@@ -372,6 +445,9 @@ export function createFinanceAgent({ pool, uuid, now, todayDate, money, timezone
    */
   async function handleMessage({ authorized, phone, message, payAccountPayable, canWrite }) {
     const userId = authorized.user_id;
+    const question = parseMoneyQuestion(message, todayDate());
+    if (question) return { reply: await answerMoneyQuestion(userId, question), status: 'respondido', intent: `consulta_${question.consulta}`, entities: question };
+
     const command = detectAgentCommand(message);
 
     if (command === 'ajuda') return { reply: AJUDA, status: 'respondido', intent: 'ajuda' };

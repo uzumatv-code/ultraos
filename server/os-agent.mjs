@@ -73,6 +73,32 @@ export function rankOrders(rows, { cliente, equipamento }) {
     .sort((a, b) => b.score - a.score || Number(b.row.numero) - Number(a.row.numero));
 }
 
+/**
+ * Novo combinado para o saldo da OS. Devolve as condições a gravar, ou null se nada muda.
+ * Só reorganiza o que falta receber: nunca registra pagamento, e o que já entrou fica como está.
+ */
+export function planOrderPayment({ total, recebido, pendentes, pagamento, valorMudou }) {
+  const saldo = Number((Number(total || 0) - Number(recebido || 0)).toFixed(2));
+  if (saldo < 0) throw new Error(`O valor novo é menor que o já recebido (R$ ${Number(recebido).toFixed(2)}).`);
+  if (saldo === 0) {
+    if (pagamento) throw new Error('Esta OS não tem saldo a receber; informe o valor ou confira se já foi quitada.');
+    return valorMudou ? [] : null;
+  }
+  if (!pagamento && !valorMudou) return null;
+  if (!pagamento && pendentes.length > 1) throw new Error(`Esta OS tem ${pendentes.length} condições de pagamento em aberto. Diga como fica o pagamento do novo valor.`);
+  const atual = pendentes[0];
+  const momento = pagamento?.momento || (atual && atual.momento !== 'agora' ? atual.momento : 'retirada');
+  const vencimento = pagamento?.data || (momento === 'data' ? String(atual?.data_vencimento || '').slice(0, 10) : '');
+  if (momento === 'data' && !vencimento) throw new Error('Informe a data combinada para o pagamento.');
+  return [{
+    valor: saldo,
+    forma_pagamento: pagamento?.forma || atual?.forma_pagamento || 'a_definir',
+    momento,
+    data_vencimento: momento === 'data' ? vencimento : null,
+    observacoes: atual?.observacoes || null,
+  }];
+}
+
 /* ------------------------------------------------------------------ esquemas das ferramentas */
 
 const STATUS_ENUM = ['em_andamento', 'atraso', 'concluido', 'pendente'];
@@ -115,6 +141,31 @@ export const OS_TOOLS = [
       'Muda a situação de uma OS ABERTA. em_andamento = iniciar serviço (vai para a bancada); atraso = contratempo; concluido = finalizar (pronta); pendente = voltar para aguardando. ' +
       'Não envia mensagem ao cliente: para avisar use avisar_cliente_os.',
     parameters: { type: 'object', properties: { os_id: { type: 'string' }, status: { type: 'string', enum: STATUS_ENUM } }, required: ['os_id', 'status'] },
+  },
+  {
+    type: 'function',
+    name: 'editar_os',
+    description:
+      'Altera dados de uma OS: previsão de entrega, valor total, modelo, acessórios, problemas, serviços, observações e o COMBINADO de pagamento do saldo. ' +
+      '"Vai pagar na retirada/quando buscar" = pagamento_momento "retirada"; "vai pagar dia 10" = "data" com pagamento_data. ' +
+      'Isso não registra dinheiro recebido. Localize a OS com buscar_os antes. Envie só os campos que mudam. Em OS concluída só o combinado de pagamento pode mudar.',
+    parameters: {
+      type: 'object',
+      properties: {
+        os_id: { type: 'string' },
+        previsao: { type: 'string', description: 'YYYY-MM-DD' },
+        valor: { type: 'number', description: 'Novo valor total da OS' },
+        modelo: { type: 'string' },
+        acessorios: { type: 'string' },
+        problemas: { type: 'string' },
+        servicos: { type: 'string' },
+        observacoes: { type: 'string' },
+        pagamento_momento: { type: 'string', enum: ['retirada', 'data'] },
+        pagamento_forma: { type: 'string', enum: ['pix', 'dinheiro', 'credito', 'debito', 'boleto', 'a_definir'], description: 'Só se a pessoa disser' },
+        pagamento_data: { type: 'string', description: 'YYYY-MM-DD, obrigatória quando pagamento_momento = data' },
+      },
+      required: ['os_id'],
+    },
   },
   {
     type: 'function',
@@ -224,12 +275,12 @@ export const OS_TOOLS = [
   },
 ];
 
-export const OS_WRITE_TOOLS = new Set(['mudar_status_os', 'avisar_cliente_os', 'cancelar_os', 'cadastrar_cliente', 'criar_os', 'criar_orcamento', 'aprovar_orcamento', 'recusar_orcamento', 'transformar_os_em_orcamento']);
+export const OS_WRITE_TOOLS = new Set(['mudar_status_os', 'editar_os', 'avisar_cliente_os', 'cancelar_os', 'cadastrar_cliente', 'criar_os', 'criar_orcamento', 'aprovar_orcamento', 'recusar_orcamento', 'transformar_os_em_orcamento']);
 export const OS_TOOL_NAMES = new Set(OS_TOOLS.map((tool) => tool.name));
 
 /* ------------------------------------------------------------------ implementação */
 
-export function createOsTools({ pool, uuid, now, todayDate, money, syncReceivable, sendCustomerMessage, afterOrderCreated, validatePhone, createQuote, approveQuote, convertOrderToQuote }) {
+export function createOsTools({ pool, uuid, now, todayDate, money, syncReceivable, sendCustomerMessage, afterOrderCreated, validatePhone, editOrder, createQuote, approveQuote, convertOrderToQuote }) {
   const day = (value) => String(value || '').slice(0, 10);
 
   const ORDER_SELECT = `
@@ -540,6 +591,11 @@ export function createOsTools({ pool, uuid, now, todayDate, money, syncReceivabl
       case 'mudar_status_os': {
         const result = await changeStatus(ctx.userId, args.os_id, args.status);
         ctx.actions?.push({ type: 'os_status', id: args.os_id, status: args.status });
+        return result;
+      }
+      case 'editar_os': {
+        const result = await editOrder(ctx.userId, args.os_id, args);
+        ctx.actions?.push({ type: 'os_editada', id: args.os_id });
         return result;
       }
       case 'avisar_cliente_os': return notifyCustomer(ctx.userId, args.os_id, args.tipo, args.complemento);
