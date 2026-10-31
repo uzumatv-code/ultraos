@@ -89,6 +89,30 @@ test('encaminha as ferramentas da loja e bloqueia escrita sem permissão', async
   assert.match(fake.requests[3].input[0].output, /permissão/);
 });
 
+test('prompt e ferramentas cobrem gasto por item e edição de OS', async () => {
+  const prompt = buildSystemPrompt({ nome: 'Samuel', hojeIso: '2026-10-30', diaSemana: 'sexta-feira', timezone: 'America/Sao_Paulo', canWrite: true });
+  assert.match(prompt, /busca igual ao item/);
+  assert.match(prompt, /pagamento_momento "retirada"/);
+
+  const fake = await fakeOpenAi([
+    { id: 'r1', output: [{ type: 'function_call', call_id: 'c1', name: 'editar_os', arguments: JSON.stringify({ os_id: 'o1', pagamento_momento: 'retirada' }) }] },
+    { id: 'r2', output: [{ type: 'message', content: [{ type: 'output_text', text: 'OS #201 da Ana Paula: paga na retirada.' }] }] },
+  ]);
+  const calls = [];
+  const brain = createAgentBrain({
+    pool: { query: async () => [[]] }, now: () => '', todayDate: () => '2026-10-30', timezone: 'America/Sao_Paulo',
+    apiKey: 'k', model: 'gpt-test', baseUrl: fake.url, formatBRL: String, actions: { listRules: async () => [] },
+    osTools: { run: async (name, args) => { calls.push({ name, args }); return { ok: true }; } },
+  });
+  const out = await brain.converse({ authorized: { user_id: 'u' }, phone: '1', message: 'altere a OS da Ana paula ela vai pagar na retirada', canWrite: true });
+  fake.server.close();
+  assert.equal(out.reply, 'OS #201 da Ana Paula: paga na retirada.');
+  assert.equal(calls[0].name, 'editar_os');
+  const names = fake.requests[0].tools.map((tool) => tool.name);
+  assert.ok(names.includes('editar_os'));
+  assert.ok(!names.includes('consultar_gastos'), 'uma ferramenta só para gastos');
+});
+
 test('prompt explica o fluxo da loja', () => {
   const prompt = buildSystemPrompt({ nome: 'Samuel', hojeIso: '2026-10-01', diaSemana: 'quarta-feira', timezone: 'America/Sao_Paulo', canWrite: true });
   assert.match(prompt, /loja_cadastrar_produto/);

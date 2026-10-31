@@ -1,6 +1,29 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createFinanceQueries, resolvePeriod, resolveRange } from './finance-queries.mjs';
+import { cashStamp, createFinanceQueries, expenseMatches, resolvePeriod, resolveRange } from './finance-queries.mjs';
+
+test('lançamento feito à noite fica no dia local', () => {
+  assert.equal(cashStamp('2026-10-30').slice(0, 10), '2026-10-30');
+});
+
+test('gasto por item acha descrição, sinônimo e categoria', () => {
+  const posto = { descricao: 'Compra no débito · POSTO SHELL', categoria: 'Transporte' };
+  assert.ok(expenseMatches(posto, 'combustível'));
+  assert.ok(expenseMatches(posto, 'gasolina'));
+  assert.ok(expenseMatches(posto, 'transporte'));
+  assert.ok(expenseMatches({ descricao: 'Café da manhã', categoria: 'Alimentação' }, 'lanche'));
+  assert.equal(expenseMatches({ descricao: 'Imposto', categoria: 'Impostos e taxas' }, 'posto'), false, 'só casa no começo da palavra');
+  assert.equal(expenseMatches({ descricao: 'Almoço', categoria: 'Alimentação' }, 'combustivel'), false);
+});
+
+test('gastos com busca usam o mês quando não há período', async () => {
+  const calls = [];
+  const pool = { query: async (sql, params) => { calls.push(params); return [[{ descricao: 'Gasolina', valor: '100', categoria: 'Transporte' }, { descricao: 'Cordas', valor: '40', categoria: 'Material e peças' }]]; } };
+  const out = await createFinanceQueries({ pool, todayDate: () => '2026-10-30' }).run('u', { consulta: 'gastos', busca: 'combustivel' });
+  assert.deepEqual(calls[0], ['u', '2026-10-01', '2026-10-30']);
+  assert.equal(out.total_gasto_reais, 100);
+  assert.equal(out.lancamentos, 1);
+});
 
 test('períodos nomeados são resolvidos no servidor', () => {
   assert.deepEqual(resolvePeriod('hoje', '2026-10-02'), { de: '2026-10-02', ate: '2026-10-02', rotulo: 'hoje' });

@@ -94,22 +94,6 @@ const TOOLS = [
   },
   {
     type: 'function',
-    name: 'consultar_gastos',
-    description: 'Totaliza gastos (despesas pagas) num período, opcionalmente por categoria ou dia, e pode listar os maiores lançamentos.',
-    parameters: {
-      type: 'object',
-      properties: {
-        de: { type: 'string', description: 'YYYY-MM-DD' },
-        ate: { type: 'string', description: 'YYYY-MM-DD (inclusive)' },
-        categoria: { type: 'string', description: 'Filtra por nome de categoria (parcial)' },
-        agrupar: { type: 'string', enum: ['categoria', 'dia', 'nenhum'] },
-        listar: { type: 'boolean', description: 'Inclui os 10 maiores lançamentos' },
-      },
-      required: ['de', 'ate'],
-    },
-  },
-  {
-    type: 'function',
     name: 'resumo_financeiro',
     description: 'Panorama atual: gastos de hoje e do mês, entradas, saldo, contas atrasadas, vencendo hoje e na semana.',
     parameters: { type: 'object', properties: {} },
@@ -246,6 +230,7 @@ export function buildSystemPrompt({ nome, hojeIso, diaSemana, timezone, canWrite
     '- ORDENS DE SERVIÇO (OS): situações das OS abertas: "pendente" = aguardando, ainda não começou; "em_andamento" = NA BANCADA, sendo consertada; "atraso" = contratempo; fechadas: "concluido" (pronta/entregue) e "cancelado".',
     '  • Para AGIR numa OS (iniciar, contratempo, finalizar, avisar o cliente, cancelar) use só OS ABERTAS. Para CONSULTAR (problemas, serviços, quanto pagou, data de entrega, valores) use qualquer OS, inclusive fechadas (buscar_os com escopo "todas" ou "fechadas").',
     '  • "iniciar/começar o serviço", "pôr na bancada" → mudar_status_os em_andamento. "contratempo", "deu problema/atrasou" → atraso. "finalizar", "ficou pronto", "concluir" → concluido. "voltar pra fila" → pendente.',
+    '  • ALTERAR uma OS ("altere a OS da Ana Paula", "muda a previsão", "o valor agora é 300", "acrescenta que veio sem capa"): ache com buscar_os e use editar_os só com o que mudou. "Vai pagar na retirada/quando buscar/na entrega" é combinado: editar_os com pagamento_momento "retirada", sem registrar pagamento e sem perguntar a forma. "Ela pagou" é outra coisa: dinheiro recebido, nunca use editar_os para isso. Se buscar_os em OS abertas não achar, tente escopo "todas" antes de dizer que não existe. Confirme em uma linha com número da OS, cliente e o que mudou.',
     '  • Mudar o status NÃO avisa o cliente. Só envie mensagem ao cliente (avisar_cliente_os) quando a pessoa pedir ("avisa o Oto", "manda mensagem", "finaliza e avisa"). Tipos: andamento, contratempo (peça o motivo se ela não disse, e use como complemento) e pronto. Depois de enviar, diga o que foi enviado.',
     '  • IDENTIFICAÇÃO: sempre localize a OS com buscar_os (nomes podem vir com erro de digitação). Se vier mais de uma OS plausível (ambiguo=true, ou o cliente tem mais de uma OS aberta e o pedido não diz qual), PERGUNTE antes de agir, citando as opções, por exemplo: "Você está falando do Oto Tertuliano — o violão Tagima (OS #188) ou a guitarra Jaguar (OS #195)?". Se for uma só e clara, aja direto e confirme em uma linha com número da OS e cliente.',
     '  • Perguntas de histórico ("que dia entreguei…", "ele pagou?", "quais serviços?"): use detalhes_os e responda direto. Entrega: use datas.entrega_registrada (se vazia diga que não há data registrada; não invente). Pagamento: cite valor, forma e data dos pagamentos e o saldo.',
@@ -253,7 +238,7 @@ export function buildSystemPrompt({ nome, hojeIso, diaSemana, timezone, canWrite
     '  • Criar OS por voz/texto: identifique o cliente com buscar_cliente (se não existir, ofereça cadastrar com nome e telefone), colete instrumento, marca/modelo, problema, serviço, valor e previsão; pergunte só o que faltar (cliente, equipamento e problema são essenciais). Datas relativas ("sexta") viram YYYY-MM-DD. Depois de criar, confirme com número da OS e resumo; só avise o cliente se pedirem.',
     '  • Ao finalizar uma OS, informe se ficou saldo a receber (saldo_a_receber).',
     '  • ORÇAMENTOS: "orçamento"/"orçar"/"passar valor" = criar_orcamento (não abre OS). Colete cliente, equipamento, problema/serviço e valor como na OS e crie. Quando o cliente fechar ("o Oto aprovou", "fechou", "pode abrir a OS"), use listar_orcamentos para achar o orçamento certo (pergunte se houver mais de um do mesmo cliente), peça a DATA DE ENTREGA se não foi dita e use aprovar_orcamento (opcional: sinal já recebido). Se o cliente recusou, recusar_orcamento com o motivo. Se a pessoa disser que uma OS aberta era na verdade um orçamento, localize-a com buscar_os e use transformar_os_em_orcamento (só vale para OS aguardando, sem pagamento nem nota).',
-    '- DINHEIRO (SEMPRE consulte, nunca estime nem responda de memória): use consultar_financeiro. "Quanto entrou/recebi/faturei hoje, na semana, no mês" = consulta entradas (soma pagamentos de OS recebidos NO período + entradas lançadas à mão ou por voz; NÃO é a lista de OS do dia, e OS em execução/aberta sem pagamento não é dinheiro que entrou). Responda com o total, quanto veio de OS e quanto de entradas avulsas, e liste cada item (descrição, valor, forma). Se a pessoa falar de "ordens novas/abertas hoje já pagas", use também os_abertas_pagas. "Quem está me devendo", "quanto tenho a receber", "quanto fulano deve" = a_receber (por cliente, com as OS). "Quanto gastei", "liste meus gastos" = gastos (liste TODOS os itens e o total por categoria). "Contas que faltam pagar", "contas atrasadas", "contas já pagas/quitadas" = contas_pagar com status abertas/atrasadas/pagas. "Quanto sobrou", "lucro", "como estou no mês", "balanço" = balanco. Períodos: hoje, ontem, semana, mes, mes_passado, ano; datas específicas = personalizado com de/ate. Se o pedido misturar assuntos (ex.: "quanto entrou e quanto gastei"), chame as consultas necessárias e responda tudo numa só mensagem. Dados de uma consulta nunca vêm de outra: se não houver lançamentos, diga "nada entrou ainda" em vez de inventar.',
+    '- DINHEIRO (SEMPRE consulte, nunca estime nem responda de memória): use consultar_financeiro. "Quanto entrou/recebi/faturei hoje, na semana, no mês" = consulta entradas (soma pagamentos de OS recebidos NO período + entradas lançadas à mão ou por voz; NÃO é a lista de OS do dia, e OS em execução/aberta sem pagamento não é dinheiro que entrou). Responda com o total, quanto veio de OS e quanto de entradas avulsas, e liste cada item (descrição, valor, forma). Se a pessoa falar de "ordens novas/abertas hoje já pagas", use também os_abertas_pagas. "Quem está me devendo", "quanto tenho a receber", "quanto fulano deve" = a_receber (por cliente, com as OS). "Quanto gastei", "liste meus gastos" = gastos (liste TODOS os itens e o total por categoria). "Quanto gastei de lanche/em combustível/com cordas" = gastos com busca igual ao item que a pessoa falou (não troque por categoria); sem período citado é o mês atual, e diga qual período usou. "No dia" sem data = hoje. "Contas que faltam pagar", "contas atrasadas", "contas já pagas/quitadas" = contas_pagar com status abertas/atrasadas/pagas. "Quanto sobrou", "lucro", "como estou no mês", "balanço" = balanco. Períodos: hoje, ontem, semana, mes, mes_passado, ano; datas específicas = personalizado com de/ate. Se o pedido misturar assuntos (ex.: "quanto entrou e quanto gastei"), chame as consultas necessárias e responda tudo numa só mensagem. Dados de uma consulta nunca vêm de outra: se não houver lançamentos, diga "nada entrou ainda" em vez de inventar.',
     '- LOJA DO SITE (produtos à venda no site): "cadastra/anuncia/coloca no site esse produto…" → loja_cadastrar_produto. Fotos mandadas antes (até 30 min) entram no produto sozinhas; não peça para reenviar. Preço é obrigatório: se faltar, pergunte só o preço. Nome de vitrine bem escrito (ex.: "Violão Tagima AC34 Preto"), condição novo/seminovo quando dita, destaque quando pedirem. Publique direto, a não ser que peçam rascunho. Nunca invente estado, especificações ou medidas; o que a pessoa disser sobre o estado vai em "estado".',
     '  • FOTO SEM TEXTO: se for claramente produto (instrumento, equipamento, acessório) e não comprovante, não trate como pagamento; responda curto: "Bela peça! Quer que eu anuncie na loja? Me diga nome e preço." Várias fotos seguidas chegam juntas: responda uma vez só.',
     '  • Alterar, vender ou tirar do site: ache o produto com loja_buscar_produto; se ambiguo=true ou mais de um parecido, PERGUNTE qual citando as opções; se for um só, aja direto. "vendi", "já foi", "tira do site" → loja_marcar_vendido. Mudar preço, destaque, nome, voltar ao site, adicionar fotos → loja_atualizar_produto. Excluir de vez: só depois de confirmação explícita (loja_excluir_produto com confirmado=true); prefira tirar do site.',
@@ -345,29 +330,6 @@ export function createAgentBrain({ pool, now, todayDate, timezone, apiKey, model
       case 'registrar_receita': {
         const saved = await actions.registerIncome(ctx.userId, args);
         return { ok: true, descricao: saved.description, valor: saved.value };
-      }
-      case 'consultar_gastos': {
-        const de = String(args.de).slice(0, 10);
-        const ate = String(args.ate).slice(0, 10);
-        const params = [ctx.userId, de, ate];
-        let filter = '';
-        if (args.categoria) { filter = ' AND LOWER(cf.nome) LIKE ?'; params.push(`%${String(args.categoria).toLowerCase()}%`); }
-        const base = `FROM transacoes_financeiras t LEFT JOIN categorias_financeiras cf ON cf.id = t.categoria_id
-                       WHERE t.user_id = ? AND t.tipo = 'despesa' AND LEFT(t.data,10) >= ? AND LEFT(t.data,10) <= ?${filter}`;
-        const [[totals]] = await pool.query(`SELECT COALESCE(SUM(t.valor),0) AS total, COUNT(*) AS qtd ${base}`, params);
-        const out = { periodo: { de, ate }, total_reais: Number(Number(totals.total).toFixed(2)), lancamentos: Number(totals.qtd) };
-        if (args.agrupar === 'categoria') {
-          const [rows] = await pool.query(`SELECT COALESCE(cf.nome,'Sem categoria') AS categoria, SUM(t.valor) AS total ${base} GROUP BY 1 ORDER BY total DESC LIMIT 12`, params);
-          out.por_categoria = rows.map((r) => ({ categoria: r.categoria, total_reais: Number(Number(r.total).toFixed(2)) }));
-        } else if (args.agrupar === 'dia') {
-          const [rows] = await pool.query(`SELECT LEFT(t.data,10) AS dia, SUM(t.valor) AS total ${base} GROUP BY 1 ORDER BY 1 DESC LIMIT 31`, params);
-          out.por_dia = rows.map((r) => ({ dia: r.dia, total_reais: Number(Number(r.total).toFixed(2)) }));
-        }
-        if (args.listar) {
-          const [rows] = await pool.query(`SELECT t.descricao, t.valor, LEFT(t.data,10) AS dia, cf.nome AS categoria ${base} ORDER BY t.valor DESC LIMIT 10`, params);
-          out.maiores = rows.map((r) => ({ ...r, valor: Number(r.valor) }));
-        }
-        return out;
       }
       case 'consultar_financeiro':
         return financeQueries.run(ctx.userId, args);

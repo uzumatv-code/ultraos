@@ -12,13 +12,13 @@ import nodemailer from 'nodemailer';
 import { detectImageMime, normalizeDocumentConfig } from './document-customization.mjs';
 import { addMonthsClamped, formatDateOnly, installmentNumber, occurrenceDate, occurrenceIndex, occurrencesInRange, parseDateOnly, validatePayableInput } from './payable-recurrence.mjs';
 import { createFinanceAgent, inferExpenseCategory, formatBRL } from './finance-agent.mjs';
-import { resolveRange } from './finance-queries.mjs';
+import { cashStamp, resolveRange } from './finance-queries.mjs';
 import { analyzeStatement, parseStatement, statementRange } from './extrato-core.mjs';
 import { createAgentBrain } from './agent-brain.mjs';
 import { createReceiptStore } from './receipts.mjs';
 import { createLojaTools } from './loja-agent.mjs';
 import { emitirGarantiasPendentes, enviarAvisosDeGarantia } from './garantias-core.mjs';
-import { createOsTools } from './os-agent.mjs';
+import { createOsTools, planOrderPayment } from './os-agent.mjs';
 import { createRealtimeHub, instrumentDatabase } from './realtime.mjs';
 import { buildDps, cancelNfse, emitDps, parsePfx } from './nfse-nacional.mjs';
 import { createPortal } from './portal.mjs';
@@ -3915,7 +3915,7 @@ async function registerOrderPaymentInTransaction(conn, {
     `INSERT INTO transacoes_financeiras
      (id, user_id, descricao, valor, tipo, data, categoria_id, ordem_servico_id, forma_pagamento, origem, created_at, updated_at)
      VALUES (?, ?, ?, ?, 'receita', ?, ?, ?, ?, ?, ?, ?)`,
-    [transactionId, userId, description, amount, dataPagamento, categoriaId, order.id, method, origem, dataPagamento, dataPagamento],
+    [transactionId, userId, description, amount, cashStamp(todayDate()), categoriaId, order.id, method, origem, dataPagamento, dataPagamento],
   );
   await conn.query(
     `INSERT INTO os_pagamentos
@@ -4067,7 +4067,7 @@ async function createExpense({ userId, descricao, valor, formaPagamento, origem 
     `INSERT INTO transacoes_financeiras
      (id, user_id, descricao, valor, tipo, data, categoria_id, forma_pagamento, origem, created_at, updated_at)
      VALUES (?, ?, ?, ?, 'despesa', ?, ?, ?, ?, ?, ?)`,
-    [id, userId, descricao, money(valor), now(), categoriaId, formaPagamento || null, origem, now(), now()],
+    [id, userId, descricao, money(valor), cashStamp(todayDate()), categoriaId, formaPagamento || null, origem, now(), now()],
   );
   return { id };
 }
@@ -4119,7 +4119,7 @@ async function payAccountPayable({ userId, contaId, formaPagamento, origem = 'ma
       `INSERT INTO transacoes_financeiras
        (id, user_id, descricao, valor, tipo, data, categoria_id, conta_pagar_id, forma_pagamento, origem, created_at, updated_at)
        VALUES (?, ?, ?, ?, 'despesa', ?, ?, ?, ?, ?, ?, ?)`,
-      [transactionId, userId, conta.descricao, money(conta.valor), paidAt, categoriaId, conta.id, formaPagamento || conta.forma_pagamento || null, origem, paidAt, paidAt],
+      [transactionId, userId, conta.descricao, money(conta.valor), cashStamp(todayDate()), categoriaId, conta.id, formaPagamento || conta.forma_pagamento || null, origem, paidAt, paidAt],
     );
     await conn.query(
       `UPDATE contas_pagar
@@ -4306,6 +4306,86 @@ async function updateSystemServiceOrder({ userId, ordemId, statusOs, dataPrevisa
   await syncReceivableForOrder(pool, userId, ordemId);
   const [rows] = await pool.query('SELECT * FROM ordens_servico WHERE user_id = ? AND id = ? LIMIT 1', [userId, ordemId]);
   return rows[0];
+}
+
+/** Edição de OS pelo agente: dados da OS e, se preciso, o combinado de pagamento do saldo, tudo ou nada. */
+async function editOrderFromAgent(userId, ordemId, args) {
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [[order]] = await conn.query(
+      `SELECT o.*, c.nome AS cliente_nome FROM ordens_servico o
+         JOIN clientes c ON c.id = o.cliente_id AND c.user_id = o.user_id
+        WHERE o.user_id = ? AND o.id = ? LIMIT 1 FOR UPDATE`,
+      [userId, ordemId],
+    );
+    if (!order) throw new Error('OS não encontrada');
+    if (order.status === 'cancelado') throw new Error(`A OS #${order.numero} está cancelada e não pode ser alterada.`);
+
+    const updates = {};
+    const text = { modelo: 'modelo', acessorios: 'acessorios', observacoes: 'observacoes', problemas: 'problema_descricao', servicos: 'servico_descricao' };
+    for (const [field, column] of Object.entries(text)) {
+      if (cleanNullableText(args[field])) updates[column] = cleanNullableText(args[field]);
+    }
+    if (args.previsao) {
+      const previsao = String(args.previsao).slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(previsao)) throw new Error('Data de previsão inválida.');
+      updates.data_previsao = previsao;
+    }
+    const newTotal = args.valor !== undefined && args.valor !== null ? money(args.valor) : null;
+    if (newTotal !== null) {
+      updates.valor_total = newTotal;
+      updates.valor_servicos = money(newTotal + Number(order.desconto || 0));
+    }
+    const pagamento = args.pagamento_momento
+      ? { momento: args.pagamento_momento, forma: args.pagamento_forma || null, data: args.pagamento_data ? String(args.pagamento_data).slice(0, 10) : null }
+      : null;
+    if (order.status === 'concluido' && Object.keys(updates).length) throw new Error(`A OS #${order.numero} já foi concluída; nela só dá para mudar o combinado de pagamento.`);
+    if (!Object.keys(updates).length && !pagamento) throw new Error('Não encontrei o que alterar na OS.');
+
+    const keys = Object.keys(updates);
+    if (keys.length) {
+      await conn.query(
+        `UPDATE ordens_servico SET ${keys.map((key) => `\`${key}\` = ?`).join(', ')}, updated_at = ? WHERE user_id = ? AND id = ?`,
+        [...keys.map((key) => updates[key]), now(), userId, ordemId],
+      );
+    }
+    const updated = { ...order, ...updates };
+    if (updates.data_previsao) {
+      await conn.query(
+        "UPDATE os_condicoes_pagamento SET data_vencimento = ?, updated_at = ? WHERE user_id = ? AND ordem_servico_id = ? AND status = 'pendente' AND momento = 'retirada'",
+        [updates.data_previsao, now(), userId, ordemId],
+      );
+    }
+
+    const [conditions] = await conn.query(
+      `SELECT valor, forma_pagamento, momento, data_vencimento, observacoes, status FROM os_condicoes_pagamento
+        WHERE user_id = ? AND ordem_servico_id = ? AND status IN ('pendente','recebido') ORDER BY ordem, created_at FOR UPDATE`,
+      [userId, ordemId],
+    );
+    const plan = planOrderPayment({
+      total: Number(updated.valor_total || 0),
+      recebido: conditions.filter((item) => item.status === 'recebido').reduce((sum, item) => sum + Number(item.valor || 0), 0),
+      pendentes: conditions.filter((item) => item.status === 'pendente'),
+      pagamento,
+      valorMudou: newTotal !== null,
+    });
+    if (plan) await saveOrderPaymentConditions(conn, { userId, order: updated, rawConditions: plan, role: 'admin' });
+    else await syncReceivableForOrder(conn, userId, ordemId);
+    await conn.commit();
+    return {
+      ok: true,
+      numero: order.numero,
+      cliente: order.cliente_nome,
+      alterado: keys,
+      ...(plan?.[0] ? { combinado_pagamento: { valor: plan[0].valor, momento: plan[0].momento, forma: plan[0].forma_pagamento, vencimento: plan[0].data_vencimento || null } } : {}),
+    };
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
 }
 
 async function cancelSystemServiceOrder({ userId, ordemId }) {
@@ -6862,6 +6942,7 @@ const osTools = createOsTools({
   sendCustomerMessage,
   afterOrderCreated: (conn, userId, order) => markRemarketingConversion(conn, userId, order),
   validatePhone,
+  editOrder: editOrderFromAgent,
   createQuote: (userId, body) => createQuote(userId, body),
   convertOrderToQuote: (userId, orderId) => convertOrderToQuote({ userId, orderId }),
   approveQuote: (userId, args) => approveQuote({ auth: { accountId: userId, userId, role: 'admin' }, ...args }),
